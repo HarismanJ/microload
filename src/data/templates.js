@@ -1,0 +1,76 @@
+export const TEMPLATES = [
+  {
+    id: 'push',
+    name: 'Push',
+    description: 'Chest · Shoulders · Triceps',
+    exercises: [
+      { name: 'Bench Press',           sets: 4, reps: 8  },
+      { name: 'Incline Bench Press',   sets: 3, reps: 10 },
+      { name: 'Overhead Press',        sets: 3, reps: 8  },
+      { name: 'Lateral Raise',         sets: 3, reps: 15 },
+      { name: 'Tricep Pushdown',       sets: 3, reps: 12 },
+    ],
+  },
+  {
+    id: 'pull',
+    name: 'Pull',
+    description: 'Back · Biceps',
+    exercises: [
+      { name: 'Pull-Up',           sets: 4, reps: 8  },
+      { name: 'Barbell Row',       sets: 4, reps: 8  },
+      { name: 'Lat Pulldown',      sets: 3, reps: 10 },
+      { name: 'Bicep Curl',        sets: 3, reps: 12 },
+      { name: 'Face Pull',         sets: 3, reps: 15 },
+    ],
+  },
+  {
+    id: 'legs',
+    name: 'Legs',
+    description: 'Quads · Hamstrings · Glutes · Calves',
+    exercises: [
+      { name: 'Squat',               sets: 4, reps: 8  },
+      { name: 'Romanian Deadlift',   sets: 3, reps: 10 },
+      { name: 'Leg Press',           sets: 3, reps: 12 },
+      { name: 'Leg Curl',            sets: 3, reps: 12 },
+      { name: 'Calf Raise',          sets: 4, reps: 15 },
+    ],
+  },
+  {
+    id: 'upper',
+    name: 'Upper Body',
+    description: 'Chest · Back · Shoulders · Arms',
+    exercises: [
+      { name: 'Bench Press',       sets: 4, reps: 8  },
+      { name: 'Barbell Row',       sets: 4, reps: 8  },
+      { name: 'Overhead Press',    sets: 3, reps: 10 },
+      { name: 'Lat Pulldown',      sets: 3, reps: 10 },
+      { name: 'Bicep Curl',        sets: 2, reps: 12 },
+      { name: 'Tricep Pushdown',   sets: 2, reps: 12 },
+    ],
+  },
+  {
+    id: 'lower',
+    name: 'Lower Body',
+    description: 'Quads · Hamstrings · Glutes · Calves',
+    exercises: [
+      { name: 'Squat',               sets: 4, reps: 6  },
+      { name: 'Romanian Deadlift',   sets: 3, reps: 10 },
+      { name: 'Leg Press',           sets: 3, reps: 12 },
+      { name: 'Leg Curl',            sets: 3, reps: 12 },
+      { name: 'Hip Thrust',          sets: 3, reps: 12 },
+      { name: 'Calf Raise',          sets: 3, reps: 15 },
+    ],
+  },
+  {
+    id: 'full-body',
+    name: 'Full Body',
+    description: 'All muscle groups',
+    exercises: [
+      { name: 'Squat',               sets: 3, reps: 8  },
+      { name: 'Bench Press',         sets: 3, reps: 8  },
+      { name: 'Barbell Row',         sets: 3, reps: 8  },
+      { name: 'Overhead Press',      sets: 3, reps: 10 },
+      { name: 'Romanian Deadlift',   sets: 3, reps: 10 },
+    ],
+  },
+]

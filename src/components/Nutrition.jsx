@@ -1,0 +1,573 @@
+import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
+import { getCached, setCached, invalidateCache } from '../lib/cache'
+import NutritionFoodPicker from './nutrition/NutritionFoodPicker'
+import LoadingSpinner from './LoadingSpinner'
+import '../styles/Nutrition.css'
+
+const FEED_FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'calories', label: 'Kcal' },
+  { id: 'protein', label: 'Protein' },
+  { id: 'fat', label: 'Fat' },
+  { id: 'carbs', label: 'Carbs' },
+]
+
+const DEFAULT_GOALS = {
+  calories: 2000, protein: 150, carbs: 200, fat: 65,
+  fiber: 30, sugar: 50, saturated_fat: 20,
+  sodium: 2300, potassium: 3500, cholesterol: 300,
+  calcium: 1000, iron: 18, magnesium: 400, zinc: 11,
+  vitamin_a: 900, vitamin_c: 90, vitamin_d: 15,
+}
+
+
+function localDate(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+
+function today() { return localDate() }
+
+function offsetDate(dateStr, delta) {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + delta)
+  return localDate(d)
+}
+
+function formatDateLabel(dateStr) {
+  const t = today()
+  if (dateStr === t) return 'Today'
+  if (dateStr === offsetDate(t, -1)) return 'Yesterday'
+  return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+function fmtVal(v, unit) {
+  if (unit === 'g') return v < 10 ? v.toFixed(1) : Math.round(v)
+  return Math.round(v)
+}
+
+function formatFoodLogTime(timestamp) {
+  if (!timestamp) return 'Logged today'
+  return new Date(timestamp).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+export default function Nutrition({ openAddFoodTick = 0 }) {
+  const [date, setDate] = useState(today)
+  const [logs, setLogs] = useState([])
+  const [goals, setGoals] = useState(DEFAULT_GOALS)
+  const [loading, setLoading] = useState(true)
+  const [addingToMeal, setAddingToMeal] = useState(null)
+  const [showDetail, setShowDetail] = useState(false)
+  const [editingGoals, setEditingGoals] = useState(false)
+  const [goalsForm, setGoalsForm] = useState(null)
+  const [savingGoals, setSavingGoals] = useState(false)
+  const [feedFilter, setFeedFilter] = useState('all')
+  const [feedSortDirection, setFeedSortDirection] = useState('desc')
+
+  useEffect(() => { load() }, [date])
+
+  useEffect(() => {
+    if (openAddFoodTick === 0) return
+    setAddingToMeal('breakfast')
+  }, [openAddFoodTick])
+
+  async function load() {
+    setLoading(true)
+    const cacheKey = `nut_${date}`
+    const cached = getCached(cacheKey)
+    if (cached) {
+      setLogs(cached.logs)
+      setGoals(cached.goals)
+      setLoading(false)
+      return
+    }
+
+    const { data: { user } } = await supabase.auth.getUser()
+    const [{ data: logData }, { data: prof }] = await Promise.all([
+      supabase.from('nutrition_logs').select('*').eq('user_id', user.id).eq('log_date', date).order('created_at'),
+      supabase.from('profiles').select('calories_goal,protein_goal,carbs_goal,fat_goal,fiber_goal,sugar_goal,saturated_fat_goal,sodium_goal,potassium_goal,cholesterol_goal,calcium_goal,iron_goal,magnesium_goal,zinc_goal,vitamin_a_goal,vitamin_c_goal,vitamin_d_goal').eq('id', user.id).single(),
+    ])
+
+    const resolvedGoals = prof ? {
+      calories:      prof.calories_goal      || DEFAULT_GOALS.calories,
+      protein:       prof.protein_goal       || DEFAULT_GOALS.protein,
+      carbs:         prof.carbs_goal         || DEFAULT_GOALS.carbs,
+      fat:           prof.fat_goal           || DEFAULT_GOALS.fat,
+      fiber:         prof.fiber_goal         || DEFAULT_GOALS.fiber,
+      sugar:         prof.sugar_goal         || DEFAULT_GOALS.sugar,
+      saturated_fat: prof.saturated_fat_goal || DEFAULT_GOALS.saturated_fat,
+      sodium:        prof.sodium_goal        || DEFAULT_GOALS.sodium,
+      potassium:     prof.potassium_goal     || DEFAULT_GOALS.potassium,
+      cholesterol:   prof.cholesterol_goal   || DEFAULT_GOALS.cholesterol,
+      calcium:       prof.calcium_goal       || DEFAULT_GOALS.calcium,
+      iron:          prof.iron_goal          || DEFAULT_GOALS.iron,
+      magnesium:     prof.magnesium_goal     || DEFAULT_GOALS.magnesium,
+      zinc:          prof.zinc_goal          || DEFAULT_GOALS.zinc,
+      vitamin_a:     prof.vitamin_a_goal     || DEFAULT_GOALS.vitamin_a,
+      vitamin_c:     prof.vitamin_c_goal     || DEFAULT_GOALS.vitamin_c,
+      vitamin_d:     prof.vitamin_d_goal     || DEFAULT_GOALS.vitamin_d,
+    } : DEFAULT_GOALS
+
+    setCached(cacheKey, { logs: logData || [], goals: resolvedGoals })
+    setLogs(logData || [])
+    setGoals(resolvedGoals)
+    setLoading(false)
+  }
+
+  async function addLog(food, servings, mealType) {
+    const { data: { user } } = await supabase.auth.getUser()
+    const m = servings
+    const n = k => +((food[k] || 0) * m).toFixed(2)
+    const entry = {
+      user_id: user.id, food_id: food.id || null,
+      log_date: date, meal_type: mealType, servings: m, food_name: food.name,
+      calories: Math.round(food.calories * m),
+      protein: n('protein'), carbs: n('carbs'), fat: n('fat'),
+      fiber: n('fiber'), sugar: n('sugar'), saturated_fat: n('saturated_fat'),
+      sodium: Math.round((food.sodium || 0) * m),
+      potassium: Math.round((food.potassium || 0) * m),
+      cholesterol: Math.round((food.cholesterol || 0) * m),
+      calcium: Math.round((food.calcium || 0) * m),
+      iron: n('iron'), magnesium: Math.round((food.magnesium || 0) * m),
+      zinc: n('zinc'), vitamin_a: Math.round((food.vitamin_a || 0) * m),
+      vitamin_c: n('vitamin_c'), vitamin_d: n('vitamin_d'),
+    }
+    const { data, error } = await supabase.from('nutrition_logs').insert(entry).select().single()
+    if (error) { console.error('addLog failed:', error.message); return }
+    if (data) setLogs(prev => [...prev, data])
+    invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`)
+    setAddingToMeal(null)
+  }
+
+  async function removeLog(id) {
+    await supabase.from('nutrition_logs').delete().eq('id', id)
+    setLogs(prev => prev.filter(l => l.id !== id))
+    invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`)
+  }
+
+  const sum = key => logs.reduce((a, l) => a + (l[key] || 0), 0)
+
+  const totals = {
+    calories: sum('calories'), protein: sum('protein'), carbs: sum('carbs'), fat: sum('fat'),
+    fiber: sum('fiber'), sugar: sum('sugar'), saturated_fat: sum('saturated_fat'),
+    sodium: sum('sodium'), potassium: sum('potassium'), cholesterol: sum('cholesterol'),
+    calcium: sum('calcium'), iron: sum('iron'), magnesium: sum('magnesium'), zinc: sum('zinc'),
+    vitamin_a: sum('vitamin_a'), vitamin_c: sum('vitamin_c'), vitamin_d: sum('vitamin_d'),
+  }
+
+  function openGoalsEdit() {
+    setGoalsForm({ ...goals,
+      calories_goal: goals.calories, protein_goal: goals.protein,
+      carbs_goal: goals.carbs, fat_goal: goals.fat,
+      fiber_goal: goals.fiber, sugar_goal: goals.sugar,
+      saturated_fat_goal: goals.saturated_fat, sodium_goal: goals.sodium,
+      potassium_goal: goals.potassium, cholesterol_goal: goals.cholesterol,
+      calcium_goal: goals.calcium, iron_goal: goals.iron,
+      magnesium_goal: goals.magnesium, zinc_goal: goals.zinc,
+      vitamin_a_goal: goals.vitamin_a, vitamin_c_goal: goals.vitamin_c,
+      vitamin_d_goal: goals.vitamin_d,
+    })
+    setEditingGoals(true)
+  }
+
+  async function saveGoals() {
+    if (!goalsForm) return
+    setSavingGoals(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    const updates = {
+      calories_goal: goalsForm.calories_goal, protein_goal: goalsForm.protein_goal,
+      carbs_goal: goalsForm.carbs_goal, fat_goal: goalsForm.fat_goal,
+      fiber_goal: goalsForm.fiber_goal, sugar_goal: goalsForm.sugar_goal,
+      saturated_fat_goal: goalsForm.saturated_fat_goal, sodium_goal: goalsForm.sodium_goal,
+      potassium_goal: goalsForm.potassium_goal, cholesterol_goal: goalsForm.cholesterol_goal,
+      calcium_goal: goalsForm.calcium_goal, iron_goal: goalsForm.iron_goal,
+      magnesium_goal: goalsForm.magnesium_goal, zinc_goal: goalsForm.zinc_goal,
+      vitamin_a_goal: goalsForm.vitamin_a_goal, vitamin_c_goal: goalsForm.vitamin_c_goal,
+      vitamin_d_goal: goalsForm.vitamin_d_goal,
+    }
+    await supabase.from('profiles').update(updates).eq('id', user.id)
+    setGoals({
+      calories: goalsForm.calories_goal, protein: goalsForm.protein_goal,
+      carbs: goalsForm.carbs_goal, fat: goalsForm.fat_goal,
+      fiber: goalsForm.fiber_goal, sugar: goalsForm.sugar_goal,
+      saturated_fat: goalsForm.saturated_fat_goal, sodium: goalsForm.sodium_goal,
+      potassium: goalsForm.potassium_goal, cholesterol: goalsForm.cholesterol_goal,
+      calcium: goalsForm.calcium_goal, iron: goalsForm.iron_goal,
+      magnesium: goalsForm.magnesium_goal, zinc: goalsForm.zinc_goal,
+      vitamin_a: goalsForm.vitamin_a_goal, vitamin_c: goalsForm.vitamin_c_goal,
+      vitamin_d: goalsForm.vitamin_d_goal,
+    })
+    setSavingGoals(false)
+    setEditingGoals(false)
+  }
+
+  const remaining = goals.calories - Math.round(totals.calories)
+  const R = 52, C = 2 * Math.PI * R
+  const dash = (Math.min(1, totals.calories / goals.calories)) * C
+  const detailSections = [
+    {
+      title: 'Macros',
+      items: [
+        { label: 'Calories', key: 'calories', unit: 'kcal', color: 'var(--blue)' },
+        { label: 'Protein', key: 'protein', unit: 'g', color: '#a855f7' },
+        { label: 'Carbohydrates', key: 'carbs', unit: 'g', color: '#f97316' },
+        { label: 'Fat', key: 'fat', unit: 'g', color: '#eab308' },
+        { label: 'Fiber', key: 'fiber', unit: 'g', color: '#22c55e', type: 'target' },
+        { label: 'Sugar', key: 'sugar', unit: 'g', color: '#f43f5e', type: 'max' },
+        { label: 'Saturated Fat', key: 'saturated_fat', unit: 'g', color: '#f43f5e', type: 'max' },
+      ],
+    },
+    {
+      title: 'Electrolytes & Minerals',
+      items: [
+        { label: 'Sodium', key: 'sodium', unit: 'mg', type: 'max' },
+        { label: 'Potassium', key: 'potassium', unit: 'mg', type: 'target' },
+        { label: 'Calcium', key: 'calcium', unit: 'mg', type: 'target' },
+        { label: 'Iron', key: 'iron', unit: 'mg', type: 'target' },
+        { label: 'Magnesium', key: 'magnesium', unit: 'mg', type: 'target' },
+        { label: 'Zinc', key: 'zinc', unit: 'mg', type: 'target' },
+        { label: 'Cholesterol', key: 'cholesterol', unit: 'mg', type: 'max' },
+      ],
+    },
+    {
+      title: 'Vitamins',
+      items: [
+        { label: 'Vitamin A', key: 'vitamin_a', unit: 'mcg' },
+        { label: 'Vitamin C', key: 'vitamin_c', unit: 'mg' },
+        { label: 'Vitamin D', key: 'vitamin_d', unit: 'mcg' },
+      ],
+    },
+  ]
+  let detailAnimationIndex = 0
+  const detailRenderSections = detailSections.map(section => ({
+    ...section,
+    animationIndex: detailAnimationIndex++,
+    items: section.items.map(item => ({ ...item, animationIndex: detailAnimationIndex++ })),
+  }))
+  const feedLogs = (() => {
+    const items = [...logs]
+    const directionMultiplier = feedSortDirection === 'asc' ? 1 : -1
+    const dateDiff = (a, b) => {
+      const timeA = new Date(a.created_at || 0).getTime()
+      const timeB = new Date(b.created_at || 0).getTime()
+      return (timeA - timeB) * directionMultiplier
+    }
+
+    if (feedFilter === 'all') {
+      return items.sort((a, b) => dateDiff(a, b) || ((a.id || 0) - (b.id || 0)) * directionMultiplier)
+    }
+
+    return items.sort((a, b) => (
+      ((Number(a[feedFilter]) || 0) - (Number(b[feedFilter]) || 0)) * directionMultiplier ||
+      dateDiff(a, b) ||
+      ((a.id || 0) - (b.id || 0)) * directionMultiplier
+    ))
+  })()
+
+  const feedListKey = `${date}-${feedFilter}-${feedSortDirection}-${logs.length}`
+
+  if (addingToMeal) {
+    return (
+      <NutritionFoodPicker
+        mealType={addingToMeal}
+        onAdd={addLog}
+        onClose={() => setAddingToMeal(null)}
+        heading="Add Food"
+        submitLabel="Add to Log"
+      />
+    )
+  }
+
+  return (
+    <div className="nutrition-screen">
+      {/* Date nav */}
+      <div className="nut-date-nav">
+        <button className="nut-date-btn" onClick={() => setDate(d => offsetDate(d, -1))}>‹</button>
+        <span className="nut-date-label">{formatDateLabel(date)}</span>
+        <button className="nut-date-btn" onClick={() => setDate(d => offsetDate(d, 1))} disabled={date === today()} style={{ opacity: date === today() ? 0.3 : 1 }}>›</button>
+        <button className={`nut-goals-btn ${editingGoals ? 'active' : ''}`} onClick={() => editingGoals ? setEditingGoals(false) : openGoalsEdit()}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/>
+            <path d="M12 2v2M12 20v2M2 12h2M20 12h2"/>
+          </svg>
+          Goals
+        </button>
+      </div>
+
+      {/* Goals editor */}
+      {editingGoals && goalsForm && (
+        <div className="nut-goals-panel">
+          <div className="nut-goals-section-title">Macros</div>
+          <div className="nut-goals-grid">
+            {[
+              { key: 'calories_goal', label: 'Calories', unit: 'kcal' },
+              { key: 'protein_goal',  label: 'Protein',  unit: 'g'    },
+              { key: 'carbs_goal',    label: 'Carbs',    unit: 'g'    },
+              { key: 'fat_goal',      label: 'Fat',      unit: 'g'    },
+            ].map(({ key, label, unit }) => (
+              <div key={key} className="nut-goals-field">
+                <label className="nut-goals-label">{label}</label>
+                <div className="nut-goals-input-wrap">
+                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                  <span className="nut-goals-unit">{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="nut-goals-section-title">Macro Detail</div>
+          <div className="nut-goals-grid">
+            {[
+              { key: 'fiber_goal',         label: 'Fiber',          unit: 'g'  },
+              { key: 'sugar_goal',         label: 'Sugar (max)',    unit: 'g'  },
+              { key: 'saturated_fat_goal', label: 'Sat. Fat (max)', unit: 'g'  },
+              { key: 'cholesterol_goal',   label: 'Chol. (max)',    unit: 'mg' },
+            ].map(({ key, label, unit }) => (
+              <div key={key} className="nut-goals-field">
+                <label className="nut-goals-label">{label}</label>
+                <div className="nut-goals-input-wrap">
+                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                  <span className="nut-goals-unit">{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="nut-goals-section-title">Electrolytes & Minerals</div>
+          <div className="nut-goals-grid">
+            {[
+              { key: 'sodium_goal',    label: 'Sodium (max)', unit: 'mg' },
+              { key: 'potassium_goal', label: 'Potassium',    unit: 'mg' },
+              { key: 'calcium_goal',   label: 'Calcium',      unit: 'mg' },
+              { key: 'iron_goal',      label: 'Iron',         unit: 'mg' },
+              { key: 'magnesium_goal', label: 'Magnesium',    unit: 'mg' },
+              { key: 'zinc_goal',      label: 'Zinc',         unit: 'mg' },
+            ].map(({ key, label, unit }) => (
+              <div key={key} className="nut-goals-field">
+                <label className="nut-goals-label">{label}</label>
+                <div className="nut-goals-input-wrap">
+                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                  <span className="nut-goals-unit">{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="nut-goals-section-title">Vitamins</div>
+          <div className="nut-goals-grid">
+            {[
+              { key: 'vitamin_a_goal', label: 'Vitamin A', unit: 'mcg' },
+              { key: 'vitamin_c_goal', label: 'Vitamin C', unit: 'mg'  },
+              { key: 'vitamin_d_goal', label: 'Vitamin D', unit: 'mcg' },
+            ].map(({ key, label, unit }) => (
+              <div key={key} className="nut-goals-field">
+                <label className="nut-goals-label">{label}</label>
+                <div className="nut-goals-input-wrap">
+                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                  <span className="nut-goals-unit">{unit}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="nut-goals-actions">
+            <button className="nut-goals-cancel" onClick={() => setEditingGoals(false)}>Cancel</button>
+            <button className="nut-goals-save" onClick={saveGoals} disabled={savingGoals}>
+              {savingGoals ? 'Saving...' : 'Save Goals'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Summary — tap to expand full breakdown */}
+      <div className="nut-summary" onClick={() => setShowDetail(s => !s)} style={{ cursor: 'pointer' }}>
+        <div className="nut-ring-wrap">
+          <svg width="120" height="120" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r={R} fill="none" stroke="var(--surface2)" strokeWidth="9"/>
+            <circle cx="60" cy="60" r={R} fill="none" stroke="var(--blue)" strokeWidth="9"
+              strokeDasharray={`${dash} ${C}`} strokeLinecap="round" transform="rotate(-90 60 60)"
+              style={{ transition: 'stroke-dasharray 0.5s ease' }}
+            />
+          </svg>
+          <div className="nut-ring-center">
+            <div className="nut-ring-cal">{Math.round(totals.calories)}</div>
+            <div className="nut-ring-label">kcal</div>
+          </div>
+        </div>
+
+        <div className="nut-macros">
+          {[
+            { label: 'Protein', key: 'protein', color: '#a855f7' },
+            { label: 'Carbs',   key: 'carbs',   color: '#f97316' },
+            { label: 'Fat',     key: 'fat',      color: '#eab308' },
+          ].map(m => (
+            <div key={m.label} className="nut-macro-row">
+              <div className="nut-macro-header">
+                <span className="nut-macro-label">{m.label}</span>
+                <span className="nut-macro-val">{totals[m.key].toFixed(0)}<span className="nut-macro-goal">/{goals[m.key]}g</span></span>
+              </div>
+              <div className="nut-macro-track">
+                <div className="nut-macro-fill" style={{ width: `${Math.min(100, (totals[m.key] / goals[m.key]) * 100)}%`, background: m.color }}/>
+              </div>
+            </div>
+          ))}
+          <div className="nut-remaining" style={{ color: remaining < 0 ? '#ef4444' : 'var(--muted)' }}>
+            {remaining > 0 ? `${remaining} kcal remaining` : `${Math.abs(remaining)} kcal over goal`}
+          </div>
+          <div className="nut-expand-hint">
+            <span>{showDetail ? 'Hide breakdown' : 'Full breakdown'}</span>
+            <svg className={`nut-expand-chevron ${showDetail ? 'open' : ''}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M6 9l6 6 6-6"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      {/* Full nutrition breakdown */}
+      <div className={`nut-detail-wrap ${showDetail ? 'expanded' : ''}`}>
+        <div className="nut-detail-wrap-inner">
+          <div className="nut-detail-card">
+            {detailRenderSections.map(section => (
+              <div key={section.title} className="nut-detail-section">
+                <div className="nut-detail-section-title" style={{ '--detail-index': section.animationIndex }}>
+                  {section.title}
+                </div>
+                {section.items.map(({ label, key, unit, color, type, animationIndex }) => {
+                  const val = totals[key] || 0
+                  const goal = goals[key] || 1
+                  const over = type === 'max' && val > goal
+                  const pct = Math.min(100, (val / goal) * 100)
+                  const barColor = type === 'max'
+                    ? (over ? '#ef4444' : '#22c55e')
+                    : (color || (pct >= 100 ? '#22c55e' : 'var(--blue)'))
+                  return (
+                    <div key={key} className="nut-detail-row" style={{ '--detail-index': animationIndex }}>
+                      <div className="nut-detail-row-header">
+                        <span className="nut-detail-label">
+                          {label}
+                          {section.title === 'Electrolytes & Minerals' && type === 'max' ? ' (max)' : ''}
+                        </span>
+                        <span className="nut-detail-val" style={{ color: over ? '#ef4444' : 'var(--text)' }}>
+                          {fmtVal(val, unit)}<span className="nut-detail-goal">/{goal}{unit}</span>
+                        </span>
+                      </div>
+                      <div className="nut-micro-track">
+                        <div className="nut-micro-fill" style={{ width: `${pct}%`, background: barColor }}/>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="nut-feed-section">
+        <div className="nut-feed-header">
+          <div>
+            <div className="nut-feed-title">Food Log</div>
+            <div className="nut-feed-subtitle">
+              {logs.length
+                ? `${logs.length} ${logs.length === 1 ? 'food' : 'foods'} tracked today`
+                : 'Track everything you eat in one running feed.'}
+            </div>
+          </div>
+          <button className="nut-feed-add-btn" onClick={() => setAddingToMeal('snacks')}>
+            <span>+</span>
+            <span>Add Food</span>
+          </button>
+        </div>
+
+        <div className="nut-feed-controls">
+          <div className="nut-feed-filters">
+            {FEED_FILTERS.map(filter => (
+              <button
+                key={filter.id}
+                className={`nut-feed-filter ${feedFilter === filter.id ? 'active' : ''}`}
+                onClick={() => setFeedFilter(filter.id)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="nut-feed-order" role="group" aria-label="Sort order">
+            <button
+              className={`nut-feed-order-btn ${feedSortDirection === 'asc' ? 'active' : ''}`}
+              onClick={() => setFeedSortDirection('asc')}
+              aria-label="Sort ascending"
+              title="Sort ascending"
+            >
+              ↑
+            </button>
+            <button
+              className={`nut-feed-order-btn ${feedSortDirection === 'desc' ? 'active' : ''}`}
+              onClick={() => setFeedSortDirection('desc')}
+              aria-label="Sort descending"
+              title="Sort descending"
+            >
+              ↓
+            </button>
+          </div>
+        </div>
+
+        {loading ? (
+          <LoadingSpinner fullPage />
+        ) : logs.length > 0 ? (
+          <div key={feedListKey} className="nut-feed-list nut-feed-list-animated">
+            {feedLogs.map((log, index) => (
+              <div key={log.id} className="nut-feed-item" style={{ '--feed-index': index }}>
+                <div className="nut-feed-rail" aria-hidden="true">
+                  <span className="nut-feed-dot" />
+                  {index < feedLogs.length - 1 && <span className="nut-feed-line" />}
+                </div>
+                <div className="nut-feed-card">
+                  <div className="nut-feed-card-top">
+                    <div className="nut-feed-copy">
+                      <div className="nut-feed-food">{log.food_name}</div>
+                      <div className="nut-feed-meta">
+                        {log.servings !== 1 ? `${log.servings}× servings` : '1 serving'} · {formatFoodLogTime(log.created_at)}
+                      </div>
+                    </div>
+                    <div className="nut-feed-kcal">{Math.round(log.calories)} kcal</div>
+                  </div>
+
+                  <div className="nut-feed-footer">
+                    <div className="nut-feed-pills">
+                      <span className="nut-feed-pill nut-feed-pill-protein">P {Math.round(log.protein || 0)}g</span>
+                      <span className="nut-feed-pill nut-feed-pill-carbs">C {Math.round(log.carbs || 0)}g</span>
+                      <span className="nut-feed-pill nut-feed-pill-fat">F {Math.round(log.fat || 0)}g</span>
+                    </div>
+                    <button className="nut-feed-remove-btn" onClick={() => removeLog(log.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="nut-feed-empty">
+            <div className="nut-feed-empty-title">No food tracked yet</div>
+            <div className="nut-feed-empty-text">
+              Keep things simple with one daily food feed instead of separate breakfast, lunch, dinner, and snack sections.
+            </div>
+            <button className="nut-feed-add-btn nut-feed-add-btn-inline" onClick={() => setAddingToMeal('snacks')}>
+              <span>+</span>
+              <span>Add your first food</span>
+            </button>
+          </div>
+        )}
+      </div>
+
+    </div>
+  )
+}

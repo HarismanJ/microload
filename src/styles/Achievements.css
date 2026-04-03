@@ -1,0 +1,135 @@
+.ach-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 16px;
+}
+
+.ach-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 0;
+}
+
+.ach-back {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.ach-back:hover { border-color: var(--blue); color: var(--blue); }
+
+.ach-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.ach-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.ach-loading {
+  color: var(--muted);
+  text-align: center;
+  margin-top: 60px;
+  font-size: 14px;
+}
+
+/* ── Section ──────────────────────────────────────────── */
+
+.ach-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ach-section-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.ach-section-icon { display: flex; align-items: center; }
+
+.ach-section-name { flex: 1; }
+
+.ach-section-count {
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 2px 8px;
+}
+
+/* ── Cards ────────────────────────────────────────────── */
+
+.ach-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ach-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  opacity: 0.5;
+}
+
+.ach-card-done {
+  opacity: 1;
+}
+
+.ach-badge {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ach-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ach-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.ach-desc {
+  font-size: 12px;
+  color: var(--muted);
+}

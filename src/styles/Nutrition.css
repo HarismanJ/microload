@@ -1,0 +1,2189 @@
+/* ── Main screen ──────────────────────────────────────────────── */
+.nutrition-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nutrition-screen > *,
+.nut-picker-screen > *,
+.cf-screen > *,
+.bs-screen > * {
+  opacity: 0;
+  transform: translateY(10px);
+  animation: nutrition-section-enter 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.nutrition-screen > *:nth-child(1),
+.nut-picker-screen > *:nth-child(1),
+.cf-screen > *:nth-child(1),
+.bs-screen > *:nth-child(1) { animation-delay: 0.04s; }
+
+.nutrition-screen > *:nth-child(2),
+.nut-picker-screen > *:nth-child(2),
+.cf-screen > *:nth-child(2),
+.bs-screen > *:nth-child(2) { animation-delay: 0.11s; }
+
+.nutrition-screen > *:nth-child(3),
+.nut-picker-screen > *:nth-child(3),
+.cf-screen > *:nth-child(3),
+.bs-screen > *:nth-child(3) { animation-delay: 0.18s; }
+
+.nutrition-screen > *:nth-child(4),
+.nut-picker-screen > *:nth-child(4),
+.cf-screen > *:nth-child(4),
+.bs-screen > *:nth-child(4) { animation-delay: 0.25s; }
+
+.nut-date-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0 8px;
+}
+
+.nut-date-btn {
+  width: 36px;
+  height: 36px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease;
+  line-height: 1;
+}
+
+.nut-date-btn:hover:not(:disabled) {
+  background: var(--surface2);
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue) 20%, var(--border));
+}
+
+.nut-date-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nut-loading {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 0;
+  font-size: 14px;
+}
+
+/* ── Summary card ─────────────────────────────────────────────── */
+.nut-summary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-summary:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 20%, var(--border));
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.18);
+}
+
+.nut-ring-wrap {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+.nut-ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.nut-ring-cal {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-ring-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.nut-macros {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+}
+
+.nut-macro-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nut-macro-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nut-macro-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-macro-val {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.nut-macro-goal {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.nut-macro-track {
+  height: 5px;
+  background: var(--surface2);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.nut-macro-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+
+.nut-remaining {
+  font-size: 11px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Meal sections ───────────────────────────────────────────── */
+.nut-meal-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-meal-section:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-meal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+}
+
+.nut-meal-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.nut-meal-icon { font-size: 16px; }
+
+.nut-meal-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-meal-cals {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-add-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--blue-dim);
+  border: 1px solid rgba(59,158,255,0.3);
+  color: var(--blue);
+  font-size: 22px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease;
+}
+
+.nut-add-btn:hover {
+  background: rgba(59,158,255,0.22);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.12);
+}
+
+.nut-food-list { border-top: 1px solid var(--border); }
+
+.nut-food-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  transition: background 0.26s ease;
+}
+
+.nut-food-item:last-child { border-bottom: none; }
+
+.nut-food-item:hover {
+  background: color-mix(in srgb, var(--surface2) 82%, white 18%);
+}
+
+.nut-food-info { flex: 1; min-width: 0; }
+
+.nut-food-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nut-food-macros {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-food-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  min-width: 0;
+  max-width: 42%;
+}
+
+.nut-food-cals {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-remove-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: transform 0.26s ease, color 0.26s ease, background 0.26s ease;
+}
+
+.nut-remove-btn:hover {
+  color: #ef4444;
+  transform: scale(1.08);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.nut-meal-empty {
+  padding: 10px 16px 13px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+/* ── Unified food feed ───────────────────────────────────────── */
+.nut-feed-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-feed-section:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 16px 28px rgba(0, 0, 0, 0.18);
+}
+
+.nut-feed-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nut-feed-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.2px;
+}
+
+.nut-feed-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+.nut-feed-add-btn {
+  height: 34px;
+  border-radius: 999px;
+  background: var(--blue);
+  border: none;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  box-shadow: 0 12px 22px color-mix(in srgb, var(--blue) 24%, transparent);
+  transition: transform 0.26s ease, opacity 0.26s ease, box-shadow 0.26s ease;
+}
+
+.nut-feed-add-btn:hover {
+  transform: translateY(-1px);
+  opacity: 0.94;
+}
+
+.nut-feed-add-btn-inline {
+  align-self: flex-start;
+}
+
+.nut-feed-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.nut-feed-controls {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nut-feed-filter {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 7px 11px;
+  cursor: pointer;
+  transition: transform 0.24s ease, background 0.24s ease, border-color 0.24s ease, color 0.24s ease;
+}
+
+.nut-feed-filter:hover {
+  transform: translateY(-1px);
+  color: var(--text);
+}
+
+.nut-feed-filter.active {
+  background: var(--blue-dim);
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--border));
+  color: var(--blue);
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--blue) 12%, transparent);
+  animation: nutrition-filter-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nut-feed-order {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.nut-feed-order-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.24s ease, background 0.24s ease, border-color 0.24s ease, color 0.24s ease, box-shadow 0.24s ease;
+}
+
+.nut-feed-order-btn:hover {
+  transform: translateY(-1px);
+  color: var(--text);
+}
+
+.nut-feed-order-btn.active {
+  background: var(--blue-dim);
+  border-color: color-mix(in srgb, var(--blue) 28%, var(--border));
+  color: var(--blue);
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--blue) 12%, transparent);
+  animation: nutrition-filter-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nut-feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nut-feed-list-animated .nut-feed-item {
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+  animation: nutrition-feed-reorder-in 0.54s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--feed-index, 0) * 48ms);
+}
+
+.nut-feed-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+}
+
+.nut-feed-rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: 8px;
+}
+
+.nut-feed-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--blue);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 16%, transparent);
+  flex-shrink: 0;
+  z-index: 1;
+}
+
+.nut-feed-line {
+  position: absolute;
+  top: 22px;
+  bottom: -12px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--blue) 30%, var(--border)), var(--border));
+}
+
+.nut-feed-card {
+  background: color-mix(in srgb, var(--surface2) 86%, white 14%);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  transition: transform 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease, background 0.26s ease;
+}
+
+.nut-feed-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue) 16%, var(--border));
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.12);
+}
+
+.nut-feed-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.nut-feed-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.nut-feed-food {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-feed-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-feed-kcal {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 84%, black 16%);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.nut-feed-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.nut-feed-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+}
+
+.nut-feed-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.nut-feed-pill-protein {
+  background: rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.24);
+  color: #c084fc;
+}
+
+.nut-feed-pill-carbs {
+  background: rgba(249, 115, 22, 0.12);
+  border-color: rgba(249, 115, 22, 0.24);
+  color: #fb923c;
+}
+
+.nut-feed-pill-fat {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.24);
+  color: #facc15;
+}
+
+.nut-feed-remove-btn {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: 999px;
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 7px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: transform 0.24s ease, background 0.24s ease, border-color 0.24s ease;
+}
+
+.nut-feed-remove-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.26);
+}
+
+.nut-feed-empty {
+  background: color-mix(in srgb, var(--surface2) 74%, white 26%);
+  border: 1px dashed color-mix(in srgb, var(--blue) 18%, var(--border));
+  border-radius: 18px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nut-feed-empty-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.nut-feed-empty-text {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 640px) {
+  .nut-feed-controls,
+  .nut-feed-header,
+  .nut-feed-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .nut-feed-order {
+    justify-content: flex-start;
+  }
+
+  .nut-feed-add-btn {
+    width: 100%;
+  }
+
+  .nut-feed-kcal {
+    align-self: flex-start;
+  }
+
+  .nut-feed-remove-btn {
+    align-self: flex-start;
+  }
+}
+
+/* ── Food picker ─────────────────────────────────────────────── */
+.nut-picker-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nut-picker-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.nut-create-food-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--blue-dim);
+  border: 1px solid rgba(59,158,255,0.3);
+  color: var(--blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  margin-left: auto;
+  flex-shrink: 0;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease;
+}
+
+.nut-create-food-btn:hover {
+  background: rgba(59,158,255,0.22);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.12);
+}
+
+.nut-list-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.nut-search-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.nut-search-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  gap: 12px;
+  transition: opacity 0.26s ease, transform 0.26s ease, border-color 0.26s ease;
+}
+
+.nut-search-item:last-child { border-bottom: none; }
+.nut-search-item:hover {
+  opacity: 0.92;
+  transform: translateX(3px);
+  border-bottom-color: color-mix(in srgb, var(--blue) 20%, var(--border));
+}
+
+.nut-search-info { flex: 1; min-width: 0; }
+
+.nut-search-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-search-brand {
+  font-size: 11px;
+  color: var(--blue);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-search-macros {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-search-serving { color: var(--muted); }
+
+.nut-search-cal {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  flex-shrink: 0;
+  white-space: nowrap;
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nut-search-cal span {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.nut-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 0;
+  font-size: 14px;
+}
+
+/* ── Food detail ─────────────────────────────────────────────── */
+.nut-detail-brand {
+  font-size: 12px;
+  color: var(--blue);
+  margin-top: 1px;
+}
+
+.nut-serving-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-serving-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-serving-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nut-amount-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.nut-amount-toggle-btn {
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  transition: background 0.24s ease, border-color 0.24s ease, color 0.24s ease, transform 0.24s ease;
+}
+
+.nut-amount-toggle-btn.active {
+  background: color-mix(in srgb, var(--blue) 18%, var(--surface2));
+  border-color: color-mix(in srgb, var(--blue) 36%, var(--border));
+  color: var(--text);
+}
+
+.nut-amount-toggle-btn:active {
+  transform: scale(0.98);
+}
+
+.nut-serving-note {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.nut-serving-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.nut-serving-row .rtp-btn {
+  width: 48px;
+  height: auto;
+  flex-shrink: 0;
+  border-radius: 12px;
+  font-size: 22px;
+}
+
+.nut-serving-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  padding: 10px 6px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.nut-serving-input::-webkit-outer-spin-button,
+.nut-serving-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.nut-serving-input[type=number] { -moz-appearance: textfield; }
+
+.nut-serving-input:focus { border-color: var(--blue); }
+
+.nut-preview-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-preview-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-preview-cal {
+  font-size: 38px;
+  font-weight: 800;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-preview-cal span {
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.nut-preview-macros {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  width: 100%;
+}
+
+.nut-preview-macro {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.nut-preview-macro span:first-child {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--mc);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-preview-macro span:last-child {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.nut-micros-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 20px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-micros-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-micros-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 12px;
+}
+
+.nut-micro-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.nut-micro-row:last-child { border-bottom: none; }
+.nut-micro-row span:first-child {
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-micro-row span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.nut-add-to-log-btn {
+  width: 100%;
+  background: var(--blue);
+  border: none;
+  border-radius: 16px;
+  color: white;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 16px;
+  cursor: pointer;
+  transition: opacity 0.26s ease, transform 0.26s ease, box-shadow 0.26s ease;
+}
+
+.nut-add-to-log-btn:hover:not(:disabled) {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px color-mix(in srgb, var(--blue) 24%, transparent);
+}
+.nut-add-to-log-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Summary expand hint ─────────────────────────────────────── */
+.nut-expand-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.nut-expand-chevron {
+  transition: transform 0.32s ease;
+}
+
+.nut-expand-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* ── Full detail card ────────────────────────────────────────── */
+.nut-detail-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.42s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.32s ease;
+}
+
+.nut-detail-wrap.expanded {
+  grid-template-rows: 1fr;
+}
+
+.nut-detail-wrap-inner {
+  overflow: hidden;
+}
+
+.nut-detail-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 16px 20px 20px;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease, opacity 0.32s ease;
+}
+
+.nut-detail-wrap.expanded .nut-detail-card {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.nut-detail-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-detail-section + .nut-detail-section {
+  margin-top: 16px;
+}
+
+.nut-detail-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 10px;
+}
+
+.nut-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.nut-detail-row:last-child { border-bottom: none; }
+
+.nut-detail-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nut-detail-label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-detail-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.nut-detail-goal {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* ── Micronutrients summary ──────────────────────────────────── */
+.nut-micros-summary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-micros-summary:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-micros-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 16px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.26s ease, transform 0.26s ease;
+  min-width: 0;
+}
+
+.nut-micros-toggle:hover {
+  background: color-mix(in srgb, var(--surface) 88%, white 12%);
+  transform: translateY(-1px);
+}
+
+.nut-micros-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--border);
+  padding: 4px 16px 12px;
+}
+
+.nut-micro-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.nut-micro-item:last-child { border-bottom: none; }
+
+.nut-micro-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nut-micro-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nut-micro-val {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.nut-micro-goal {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.nut-micro-track {
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.nut-micro-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.4s ease;
+  min-width: 2px;
+}
+
+/* ── Create Food form ────────────────────────────────────────── */
+.cf-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cf-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.cf-section:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.cf-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 2px;
+}
+
+.cf-section-note {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: none;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.cf-row {
+  display: flex;
+  gap: 10px;
+}
+
+.cf-row .cf-field { flex: 1; }
+
+.cf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cf-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.cf-required { color: #ef4444; }
+
+.cf-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.cf-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 9px 12px;
+  outline: none;
+  transition: border-color 0.32s;
+}
+
+.cf-input:focus { border-color: var(--blue); }
+
+.cf-unit {
+  position: absolute;
+  right: 10px;
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.cf-select {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 9px 12px;
+  outline: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.cf-toggle-micros {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 10px 16px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.26s ease, color 0.26s ease, transform 0.26s ease, border-color 0.26s ease;
+}
+
+.cf-toggle-micros:hover {
+  background: var(--surface);
+  color: var(--text);
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+}
+
+.cf-error {
+  font-size: 13px;
+  color: #ef4444;
+  padding: 4px 0;
+}
+
+/* ── Goals Panel ─────────────────────────────────────── */
+
+.nut-goals-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  height: 32px;
+  padding: 0 10px;
+  gap: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.26s ease, color 0.26s ease, border-color 0.26s ease, transform 0.26s ease;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.nut-goals-btn.active,
+.nut-goals-btn:hover {
+  background: var(--blue-dim);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.nut-goals-btn:hover {
+  transform: translateY(-1px);
+}
+
+.nut-goals-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+}
+
+.nut-goals-panel:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.nut-goals-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 2px;
+}
+
+.nut-goals-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.nut-goals-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nut-goals-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.nut-goals-input-wrap {
+  position: relative;
+}
+
+.nut-goals-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 8px 34px 8px 10px;
+  outline: none;
+  transition: border-color 0.32s;
+  box-sizing: border-box;
+}
+
+.nut-goals-input:focus { border-color: var(--blue); }
+
+.nut-goals-unit {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.nut-goals-actions {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.nut-goals-cancel {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.nut-goals-save {
+  background: var(--blue);
+  border: none;
+  border-radius: 10px;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px;
+  cursor: pointer;
+  transition: opacity 0.32s;
+}
+
+.nut-goals-save:disabled { opacity: 0.6; cursor: not-allowed; }
+.nut-goals-save:hover:not(:disabled) { opacity: 0.85; }
+
+/* ── AI button in picker header ──────────────────────── */
+
+.nut-ai-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(59,158,255,0.15));
+  border: 1px solid rgba(168,85,247,0.4);
+  border-radius: 8px;
+  color: #c084fc;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+  height: 32px;
+  cursor: pointer;
+  transition: background 0.32s, border-color 0.32s;
+  letter-spacing: 0.3px;
+}
+
+.nut-ai-btn:hover {
+  background: linear-gradient(135deg, rgba(168,85,247,0.25), rgba(59,158,255,0.25));
+  border-color: rgba(168,85,247,0.7);
+}
+
+/* ── AI Food Entry screen ────────────────────────────── */
+
+.ai-entry-subtitle {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+.ai-entry-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #60a5fa;
+  background: linear-gradient(135deg, rgba(59,158,255,0.12), rgba(34,197,94,0.12));
+  border: 1px solid rgba(59,158,255,0.3);
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin-left: auto;
+}
+
+.ai-entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.ai-entry-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.ai-entry-textarea {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+  padding: 12px 14px;
+  outline: none;
+  resize: none;
+  line-height: 1.5;
+  transition: border-color 0.32s;
+}
+
+.ai-entry-textarea:focus {
+  border-color: #a855f7;
+}
+
+.ai-entry-textarea:disabled {
+  opacity: 0.6;
+}
+
+.ai-entry-examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-entry-example-chip {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.32s, color 0.32s, border-color 0.32s;
+  white-space: nowrap;
+}
+
+.ai-entry-example-chip:hover:not(:disabled) {
+  background: var(--surface);
+  color: var(--text);
+  border-color: rgba(168,85,247,0.4);
+  transform: translateY(-1px);
+}
+
+.ai-entry-example-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ai-entry-error {
+  font-size: 13px;
+  color: #ef4444;
+  background: rgba(239,68,68,0.08);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.ai-entry-analyze-btn {
+  width: 100%;
+  background: linear-gradient(135deg, #a855f7, #3b9eff);
+  border: none;
+  border-radius: 14px;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: opacity 0.26s ease, transform 0.26s ease, box-shadow 0.26s ease;
+}
+
+.ai-entry-analyze-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ai-entry-analyze-btn:hover:not(:disabled) {
+  opacity: 0.94;
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.16);
+}
+
+.ai-entry-thinking {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ai-entry-thinking-dots {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.ai-entry-thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.3);
+  transition: background 0.4s;
+}
+
+.ai-entry-thinking-dots span.lit {
+  background: white;
+}
+
+.ai-entry-disclaimer {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  padding-bottom: 4px;
+}
+
+/* ── Usage pips ──────────────────────────────────────── */
+
+.ai-usage-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-usage-pip {
+  width: 28px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  transition: background 0.4s;
+}
+
+.ai-usage-pip.used {
+  background: #a855f7;
+  border-color: #a855f7;
+}
+
+.ai-usage-label {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+/* ── Limit reached card ──────────────────────────────── */
+
+.ai-limit-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 20px;
+  text-align: center;
+  margin-top: 8px;
+  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease;
+}
+
+.ai-limit-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
+  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+}
+
+.ai-limit-icon {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.ai-limit-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ai-limit-sub {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 260px;
+}
+
+.ai-limit-back-btn {
+  margin-top: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 20px;
+  cursor: pointer;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease;
+}
+
+.ai-limit-back-btn:hover {
+  background: var(--blue-dim);
+  transform: translateY(-1px);
+}
+
+/* ── Scan barcode banner ───────────────────────────────────────── */
+.nut-scan-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(99,102,241,0.08) 100%);
+  border: 1px solid rgba(59,130,246,0.3);
+  border-radius: 14px;
+  padding: 13px 16px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease;
+}
+.nut-scan-banner:hover {
+  transform: translateY(-2px);
+  background: linear-gradient(135deg, rgba(59,130,246,0.18) 0%, rgba(99,102,241,0.13) 100%);
+  border-color: rgba(59,130,246,0.5);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.14);
+}
+.nut-scan-banner-icon {
+  width: 40px;
+  height: 40px;
+  background: rgba(59,130,246,0.15);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #3b82f6;
+  flex-shrink: 0;
+}
+.nut-scan-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.nut-scan-banner-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.nut-scan-banner-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+.nut-scan-banner-chevron {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* ── BarcodeScanner ────────────────────────────────────────────── */
+.bs-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.bs-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 12px;
+  flex-shrink: 0;
+}
+
+.bs-viewfinder {
+  position: relative;
+  flex-shrink: 0;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4/3;
+  max-height: 340px;
+}
+
+.bs-reader {
+  width: 100%;
+  height: 100%;
+}
+
+/* suppress html5-qrcode default UI chrome */
+.bs-reader video { object-fit: cover; width: 100% !important; height: 100% !important; }
+#barcode-reader__scan_region { border: none !important; }
+#barcode-reader__dashboard { display: none !important; }
+
+.bs-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  animation: nutrition-overlay-in 0.32s ease;
+}
+
+.bs-target {
+  width: 280px;
+  height: 140px;
+  border: 2.5px solid #3b82f6;
+  border-radius: 10px;
+  box-shadow: 0 0 0 2000px rgba(0,0,0,0.40);
+  animation: nutrition-target-pulse 3s ease-in-out infinite;
+}
+
+.bs-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255,255,255,0.85);
+  pointer-events: none;
+}
+
+.bs-center {
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+
+.bs-loading-text {
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.bs-error-msg {
+  font-size: 15px;
+  color: var(--muted);
+  text-align: center;
+  max-width: 280px;
+  line-height: 1.5;
+}
+
+.bs-not-found-note {
+  font-size: 13px;
+  color: #f97316;
+  background: rgba(249,115,22,0.1);
+  border: 1px solid rgba(249,115,22,0.25);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+}
+
+/* confirm form — scoped to bs-screen so it doesn't bleed into CreateFood */
+.bs-screen .cf-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.bs-screen .cf-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bs-screen .cf-section-note {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.bs-screen .cf-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.bs-screen .cf-label {
+  font-size: 14px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.bs-screen .cf-required { color: var(--blue); }
+
+.bs-screen .cf-input-wrap {
+  position: static;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bs-screen .cf-input {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  padding: 6px 10px;
+  width: 110px;
+  text-align: right;
+  outline: none;
+}
+
+.bs-screen .cf-input:focus { border-color: var(--blue); }
+
+.bs-screen .cf-unit {
+  position: static;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  flex-shrink: 0;
+  right: auto;
+}
+
+@keyframes nutrition-section-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nutrition-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes nutrition-detail-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nutrition-feed-reorder-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes nutrition-filter-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  60% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes nutrition-target-pulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.40);
+  }
+  50% {
+    transform: scale(1.012);
+    box-shadow: 0 0 0 2000px rgba(0,0,0,0.46);
+  }
+}
+
+.nut-detail-wrap.expanded .nut-detail-section-title,
+.nut-detail-wrap.expanded .nut-detail-row {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: nutrition-detail-row-in 0.46s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--detail-index, 0) * 40ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nutrition-screen > *,
+  .nut-picker-screen > *,
+  .cf-screen > *,
+  .bs-screen > *,
+  .bs-overlay,
+  .bs-target {
+    animation: none;
+  }
+
+  .nutrition-screen > *,
+  .nut-picker-screen > *,
+  .cf-screen > *,
+  .bs-screen > * {
+    opacity: 1;
+    transform: none;
+  }
+
+  .nut-date-btn,
+  .nut-summary,
+  .nut-feed-section,
+  .nut-feed-filter,
+  .nut-feed-order-btn,
+  .nut-feed-card,
+  .nut-feed-remove-btn,
+  .nut-feed-add-btn,
+  .nut-meal-section,
+  .nut-add-btn,
+  .nut-food-item,
+  .nut-remove-btn,
+  .nut-create-food-btn,
+  .nut-search-item,
+  .nut-serving-card,
+  .nut-preview-card,
+  .nut-micros-card,
+  .nut-add-to-log-btn,
+  .nut-detail-card,
+  .nut-micros-summary,
+  .nut-micros-toggle,
+  .cf-section,
+  .cf-toggle-micros,
+  .nut-goals-btn,
+  .nut-goals-panel,
+  .ai-entry-analyze-btn,
+  .ai-limit-card,
+  .ai-limit-back-btn,
+  .nut-scan-banner,
+  .nut-expand-chevron,
+  .nut-detail-wrap,
+  .nut-detail-card {
+    transition: none;
+  }
+
+  .nut-feed-list-animated .nut-feed-item,
+  .nut-detail-wrap.expanded .nut-detail-section-title,
+  .nut-detail-wrap.expanded .nut-detail-row {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
