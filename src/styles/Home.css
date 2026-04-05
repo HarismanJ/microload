@@ -215,6 +215,7 @@
   transition: border-color 0.32s, background 0.32s;
 }
 
+
 .home-weight-card-clickable:hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--blue) 26%, var(--border));
@@ -313,8 +314,10 @@
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   color: var(--muted);
   font-size: 12px;
   opacity: 0;
@@ -323,6 +326,11 @@
 
 .home-chart-empty-label--visible {
   opacity: 1;
+}
+
+.home-chart-empty-sublabel {
+  font-size: 11px;
+  opacity: 0.6;
 }
 
 .home-macro-track-glow {

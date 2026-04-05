@@ -539,7 +539,10 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                       strokeDashoffset="1"
                     />
                   </svg>
-                  <span className={`home-chart-empty-label${ghostChartPhase === 'done' || (ghostChartHasPlayed && ghostChartPhase === 'idle') ? ' home-chart-empty-label--visible' : ''}`}>No weight history yet</span>
+                  <div className={`home-chart-empty-label${ghostChartPhase === 'done' || (ghostChartHasPlayed && ghostChartPhase === 'idle') ? ' home-chart-empty-label--visible' : ''}`}>
+                    <span>No weight history yet</span>
+                    <span className="home-chart-empty-sublabel">Tap here or use the + button to add an entry</span>
+                  </div>
                 </div>}
           </div>
         </div>
