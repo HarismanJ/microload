@@ -264,6 +264,20 @@ body {
   border: 1px solid rgba(251, 146, 60, 0.25);
   color: #fb923c;
   flex-shrink: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  transition: transform 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease, background 0.26s ease;
+}
+
+.topbar-home-streak:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16);
+}
+
+.topbar-home-streak:active {
+  transform: scale(0.97);
 }
 
 .topbar-home-streak-none {
@@ -898,11 +912,59 @@ body {
 
 .rest-done-btn:hover { opacity: 0.85; }
 
+.streak-info-modal {
+  gap: 12px;
+}
+
+.streak-info-icon {
+  font-size: 24px;
+}
+
+.streak-info-body {
+  text-align: center;
+  line-height: 1.55;
+}
+
 .workout-banner-rest {
   font-size: 15px;
   font-weight: 700;
   color: var(--blue);
   font-variant-numeric: tabular-nums;
+}
+
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(234, 179, 8, 0.12);
+  border-top: 1px solid rgba(234, 179, 8, 0.25);
+  color: #eab308;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 9px 16px;
+  flex-shrink: 0;
+  animation: offline-banner-in 0.2s ease;
+}
+
+.offline-banner-back {
+  background: rgba(34, 197, 94, 0.1);
+  border-top-color: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.offline-banner-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+  animation: banner-pulse 2.1s ease-in-out infinite;
+}
+
+@keyframes offline-banner-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 .battle-invite-overlay {
