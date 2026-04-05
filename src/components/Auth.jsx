@@ -11,6 +11,13 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
+  const [resetCooldown, setResetCooldown] = useState(0)
+
+  useEffect(() => {
+    if (resetCooldown <= 0) return
+    const t = setTimeout(() => setResetCooldown(c => c - 1), 1000)
+    return () => clearTimeout(t)
+  }, [resetCooldown])
 
   useEffect(() => {
     if (recoveryMode) {
@@ -40,7 +47,7 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
     } else if (mode === 'forgot') {
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin })
       if (error) setError(error.message)
-      else setMessage('Check your email for a password reset link.')
+      else { setMessage('Check your email for a password reset link.'); setResetCooldown(300) }
     } else if (mode === 'reset') {
       if (password !== confirmPassword) {
         setError('Passwords do not match.')
@@ -230,15 +237,15 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || resetCooldown > 0}
             style={{
               background: 'var(--blue)', color: '#fff', border: 'none',
               borderRadius: 10, padding: '13px', fontWeight: 700,
-              fontSize: 15, cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.7 : 1, marginTop: 4
+              fontSize: 15, cursor: (loading || resetCooldown > 0) ? 'not-allowed' : 'pointer',
+              opacity: (loading || resetCooldown > 0) ? 0.7 : 1, marginTop: 4
             }}
           >
-            {loading ? '...' : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'reset' ? 'Update Password' : 'Send Reset Link'}
+            {loading ? '...' : resetCooldown > 0 ? `Resend in ${resetCooldown}s` : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'reset' ? 'Update Password' : 'Send Reset Link'}
           </button>
         </form>
       </div>
