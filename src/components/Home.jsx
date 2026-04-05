@@ -275,21 +275,21 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [])
 
   useEffect(() => {
-    if (!widgetAnimationReady || weightLogs.length > 0 || ghostChartHasPlayed) return
+    if (loading || !widgetAnimationReady || weightLogs.length > 0 || ghostChartHasPlayed) return
     ghostChartHasPlayed = true
     setGhostChartPhase('drawing')
     const eraseTimer = setTimeout(() => setGhostChartPhase('erasing'), 1200)
     const doneTimer  = setTimeout(() => setGhostChartPhase('done'), 2800)
     return () => { clearTimeout(eraseTimer); clearTimeout(doneTimer) }
-  }, [widgetAnimationReady, weightLogs.length, appReturnTick])
+  }, [loading, widgetAnimationReady, weightLogs.length, appReturnTick])
 
   useEffect(() => {
-    if (!widgetAnimationReady || !nutEmpty || barGlowHasPlayed) return
+    if (loading || !widgetAnimationReady || !nutEmpty || barGlowHasPlayed) return
     barGlowHasPlayed = true
     setBarGlowActive(true)
     const t = setTimeout(() => setBarGlowActive(false), 1500)
     return () => clearTimeout(t)
-  }, [widgetAnimationReady, nutEmpty, appReturnTick])
+  }, [loading, widgetAnimationReady, nutEmpty, appReturnTick])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
