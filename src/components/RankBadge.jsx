@@ -1,35 +1,28 @@
-const COLORS = {
-  Unranked:    '#4b5563',
-  Iron:        '#6b7280',
-  Bronze:      '#cd7f32',
-  Silver:      '#94a3b8',
-  Gold:        '#f59e0b',
-  Platinum:    '#22d3ee',
-  Diamond:     '#3b9eff',
-  Master:      '#8b5cf6',
-  Grandmaster: '#ec4899',
-  Elite:       '#f97316',
-}
+import { TIER_COLORS as COLORS } from '../lib/strengthStandards'
+
+const SHIELD = 'M24 4 L41 13 L41 30 Q41 43 24 47 Q7 43 7 30 L7 13 Z'
 
 function Unranked({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
-      <circle cx="24" cy="24" r="18" fill={c + '18'} stroke={c} strokeWidth="1.8" strokeDasharray="4 3"/>
-      <text x="24" y="32" textAnchor="middle" fill={c} fontSize="24" fontWeight="700" fontFamily="system-ui, sans-serif">?</text>
+      <circle cx="24" cy="24" r="19" fill={c + '12'} stroke={c} strokeWidth="1.5" strokeDasharray="5 3"/>
+      <circle cx="24" cy="24" r="12" fill="none" stroke={c} strokeWidth="1" opacity="0.35" strokeDasharray="3 5"/>
+      <text x="24" y="32" textAnchor="middle" fill={c} fontSize="22" fontWeight="700" fontFamily="system-ui, sans-serif" opacity="0.85">?</text>
     </svg>
   )
 }
-
-// Shield path used for Iron–Gold
-const SHIELD = 'M24 5 L40 13 L40 29 Q40 41 24 46 Q8 41 8 29 L8 13 Z'
 
 function Iron({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       <path d={SHIELD} fill={c + '18'} stroke={c} strokeWidth="1.8"/>
-      <line x1="15" y1="21" x2="33" y2="21" stroke={c} strokeWidth="1.8" strokeLinecap="round" opacity="0.9"/>
-      <line x1="15" y1="27" x2="33" y2="27" stroke={c} strokeWidth="1.8" strokeLinecap="round" opacity="0.9"/>
-      <line x1="15" y1="33" x2="33" y2="33" stroke={c} strokeWidth="1.8" strokeLinecap="round" opacity="0.9"/>
+      {/* Horizontal bars */}
+      <rect x="13" y="17" width="22" height="3.5" rx="1" fill={c} opacity="0.8"/>
+      <rect x="13" y="23" width="22" height="3.5" rx="1" fill={c} opacity="0.8"/>
+      <rect x="13" y="29" width="22" height="3.5" rx="1" fill={c} opacity="0.8"/>
+      {/* Corner rivets */}
+      <circle cx="16" cy="13" r="1.8" fill={c} opacity="0.55"/>
+      <circle cx="32" cy="13" r="1.8" fill={c} opacity="0.55"/>
     </svg>
   )
 }
@@ -38,8 +31,12 @@ function Bronze({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       <path d={SHIELD} fill={c + '18'} stroke={c} strokeWidth="1.8"/>
-      <polyline points="15,31 24,21 33,31"
-        fill="none" stroke={c} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
+      {/* Sword blade */}
+      <polygon points="24,11 26.5,30 24,34 21.5,30" fill={c} opacity="0.9"/>
+      {/* Cross-guard */}
+      <rect x="15" y="27.5" width="18" height="3.5" rx="1.5" fill={c} opacity="0.85"/>
+      {/* Pommel */}
+      <ellipse cx="24" cy="37" rx="4" ry="2.8" fill={c} opacity="0.75"/>
     </svg>
   )
 }
@@ -48,21 +45,32 @@ function Silver({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       <path d={SHIELD} fill={c + '18'} stroke={c} strokeWidth="1.8"/>
-      <polyline points="15,33 24,24 33,33"
-        fill="none" stroke={c} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
-      <polyline points="15,25 24,16 33,25"
-        fill="none" stroke={c} strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round"/>
+      {/* Crossed swords */}
+      <line x1="15" y1="13" x2="33" y2="37" stroke={c} strokeWidth="2.8" strokeLinecap="round" opacity="0.9"/>
+      <line x1="33" y1="13" x2="15" y2="37" stroke={c} strokeWidth="2.8" strokeLinecap="round" opacity="0.9"/>
+      {/* Cross-guards */}
+      <line x1="10" y1="21" x2="20" y2="21" stroke={c} strokeWidth="2.2" strokeLinecap="round" opacity="0.75"/>
+      <line x1="28" y1="21" x2="38" y2="21" stroke={c} strokeWidth="2.2" strokeLinecap="round" opacity="0.75"/>
     </svg>
   )
 }
 
 function Gold({ c }) {
-  // 5-point star centered at (24,27), outer r=10, inner r=4
-  const star = '24,17 26.35,23.76 32.56,24.22 27.80,28.24 29.29,35.28 24,31 18.71,35.28 20.20,28.24 15.44,24.22 21.65,23.76'
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       <path d={SHIELD} fill={c + '18'} stroke={c} strokeWidth="1.8"/>
-      <polygon points={star} fill={c} opacity="0.9"/>
+      {/* Left laurel branch */}
+      <path d="M22 32 C20 30 16 28 14 25 C16 24.5 18.5 26 20 28" fill={c} opacity="0.8"/>
+      <path d="M22 28 C19 27 15 23 14 19 C16.5 19 19 21.5 20.5 24" fill={c} opacity="0.8"/>
+      <path d="M22 24 C20 22 17.5 18 17 14 C19.5 14.5 21.5 17.5 22 21" fill={c} opacity="0.8"/>
+      {/* Right laurel branch */}
+      <path d="M26 32 C28 30 32 28 34 25 C32 24.5 29.5 26 28 28" fill={c} opacity="0.8"/>
+      <path d="M26 28 C29 27 33 23 34 19 C31.5 19 29 21.5 27.5 24" fill={c} opacity="0.8"/>
+      <path d="M26 24 C28 22 30.5 18 31 14 C28.5 14.5 26.5 17.5 26 21" fill={c} opacity="0.8"/>
+      {/* Stem */}
+      <line x1="24" y1="13" x2="24" y2="33" stroke={c} strokeWidth="1.5" strokeLinecap="round" opacity="0.6"/>
+      {/* Tie at base */}
+      <path d="M20 33 Q24 36 28 33" fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" opacity="0.9"/>
     </svg>
   )
 }
@@ -71,20 +79,19 @@ function Platinum({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       {/* Outer hexagon */}
-      <polygon points="24,4 40,13 40,31 24,40 8,31 8,13"
-        fill={c + '18'} stroke={c} strokeWidth="1.8"/>
-      {/* Inner hexagon */}
-      <polygon points="24,12 34,18 34,30 24,36 14,30 14,18"
-        fill="none" stroke={c} strokeWidth="1.4" opacity="0.55"/>
-      {/* Center dot */}
-      <circle cx="24" cy="24" r="3.5" fill={c}/>
+      <polygon points="24,3 41,12.5 41,31.5 24,41 7,31.5 7,12.5" fill={c + '18'} stroke={c} strokeWidth="1.8"/>
+      {/* Middle hexagon */}
+      <polygon points="24,10 35,16 35,28 24,34 13,28 13,16" fill="none" stroke={c} strokeWidth="1.2" opacity="0.55"/>
+      {/* Inner hexagon filled */}
+      <polygon points="24,17 29,20 29,26 24,29 19,26 19,20" fill={c} opacity="0.3"/>
       {/* Spokes */}
-      <line x1="24" y1="20.5" x2="24" y2="12" stroke={c} strokeWidth="1" opacity="0.4"/>
-      <line x1="27" y1="22" x2="34" y2="18" stroke={c} strokeWidth="1" opacity="0.4"/>
-      <line x1="27" y1="26" x2="34" y2="30" stroke={c} strokeWidth="1" opacity="0.4"/>
-      <line x1="24" y1="27.5" x2="24" y2="36" stroke={c} strokeWidth="1" opacity="0.4"/>
-      <line x1="21" y1="26" x2="14" y2="30" stroke={c} strokeWidth="1" opacity="0.4"/>
-      <line x1="21" y1="22" x2="14" y2="18" stroke={c} strokeWidth="1" opacity="0.4"/>
+      <line x1="24" y1="22" x2="24" y2="10"  stroke={c} strokeWidth="1.2" opacity="0.5"/>
+      <line x1="24" y1="22" x2="35" y2="16"  stroke={c} strokeWidth="1.2" opacity="0.5"/>
+      <line x1="24" y1="22" x2="35" y2="28"  stroke={c} strokeWidth="1.2" opacity="0.5"/>
+      <line x1="24" y1="22" x2="24" y2="34"  stroke={c} strokeWidth="1.2" opacity="0.5"/>
+      <line x1="24" y1="22" x2="13" y2="28"  stroke={c} strokeWidth="1.2" opacity="0.5"/>
+      <line x1="24" y1="22" x2="13" y2="16"  stroke={c} strokeWidth="1.2" opacity="0.5"/>
+      <circle cx="24" cy="22" r="3.5" fill={c}/>
     </svg>
   )
 }
@@ -92,23 +99,21 @@ function Platinum({ c }) {
 function Diamond({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
-      {/* Gem outline */}
-      <polygon points="24,3 43,21 24,45 5,21"
-        fill={c + '18'} stroke={c} strokeWidth="1.8"/>
-      {/* Top-left facet */}
-      <polygon points="24,3 5,21 24,21"
-        fill={c} opacity="0.15"/>
-      {/* Top-right facet */}
-      <polygon points="24,3 43,21 24,21"
-        fill={c} opacity="0.28"/>
-      {/* Girdle line */}
-      <line x1="5" y1="21" x2="43" y2="21" stroke={c} strokeWidth="1.2" opacity="0.6"/>
-      {/* Top ridge lines */}
-      <line x1="24" y1="3" x2="5" y2="21" stroke={c} strokeWidth="0.8" opacity="0.35"/>
-      <line x1="24" y1="3" x2="43" y2="21" stroke={c} strokeWidth="0.8" opacity="0.35"/>
-      {/* Bottom facet lines from girdle corners */}
-      <line x1="13" y1="21" x2="24" y2="45" stroke={c} strokeWidth="0.8" opacity="0.3"/>
-      <line x1="35" y1="21" x2="24" y2="45" stroke={c} strokeWidth="0.8" opacity="0.3"/>
+      <polygon points="24,3 43,20 24,46 5,20" fill={c + '15'} stroke={c} strokeWidth="1.8"/>
+      {/* Top facets */}
+      <polygon points="24,3 5,20 14,20"  fill={c} opacity="0.18"/>
+      <polygon points="24,3 43,20 34,20" fill={c} opacity="0.32"/>
+      <polygon points="24,3 14,20 24,20" fill={c} opacity="0.12"/>
+      <polygon points="24,3 24,20 34,20" fill={c} opacity="0.24"/>
+      {/* Girdle */}
+      <line x1="5" y1="20" x2="43" y2="20" stroke={c} strokeWidth="1.5" opacity="0.75"/>
+      {/* Bottom facet lines */}
+      <line x1="14" y1="20" x2="24" y2="46" stroke={c} strokeWidth="0.9" opacity="0.35"/>
+      <line x1="34" y1="20" x2="24" y2="46" stroke={c} strokeWidth="0.9" opacity="0.35"/>
+      <line x1="24" y1="20" x2="24" y2="46" stroke={c} strokeWidth="0.8" opacity="0.2"/>
+      {/* Sparkles */}
+      <path d="M41 9 L41 13 M39 11 L43 11" stroke={c} strokeWidth="1.3" strokeLinecap="round" opacity="0.7"/>
+      <path d="M8 13 L8 16 M6.5 14.5 L9.5 14.5" stroke={c} strokeWidth="1.1" strokeLinecap="round" opacity="0.55"/>
     </svg>
   )
 }
@@ -117,14 +122,22 @@ function Master({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       {/* Crown body — 3 points */}
-      <path d="M7 36 L7 21 L16 30 L24 10 L32 30 L41 21 L41 36 Z"
+      <path d="M6 37 L6 20 L15 30 L24 8 L33 30 L42 20 L42 37 Z"
         fill={c + '20'} stroke={c} strokeWidth="1.8" strokeLinejoin="round"/>
-      {/* Crown base band */}
-      <rect x="7" y="36" width="34" height="6" rx="2" fill={c} opacity="0.75"/>
-      {/* Gems on points */}
-      <circle cx="24" cy="11" r="3" fill={c}/>
-      <circle cx="7"  cy="22" r="2.2" fill={c}/>
-      <circle cx="41" cy="22" r="2.2" fill={c}/>
+      {/* Inner crown outline */}
+      <path d="M10 37 L10 24 L15 30 L24 12 L33 30 L38 24 L38 37"
+        fill="none" stroke={c} strokeWidth="0.9" opacity="0.4" strokeLinejoin="round"/>
+      {/* Base band */}
+      <rect x="6" y="37" width="36" height="6.5" rx="2" fill={c} opacity="0.8"/>
+      {/* Top gem */}
+      <polygon points="24,5 27,10 24,13 21,10" fill={c}/>
+      {/* Side gems */}
+      <circle cx="6"  cy="21" r="2.5" fill={c}/>
+      <circle cx="42" cy="21" r="2.5" fill={c}/>
+      {/* Band studs */}
+      <circle cx="15" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
+      <circle cx="24" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
+      <circle cx="33" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
     </svg>
   )
 }
@@ -133,17 +146,26 @@ function Grandmaster({ c }) {
   return (
     <svg viewBox="0 0 48 48" width="100%" height="100%">
       {/* Crown body — 5 points */}
-      <path d="M5 37 L5 23 L11 30 L17 14 L24 6 L31 14 L37 30 L43 23 L43 37 Z"
+      <path d="M4 37 L4 22 L11 31 L17 13 L24 4 L31 13 L37 31 L44 22 L44 37 Z"
         fill={c + '20'} stroke={c} strokeWidth="1.8" strokeLinejoin="round"/>
-      {/* Crown base band */}
-      <rect x="5" y="37" width="38" height="6" rx="2" fill={c} opacity="0.75"/>
+      {/* Inner crown outline */}
+      <path d="M8 37 L8 26 L11 31 L17 13 L24 7 L31 13 L37 31 L40 26 L40 37"
+        fill="none" stroke={c} strokeWidth="0.9" opacity="0.35" strokeLinejoin="round"/>
+      {/* Base band */}
+      <rect x="4" y="37" width="40" height="6.5" rx="2" fill={c} opacity="0.8"/>
       {/* Top diamond gem */}
-      <polygon points="24,3 27,8 24,11 21,8" fill={c}/>
+      <polygon points="24,2 27.5,8 24,12 20.5,8" fill={c}/>
+      {/* Second-tier gems */}
+      <circle cx="17" cy="14" r="2.2" fill={c}/>
+      <circle cx="31" cy="14" r="2.2" fill={c}/>
       {/* Side gems */}
-      <circle cx="17" cy="15" r="2" fill={c}/>
-      <circle cx="31" cy="15" r="2" fill={c}/>
-      <circle cx="5"  cy="24" r="2" fill={c}/>
-      <circle cx="43" cy="24" r="2" fill={c}/>
+      <circle cx="4"  cy="23" r="2.5" fill={c}/>
+      <circle cx="44" cy="23" r="2.5" fill={c}/>
+      {/* Band studs */}
+      <circle cx="13" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
+      <circle cx="21" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
+      <circle cx="29" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
+      <circle cx="37" cy="40.5" r="2"   fill="rgba(0,0,0,0.35)"/>
     </svg>
   )
 }

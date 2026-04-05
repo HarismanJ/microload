@@ -6,7 +6,7 @@ import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import BodyWeightDetail from './profile/BodyWeightDetail'
 import WorkoutCalendar from './profile/WorkoutCalendar'
 import WeightChart from './profile/WeightChart'
-import { DEFAULT_BODYWEIGHT_KG, convertWeight, getProfileBodyweightKg, getSetVolumeInUnit } from '../lib/liftMath'
+import { convertWeight } from '../lib/liftMath'
 import '../styles/Home.css'
 
 const BODY_WEIGHT_CHART_UNIT_KEY = 'bodyWeightChartUnitOverride'
@@ -45,12 +45,16 @@ function getCalendarMonthCacheKey(dateInput = new Date()) {
   return `cal_${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
+let ghostChartHasPlayed = false
+let barGlowHasPlayed = false
+
 export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady }) {
   const [profile, setProfile]         = useState(null)
   const [todayNut, setTodayNut]       = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 })
-  const [lastWorkout, setLastWorkout] = useState(null)
   const [workoutStreak, setWorkoutStreak] = useState(0)
   const [weightLogs, setWeightLogs] = useState([])
+  const [ghostChartPhase, setGhostChartPhase] = useState('idle') // 'idle' | 'drawing' | 'erasing' | 'done'
+  const [appReturnTick, setAppReturnTick] = useState(0)
   const [loading, setLoading]         = useState(true)
   const [showWeightDetail, setShowWeightDetail] = useState(false)
   const [weightSheetUnit, setWeightSheetUnit] = useState(() => loadStoredBodyWeightChartUnit())
@@ -65,7 +69,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [isPhoneWidth, setIsPhoneWidth] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ))
+  const nutEmpty = todayNut.calories === 0 && todayNut.protein === 0 && todayNut.carbs === 0 && todayNut.fat === 0
   const [barsAnimatedIn, setBarsAnimatedIn] = useState(false)
+  const [barGlowActive, setBarGlowActive] = useState(false)
   const [animReady, setAnimReady] = useState(false)
   const firstEntryWidgetHold = splashDone && !introMotionReady
   const widgetAnimationReady = animReady && !firstEntryWidgetHold
@@ -94,7 +100,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     load()
   }
 
-  function applyData({ prof, nutLogs, latestWorkout, allSessions, weightLogs: logs }) {
+  function applyData({ prof, nutLogs, allSessions, weightLogs: logs }) {
     setProfile(prof)
     setWeightLogs(logs || [])
 
@@ -115,56 +121,33 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       setTodayNut({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: calGoal, proteinGoal: protGoal, carbsGoal: carbGoal, fatGoal: fatGoal })
     }
 
-    // Streak
-    const allDates = new Set(allSessions?.map(s => localDate(new Date(s.started_at))) || [])
-    let streak = 0
-    const cursor = new Date()
-    // If no workout today, start counting from yesterday
-    if (!allDates.has(localDate(cursor))) cursor.setDate(cursor.getDate() - 1)
-    while (allDates.has(localDate(cursor))) {
-      streak++
-      cursor.setDate(cursor.getDate() - 1)
-    }
-    setWorkoutStreak(streak)
+    const sortedWorkoutDays = [...new Set((allSessions || []).map(session => localDate(new Date(session.started_at))))]
+      .map(dateStr => new Date(`${dateStr}T12:00:00`))
+      .sort((a, b) => b - a)
 
-    // Last workout — sets already nested, no extra query needed
-    if (latestWorkout) {
-      const last = latestWorkout
-      const sets = last.workout_sets || []
-      if (sets.length) {
-        const exMap = {}
-        sets.forEach(s => { exMap[s.exercises.name] = true })
-        const bodyweightKg = getProfileBodyweightKg(prof, DEFAULT_BODYWEIGHT_KG)
-        const totalVolume = sets.reduce((sum, set) => (
-          sum + getSetVolumeInUnit({
-            weight: set.weight,
-            reps: set.reps,
-            unit: set.unit,
-            equipment: set.exercises?.equipment,
-            bodyweightKg,
-          }, prof?.unit_preference || 'kg')
-        ), 0)
-        const mins = last.finished_at
-          ? Math.round((new Date(last.finished_at) - new Date(last.started_at)) / 60000)
-          : null
-        setLastWorkout({
-          date: localDate(new Date(last.started_at)),
-          duration: mins,
-          exercises: Object.keys(exMap),
-          totalSets: sets.length,
-          totalVolume,
-        })
-        return
+    let streak = 0
+    if (sortedWorkoutDays.length > 0) {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+      const daysSinceLatestWorkout = Math.floor((today - sortedWorkoutDays[0]) / 86400000)
+
+      if (daysSinceLatestWorkout <= 3) {
+        streak = 1
+        for (let index = 1; index < sortedWorkoutDays.length; index += 1) {
+          const gapDays = Math.floor((sortedWorkoutDays[index - 1] - sortedWorkoutDays[index]) / 86400000) - 1
+          if (gapDays > 3) break
+          streak += 1
+        }
       }
     }
 
-    setLastWorkout(null)
+    setWorkoutStreak(streak)
   }
 
   async function load() {
     const today = todayStr()
     const cacheKey = 'home'
-    const cacheVersion = 4
+    const cacheVersion = 5
 
     const cached = getCached(cacheKey)
     if (cached?.version === cacheVersion) {
@@ -188,7 +171,6 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     const [
       { data: prof },
       { data: nutLogs },
-      { data: latestWorkout },
       { data: allSessions },
       { data: weightLogs },
     ] = await Promise.all([
@@ -198,13 +180,6 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       supabase.from('nutrition_logs')
         .select('calories, protein, carbs, fat')
         .eq('user_id', userId).eq('log_date', today),
-      supabase.from('workout_sessions')
-        .select('id, started_at, finished_at, workout_sets(weight, reps, unit, exercises(name, equipment))')
-        .eq('user_id', userId)
-        .not('finished_at', 'is', null)
-        .order('started_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
       supabase.from('workout_sessions')
         .select('started_at')
         .eq('user_id', userId)
@@ -220,7 +195,6 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       version: cacheVersion,
       prof,
       nutLogs,
-      latestWorkout,
       allSessions,
       weightLogs: weightLogs?.map(log => ({
         id: log.id,
@@ -268,7 +242,36 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setBarsAnimatedIn(false)
     const timer = setTimeout(() => setBarsAnimatedIn(true), 120)
     return () => clearTimeout(timer)
-  }, [loading, widgetAnimationReady, selectedDay, showWeightDetail, todayNut.calories, todayNut.protein, todayNut.carbs, todayNut.fat])
+  }, [loading, widgetAnimationReady, selectedDay, showWeightDetail, todayNut.calories, todayNut.protein, todayNut.carbs, todayNut.fat, appReturnTick])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        ghostChartHasPlayed = false
+        barGlowHasPlayed = false
+        setAppReturnTick(t => t + 1)
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  useEffect(() => {
+    if (!widgetAnimationReady || weightLogs.length > 0 || ghostChartHasPlayed) return
+    ghostChartHasPlayed = true
+    setGhostChartPhase('drawing')
+    const eraseTimer = setTimeout(() => setGhostChartPhase('erasing'), 1200)
+    const doneTimer  = setTimeout(() => setGhostChartPhase('done'), 2800)
+    return () => { clearTimeout(eraseTimer); clearTimeout(doneTimer) }
+  }, [widgetAnimationReady, weightLogs.length, appReturnTick])
+
+  useEffect(() => {
+    if (!widgetAnimationReady || !nutEmpty || barGlowHasPlayed) return
+    barGlowHasPlayed = true
+    setBarGlowActive(true)
+    const t = setTimeout(() => setBarGlowActive(false), 1500)
+    return () => clearTimeout(t)
+  }, [widgetAnimationReady, nutEmpty, appReturnTick])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -358,15 +361,6 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
     setWeightDeletingId(null)
     setWeightDeleteTargetId(null)
-  }
-
-  const today     = todayStr()
-
-  function fmtDate(dateStr) {
-    const diff = Math.round((new Date(today + 'T12:00:00') - new Date(dateStr + 'T12:00:00')) / 86400000)
-    if (diff === 0) return 'Today'
-    if (diff === 1) return 'Yesterday'
-    return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
   }
 
   const calPct = Math.min(1, todayNut.calories / todayNut.goal)
@@ -470,11 +464,11 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
               <div className="home-today-sub">of {todayNut.goal} kcal</div>
             </div>
           </div>
-          <div className="home-today-bar home-today-bar-compact">
+          <div className={`home-today-bar home-today-bar-compact${barGlowActive ? ' home-macro-track-glow' : ''}`} style={barGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}>
             <div className="home-today-bar-fill" style={{ width: calBarWidth, background: calPct >= 1 ? '#22c55e' : 'var(--blue)' }} />
           </div>
           <div className="home-macro-bars home-macro-bars-compact">
-            {macroRingItems.map(m => (
+            {macroRingItems.map((m) => (
               <div key={m.label} className="home-macro-row">
                 <div className="home-macro-meta">
                   <span className="home-macro-label" style={{ color: m.color }}>{m.label}</span>
@@ -483,7 +477,10 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                     <span className="home-macro-goal"> / {m.goal}g</span>
                   </span>
                 </div>
-                <div className="home-macro-track">
+                <div
+                  className={`home-macro-track${barGlowActive ? ' home-macro-track-glow' : ''}`}
+                  style={barGlowActive ? { '--glow-color': m.color } : undefined}
+                >
                   <div className="home-macro-fill" style={{ width: `${barsAnimatedIn ? Math.min(100, (m.val / m.goal) * 100) : 0}%`, background: m.color }} />
                 </div>
               </div>
@@ -525,7 +522,25 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                     animationReady={widgetAnimationReady}
                   />
                 </div>
-              : <div className="home-chart-empty">No weight history yet</div>}
+              : <div className="home-chart-empty">
+                  {/* Ghost chart skeleton — matches real chart paddings */}
+                  <svg className="home-chart-ghost" viewBox="0 0 300 162" width="100%" height={homeChartHeight} style={{ display: 'block' }}>
+                    {/* Ghost polyline — realistic weight trend with natural variation */}
+                    <polyline
+                      className={`home-chart-ghost-path home-chart-ghost-path--${ghostChartPhase}`}
+                      points="30,118 55,124 80,110 105,115 130,100 155,88 175,92 200,75 225,68 250,58 275,45 292,38"
+                      fill="none"
+                      stroke="var(--blue)"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      pathLength="1"
+                      strokeDasharray="1"
+                      strokeDashoffset="1"
+                    />
+                  </svg>
+                  <span className={`home-chart-empty-label${ghostChartPhase === 'done' || (ghostChartHasPlayed && ghostChartPhase === 'idle') ? ' home-chart-empty-label--visible' : ''}`}>No weight history yet</span>
+                </div>}
           </div>
         </div>
 
@@ -539,44 +554,6 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
           />
         </div>
       </div>
-
-      {/* ── Last workout ── */}
-      {lastWorkout && (
-        <div className="home-section">
-          <div className="home-section-title">Last Workout</div>
-          <div className="home-last-workout">
-            <div className="home-lw-top">
-              <span className="home-lw-date">{fmtDate(lastWorkout.date)}</span>
-              <span className="home-lw-duration">{lastWorkout.duration} min</span>
-            </div>
-            <div className="home-lw-stats">
-              <div className="home-lw-stat">
-                <div className="home-lw-stat-val">{lastWorkout.exercises.length}</div>
-                <div className="home-lw-stat-label">Exercises</div>
-              </div>
-              <div className="home-lw-stat">
-                <div className="home-lw-stat-val">{lastWorkout.totalSets}</div>
-                <div className="home-lw-stat-label">Sets</div>
-              </div>
-              <div className="home-lw-stat">
-                <div className="home-lw-stat-val">
-                  {lastWorkout.totalVolume >= 1000
-                    ? `${(lastWorkout.totalVolume / 1000).toFixed(1)}k`
-                    : lastWorkout.totalVolume.toFixed(0)}
-                  <span style={{ fontSize: '12px', fontWeight: 400, marginLeft: 2 }}>{profile?.unit_preference || 'kg'}</span>
-                </div>
-                <div className="home-lw-stat-label">Volume</div>
-              </div>
-            </div>
-            {lastWorkout.exercises.length > 0 && (
-              <div className="home-lw-exercises">
-                {lastWorkout.exercises.slice(0, 4).join(' · ')}
-                {lastWorkout.exercises.length > 4 ? ` +${lastWorkout.exercises.length - 4} more` : ''}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
     </div>
   )

@@ -14,6 +14,7 @@ import {
   respondToBattleInvite,
 } from './lib/battles'
 import { cancelRestNotification, scheduleRestEndNotification } from './lib/restNotification'
+import { useNetworkStatus } from './hooks/useNetworkStatus'
 import './App.css'
 
 const Home = lazy(() => import('./components/Home'))
@@ -170,6 +171,7 @@ function AppIntroSplash({ exiting = false, ready = false }) {
 }
 
 export default function App() {
+  const { isOnline, justCameOnline } = useNetworkStatus()
   const [tab, setTab] = useState('home')
   const [tabTransitionDirection, setTabTransitionDirection] = useState('forward')
   const [tabTransitionTick, setTabTransitionTick] = useState(0)
@@ -186,8 +188,9 @@ export default function App() {
   const [quickWeightSaving, setQuickWeightSaving] = useState(false)
   const [quickWeightError, setQuickWeightError] = useState('')
   const [homeWorkoutStreak, setHomeWorkoutStreak] = useState(0)
-  const [profileNavigationTarget, setProfileNavigationTarget] = useState(null)
+  const [showStreakInfo, setShowStreakInfo] = useState(false)
   const [session, setSession] = useState(undefined)
+  const [recoveryMode, setRecoveryMode] = useState(false)
   const [workoutStatus, setWorkoutStatus] = useState({ active: false, resumable: false, seconds: 0 })
   const [restDoneToast, setRestDoneToast] = useState(null)
   const [workoutSummary, setWorkoutSummary] = useState(null)
@@ -247,27 +250,6 @@ export default function App() {
     setShowQuickWeight(false)
     setQuickWeightError('')
   }, [])
-
-  useEffect(() => {
-    if (!session?.user?.id) return
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      const { data } = await supabase
-        .from('profiles')
-        .select('unit_preference')
-        .eq('id', session.user.id)
-        .maybeSingle()
-
-      if (!cancelled && (data?.unit_preference === 'kg' || data?.unit_preference === 'lbs')) {
-        setQuickWeightUnit(data.unit_preference)
-      }
-    }, 0)
-
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [session?.user?.id])
 
   useEffect(() => {
     if (!showQuickWeight || !session?.user?.id) return
@@ -476,7 +458,12 @@ export default function App() {
       authUserIdRef.current = session?.user?.id ?? null
       setSession(session)
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryMode(true)
+        setSession(session)
+        return
+      }
       const nextUserId = session?.user?.id ?? null
       if (authUserIdRef.current !== nextUserId) {
         clearCache()
@@ -609,7 +596,7 @@ export default function App() {
       )
       .subscribe()
 
-    const poll = setInterval(refreshNow, 4000)
+    const poll = setInterval(refreshNow, 30000)
     window.addEventListener('focus', refreshNow)
     document.addEventListener('visibilitychange', refreshNow)
 
@@ -634,24 +621,8 @@ export default function App() {
   }
 
   const handleNavigate = useCallback((nextTarget) => {
-    if (typeof nextTarget === 'string') {
-      setProfileNavigationTarget(null)
-      navigateToTab(nextTarget)
-      return
-    }
-
-    if (!nextTarget?.tab) return
-
-    if (nextTarget.tab === 'profile') {
-      setProfileNavigationTarget({
-        section: nextTarget.section || null,
-        requestId: Date.now(),
-      })
-    } else {
-      setProfileNavigationTarget(null)
-    }
-
-    navigateToTab(nextTarget.tab)
+    if (typeof nextTarget !== 'string') return
+    navigateToTab(nextTarget)
   }, [navigateToTab])
 
 
@@ -720,12 +691,12 @@ export default function App() {
   const appFallback = showIntroSplash ? null : <LoadingSpinner fullPage />
 
   if (session === undefined) return introSplash || <LoadingSpinner fullPage />
-  if (!session) {
+  if (!session || recoveryMode) {
     return (
       <>
         <Suspense fallback={appFallback}>
           <InitialReadyMarker onReady={markInitialScreenReady} />
-          <Auth />
+          <Auth recoveryMode={recoveryMode} onRecoveryDone={() => setRecoveryMode(false)} />
         </Suspense>
         {introSplash}
       </>
@@ -756,7 +727,7 @@ export default function App() {
     home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} />,
     ranks: <Ranks />,
     nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
-    profile: <Profile onChallenge={handleChallengeFriend} navigationTarget={profileNavigationTarget} />,
+    profile: <Profile onChallenge={handleChallengeFriend} />,
   }
   const contentScreenClassName = `content-screen content-screen-${tabTransitionDirection} content-screen-${tabTransitionTick % 2}`
 
@@ -770,12 +741,16 @@ export default function App() {
             </button>
             <div className="topbar-actions">
               {tab === 'home' && (
-                <div className={`topbar-home-streak ${homeWorkoutStreak === 0 ? 'topbar-home-streak-none' : ''}${homeIntroMotionReady ? ' topbar-home-streak--animate' : ''}`}>
+                <button
+                  type="button"
+                  className={`topbar-home-streak ${homeWorkoutStreak === 0 ? 'topbar-home-streak-none' : ''}${homeIntroMotionReady ? ' topbar-home-streak--animate' : ''}`}
+                  onClick={() => setShowStreakInfo(true)}
+                >
                   <span className="topbar-home-streak-fire">{homeWorkoutStreak > 0 ? '🔥' : '—'}</span>
                   <span className="topbar-home-streak-text">
-                    {homeWorkoutStreak > 0 ? `${homeWorkoutStreak} day streak` : 'No streak'}
+                    {homeWorkoutStreak > 0 ? `${homeWorkoutStreak} ${homeWorkoutStreak === 1 ? 'day' : 'days'} streak` : 'No streak'}
                   </span>
-                </div>
+                </button>
               )}
               <button
                 className={`topbar-profile-btn ${tab === 'profile' ? 'active' : ''}`}
@@ -926,6 +901,21 @@ export default function App() {
           </div>
         )}
 
+        {showStreakInfo && (
+          <div className="rest-done-overlay" onClick={() => setShowStreakInfo(false)}>
+            <div className="rest-done-modal streak-info-modal" onClick={event => event.stopPropagation()}>
+              <div className="rest-done-icon streak-info-icon">
+                <span>🔥</span>
+              </div>
+              <div className="rest-done-title">Streak Info</div>
+              <div className="rest-done-body streak-info-body">
+                Your streak stays alive as long as you do not miss more than 3 days in a row without a workout. If you go 4 straight days without training, your streak resets.
+              </div>
+              <button className="rest-done-btn" onClick={() => setShowStreakInfo(false)}>OK</button>
+            </div>
+          </div>
+        )}
+
         {quickActionSheetOpen && (
           <div className="quick-action-overlay" data-tab-swipe-ignore="true" onClick={() => {
             closeQuickActionSheet()
@@ -976,7 +966,7 @@ export default function App() {
                   <path d="M12 8v12" />
                   <path d="M9 20h6" />
                 </svg>
-                <span>Add Weight</span>
+                <span>Add Body Weight</span>
               </button>
               <button
                 className={`quick-action-btn quick-action-btn-secondary ${showQuickTimer || quickTimer ? 'quick-action-btn-timer-active' : ''}`}
@@ -1069,6 +1059,13 @@ export default function App() {
                 Cancel
               </button>
             </div>
+          </div>
+        )}
+
+        {(!isOnline || justCameOnline) && (
+          <div className={`offline-banner${justCameOnline ? ' offline-banner-back' : ''}`}>
+            <span className="offline-banner-dot" />
+            {justCameOnline ? 'Back online' : 'No internet — changes won\'t save'}
           </div>
         )}
 

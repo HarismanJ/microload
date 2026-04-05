@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useEffectEvent, lazy, Suspense, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { createCustomExercise, fetchExercises } from '../data/exercises'
+import { createCustomExercise, fetchExercises, invalidateExercisesCache } from '../data/exercises'
 import { calculateORM } from '../lib/orm'
 import { TEMPLATES } from '../data/templates'
 import { invalidateCache } from '../lib/cache'
@@ -41,8 +41,8 @@ import '../styles/Workout.css'
 
 const ExerciseDetail = lazy(() => import('./exercise/ExerciseDetail'))
 const WORKOUT_DRAFT_VERSION = 1
-const SOLO_WORKOUT_DRAFT_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000
-const SHARED_WORKOUT_DRAFT_MAX_AGE_MS = 2 * 24 * 60 * 60 * 1000
+const SOLO_WORKOUT_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000
+const SHARED_WORKOUT_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 const defaultSet = () => ({ reps: '', weight: '', done: false })
 
@@ -1177,11 +1177,10 @@ export default function Workout({
     })
 
     const exerciseIds = exercisesOverride.map(e => e.id)
-    const [{ data: prevBests }, { data: prof }, { count: prevSessionCount }, { data: prevVolumeSets }] = await Promise.all([
+    const [{ data: prevBests }, { data: prof }, { count: prevSessionCount }] = await Promise.all([
       supabase.from('workout_sets').select('exercise_id, estimated_1rm, unit').eq('user_id', user.id).in('exercise_id', exerciseIds).not('estimated_1rm', 'is', null),
-      supabase.from('profiles').select('gender, bodyweight, unit_preference').eq('id', user.id).single(),
+      supabase.from('profiles').select('gender, bodyweight, unit_preference, lifetime_volume_kg').eq('id', user.id).single(),
       supabase.from('workout_sessions').select('*', { count: 'exact', head: true }).eq('user_id', user.id).not('finished_at', 'is', null),
-      supabase.from('workout_sets').select('weight, reps, unit, exercises!inner(equipment)').eq('user_id', user.id),
     ])
 
     const prevOrmKg = {}
@@ -1239,15 +1238,7 @@ export default function Workout({
       if (next > 0) newOrmByName[name] = Math.max(newOrmByName[name] || 0, next)
     }
 
-    const prevTotalVolumeKg = (prevVolumeSets || []).reduce((sum, s) => {
-      return sum + getSetVolumeKg({
-        weight: s.weight,
-        reps: s.reps,
-        unit: s.unit,
-        equipment: s.exercises?.equipment,
-        bodyweightKg: bwKg,
-      })
-    }, 0)
+    const prevTotalVolumeKg = prof?.lifetime_volume_kg ?? 0
     const thisSessionVolumeKg = setsToInsert.reduce((sum, s) => {
       return sum + getSetVolumeKg({
         weight: s.weight,
@@ -1287,7 +1278,10 @@ export default function Workout({
     }
 
     if (sessionId) {
-      await supabase.from('workout_sessions').update({ finished_at: new Date().toISOString(), exercise_notes: exerciseNotes }).eq('id', sessionId)
+      await Promise.all([
+        supabase.from('workout_sessions').update({ finished_at: new Date().toISOString(), exercise_notes: exerciseNotes }).eq('id', sessionId),
+        supabase.from('profiles').update({ lifetime_volume_kg: newTotalVolumeKg }).eq('id', user.id),
+      ])
     }
 
     const now = new Date()
@@ -1944,6 +1938,7 @@ export default function Workout({
     setWorkoutExercises(prev => prev.map(e => e.id === exId ? { ...e, restSeconds: seconds } : e))
     setEditingRest(null)
     await supabase.from('exercises').update({ default_rest_seconds: seconds }).eq('id', exId)
+    invalidateExercisesCache()
   }
 
   if (detailExerciseId) {
@@ -2352,7 +2347,7 @@ export default function Workout({
             {workoutExercises.map(ex => (
               <SortableExerciseBlock key={ex.id} id={ex.id}>
                 {({ listeners, attributes }) => (
-          <div className="exercise-block">
+          <div className="exercise-block" data-tab-swipe-ignore="true">
             <button className="remove-exercise-btn" onClick={() => removeExercise(ex.id)}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>

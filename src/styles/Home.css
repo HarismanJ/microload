@@ -128,46 +128,6 @@
   margin-top: 1px;
 }
 
-.home-workout-streak {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  background: rgba(251, 146, 60, 0.1);
-  border: 1px solid rgba(251, 146, 60, 0.25);
-  border-radius: 8px;
-  padding: 4px 8px;
-  align-self: flex-start;
-}
-
-.home-streak-fire {
-  font-size: 13px;
-  line-height: 1;
-}
-
-.home-streak-count {
-  font-size: 13px;
-  font-weight: 700;
-  color: #fb923c;
-}
-
-.home-streak-label {
-  font-size: 11px;
-  color: #fb923c;
-  font-weight: 500;
-}
-
-.home-workout-streak-none {
-  background: transparent;
-  border-color: var(--border);
-}
-
-.home-workout-streak-none .home-streak-fire,
-.home-workout-streak-none .home-streak-count,
-.home-workout-streak-none .home-streak-label {
-  color: var(--muted);
-}
-
 .home-today-bar {
   height: 6px;
   background: var(--surface2);
@@ -309,10 +269,70 @@
 }
 
 .home-chart-empty {
+  position: relative;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.home-chart-empty-label {
   color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-  padding: 12px 0 4px;
+  font-size: 12px;
+}
+
+.home-chart-ghost {
+  opacity: 0.9;
+}
+
+/* drawing: line draws left to right */
+.home-chart-ghost-path--drawing {
+  stroke-dashoffset: 1;
+  animation: ghost-draw 1.8s cubic-bezier(0.22, 1, 0.36, 1) 0.1s 1 forwards;
+}
+
+@keyframes ghost-draw {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
+
+/* erasing: line erases left to right (negative offset shifts dash forward, hiding start first) */
+.home-chart-ghost-path--erasing {
+  animation: ghost-erase 1.4s cubic-bezier(0.4, 0, 1, 1) 0s 1 forwards;
+}
+
+@keyframes ghost-erase {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -1; }
+}
+
+/* done: line hidden */
+.home-chart-ghost-path--done {
+  opacity: 0;
+}
+
+.home-chart-empty-label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+.home-chart-empty-label--visible {
+  opacity: 1;
+}
+
+.home-macro-track-glow {
+  animation: macro-track-glow 1.4s ease-out 1 forwards;
+}
+
+@keyframes macro-track-glow {
+  0%   { box-shadow: none; }
+  35%  { box-shadow: 0 0 0 2px var(--glow-color), 0 0 10px 3px var(--glow-color); }
+  100% { box-shadow: none; }
 }
 
 .home-weight-chart-wrap {
@@ -780,6 +800,7 @@
 }
 
 .home-macro-track {
+  position: relative;
   height: 3px;
   background: var(--surface2);
   border-radius: 999px;

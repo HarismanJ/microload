@@ -32,4 +32,5 @@ supabase/.temp/
 
 # AI tooling (local only)
 .claude/
+CLAUDE.md
 Codex.md

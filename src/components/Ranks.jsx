@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import Model from 'react-body-highlighter'
 import { supabase } from '../lib/supabase'
-import { getCached, setCached, invalidateCache } from '../lib/cache'
+import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
 import { calculateORM } from '../lib/orm'
 import { fetchExercises } from '../data/exercises'
 import RankBadge from './RankBadge'
@@ -222,7 +222,7 @@ function buildMuscleGroupRank(muscleGroup, liftsWithDetails) {
   let totalWeightedScore = 0
   let totalWeight = 0
   contributions.forEach((entry, index) => {
-    const decayWeight = 1 / Math.sqrt(index + 1)
+    const decayWeight = 1 / (index + 1)
     const effectiveWeight = entry.muscleWeight * decayWeight
     totalWeightedScore += entry.score * effectiveWeight
     totalWeight += effectiveWeight
@@ -344,14 +344,29 @@ export default function Ranks() {
     setBwSaving(false)
   }
 
+  function isValidRanksSnapshot(data) {
+    return (
+      data?.profile &&
+      Array.isArray(data.lifts) &&
+      data.lifts.length > 0 &&
+      data.lifts.every(lift => Array.isArray(lift.primary_muscles) && Array.isArray(lift.secondary_muscles))
+    )
+  }
+
   async function load() {
     const cached = getCached('ranks')
-    const cachedHasMuscles = cached?.lifts?.every(lift =>
-      Array.isArray(lift.primary_muscles) && Array.isArray(lift.secondary_muscles)
-    )
-    if (cached?.profile && Array.isArray(cached.lifts) && cached.lifts.length > 0 && cachedHasMuscles) {
+    if (isValidRanksSnapshot(cached)) {
       setProfile(cached.profile)
       setLifts(cached.lifts)
+      setLoading(false)
+      return
+    }
+
+    const snapshot = getStartupSnapshot('ranks')
+    if (isValidRanksSnapshot(snapshot)) {
+      setCached('ranks', snapshot)
+      setProfile(snapshot.profile)
+      setLifts(snapshot.lifts)
       setLoading(false)
       return
     }
@@ -406,7 +421,9 @@ export default function Ranks() {
           secondary_muscles: ex.secondary_muscles || [],
         }))
 
-      setCached('ranks', { profile: profileData, lifts: allLifts })
+      const ranksData = { profile: profileData, lifts: allLifts }
+      setCached('ranks', ranksData)
+      setStartupSnapshot('ranks', ranksData)
       setProfile(profileData)
       setLifts(allLifts)
     } finally {

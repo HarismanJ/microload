@@ -2,16 +2,16 @@ export const TIER_GROUPS = ['Iron', 'Bronze', 'Silver', 'Gold', 'Platinum', 'Dia
 export const TIERS = TIER_GROUPS.flatMap(g => [`${g} I`, `${g} II`, `${g} III`])
 
 export const TIER_COLORS = {
-  Unranked:    '#4b5563',
-  Iron:        '#6b7280',
-  Bronze:      '#cd7f32',
+  Unranked:    '#52525b',
+  Iron:        '#71717a',
+  Bronze:      '#c2773a',
   Silver:      '#94a3b8',
-  Gold:        '#f59e0b',
-  Platinum:    '#22d3ee',
-  Diamond:     '#3b9eff',
-  Master:      '#8b5cf6',
-  Grandmaster: '#ec4899',
-  Elite:       '#f97316',
+  Gold:        '#f0b429',
+  Platinum:    '#2dd4bf',
+  Diamond:     '#1d4ed8',
+  Master:      '#059669',
+  Grandmaster: '#7c3aed',
+  Elite:       '#dc2626',
 }
 
 export const tierGroup = (tier) => tier.split(' ')[0]
