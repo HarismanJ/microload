@@ -225,9 +225,11 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const loadLatest = useEffectEvent(() => { load() })
 
   useEffect(() => {
+    ghostChartHasPlayed = false
+    barGlowHasPlayed = false
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [])
+  }, [userId])
 
   useEffect(() => {
     if (weightRefreshTick === 0) return
