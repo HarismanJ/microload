@@ -138,7 +138,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     const { data, error } = await supabase.from('nutrition_logs').insert(entry).select().single()
     if (error) { console.error('addLog failed:', error.message); return }
     if (data) setLogs(prev => [...prev, data])
-    invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`)
+    invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`, `recent_foods:${user.id}`)
     setAddingToMeal(null)
   }
 

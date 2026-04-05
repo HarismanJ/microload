@@ -20,7 +20,7 @@ function formatWeightLogLabel(timestamp) {
   })
 }
 
-export default function Profile({ onChallenge, navigationTarget = null }) {
+export default function Profile({ onChallenge }) {
   const { themeId, switchTheme, themes } = useTheme()
   const profileIdRef = useRef(null)
   const weightSectionRef = useRef(null)
@@ -99,38 +99,6 @@ export default function Profile({ onChallenge, navigationTarget = null }) {
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
   }, [])
-
-  useEffect(() => {
-    if (!navigationTarget?.requestId) return
-
-    const sectionNode = navigationTarget.section === 'weight'
-      ? weightSectionRef.current
-      : null
-
-    if (!sectionNode) return
-
-    const scroller = document.querySelector('.content')
-    if (!scroller) return
-
-    let animationFrame = 0
-    let nestedAnimationFrame = 0
-
-    const scrollToTarget = () => {
-      const sectionRect = sectionNode.getBoundingClientRect()
-      const scrollerRect = scroller.getBoundingClientRect()
-      const targetTop = scroller.scrollTop + sectionRect.top - scrollerRect.top - 8
-      scroller.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
-    }
-
-    animationFrame = requestAnimationFrame(() => {
-      nestedAnimationFrame = requestAnimationFrame(scrollToTarget)
-    })
-
-    return () => {
-      cancelAnimationFrame(animationFrame)
-      cancelAnimationFrame(nestedAnimationFrame)
-    }
-  }, [navigationTarget])
 
   async function deleteWeightLog(logId) {
     if (!logId || weightDeletingId) return
@@ -360,7 +328,6 @@ export default function Profile({ onChallenge, navigationTarget = null }) {
         profileLoaded={profile !== null}
         onChallenge={onChallenge}
       />
-
       <div>
         <button className="signout-btn" onClick={signOut}>Sign Out</button>
       </div>
@@ -373,7 +340,6 @@ export default function Profile({ onChallenge, navigationTarget = null }) {
           </div>
         </div>
       )}
-
     </div>
   )
 }

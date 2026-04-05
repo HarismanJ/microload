@@ -7,6 +7,7 @@ import {
   MAX_REPS,
   convertWeight,
   getProfileBodyweightKg,
+  getSetVolumeKg,
   getSetVolumeInUnit,
   getWeightInputMax,
   getWeightInputMin,
@@ -267,16 +268,29 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setDeletingSetId(set.id)
     setDeleteSetError('')
 
-    const { error: deleteError } = await supabase
-      .from('workout_sets')
-      .delete()
-      .eq('id', set.id)
+    const bwKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
+    const setVolumeKg = getSetVolumeKg({
+      weight: set.weight,
+      reps: set.reps,
+      unit: set.unit,
+      equipment: group?.equipment,
+      bodyweightKg: bwKg,
+    })
+
+    const { data: { user } } = await supabase.auth.getUser()
+    const [{ error: deleteError }, { data: profileVol }] = await Promise.all([
+      supabase.from('workout_sets').delete().eq('id', set.id),
+      supabase.from('profiles').select('lifetime_volume_kg').eq('id', user.id).single(),
+    ])
 
     if (deleteError) {
       setDeletingSetId(null)
       setDeleteSetError(deleteError.message || 'Could not delete this set.')
       return
     }
+
+    const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - setVolumeKg)
+    supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', user.id)
 
     if (renumberTargets.length) {
       const renumberResults = await Promise.all(
@@ -381,11 +395,33 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setDeleteError('')
 
     const calKey = `cal_${dateStr.slice(0, 7)}`
-    const { error } = await supabase.from('workout_sessions').delete().eq('id', targetSessionId)
 
-    if (error) {
+    const bwKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
+    const targetSession = workoutSessions.find(sess => sess.id === targetSessionId)
+    const sessionVolumeKg = (targetSession?.groups || []).reduce((sum, group) => (
+      sum + group.sets.reduce((s2, set) => (
+        s2 + getSetVolumeKg({
+          weight: set.weight,
+          reps: set.reps,
+          unit: set.unit,
+          equipment: group.equipment,
+          bodyweightKg: bwKg,
+        })
+      ), 0)
+    ), 0)
+
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: profileVol } = await supabase.from('profiles').select('lifetime_volume_kg').eq('id', user.id).single()
+    const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - sessionVolumeKg)
+
+    const [{ error }, { error: profileError }] = await Promise.all([
+      supabase.from('workout_sessions').delete().eq('id', targetSessionId),
+      supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', user.id),
+    ])
+
+    if (error || profileError) {
       setDeletingId(null)
-      setDeleteError(error.message || 'Could not delete this workout.')
+      setDeleteError(error?.message || profileError?.message || 'Could not delete this workout.')
       return
     }
 

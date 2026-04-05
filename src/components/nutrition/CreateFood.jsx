@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { invalidateCache } from '../../lib/cache'
 
 const UNITS = ['g', 'ml', 'oz', 'cup', 'tbsp', 'tsp', 'piece', 'slice', 'scoop', 'bar', 'serving']
 
@@ -75,6 +76,7 @@ export default function CreateFood({ onSave, onBack }) {
       .single()
     setSaving(false)
     if (err) { setError(err.message); return }
+    invalidateCache(`recent_foods:${user.id}`)
     onSave(data)
   }
 
