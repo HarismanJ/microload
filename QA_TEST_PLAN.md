@@ -10,7 +10,7 @@
 | A4 | Sign out | Returns to auth screen, session cleared | Verified
 | A5 | Reload app while signed in | Session restored from Supabase, no re-login needed | Verified
 | A6 | Open app with no internet | Cached data loads from localStorage snapshot | Verified
-| A7 | Sign up — password and confirm password match | Account created successfully |
+| A7 | Sign up — password and confirm password match | Account created successfully | 
 | A8 | Sign up — password and confirm password don't match | "Passwords do not match." error shown, no API call made |
 | A9 | Sign up — confirm password field visible | Confirm Password input appears below Password |
 | A10 | Tap eye icon on Password field | Password toggles between hidden and visible |
@@ -37,7 +37,7 @@
 | N7 | Swipe < 40px horizontally | Should NOT trigger tab change | Verified
 | N8 | Navigate to workout tab while workout active | Shows active workout (not start screen) | Verified
 | N9 | Tap active tab while already on it | No animation, stays put | Verified
-| N10 | Swipe left/right in the area between sets in Workout | Should NOT trigger tab change (exercise block is swipe-ignored) |
+| N10 | Swipe left/right in the area between sets in Workout | Should NOT trigger tab change (exercise block is swipe-ignored) | Verified
 
 ---
 
@@ -46,17 +46,17 @@
 | # | Test | Expected |
 |---|------|----------|
 | H1 | Open app with no workouts logged | "No recent workout" empty state | Verified
-| H2 | Open app with no nutrition logged today | Calories show 0 / goal |
-| H3 | Open app with no bodyweight logged | Bodyweight section shows prompt |
-| H4 | Tap nutrition card | Navigates to Nutrition tab |
-| H5 | Log bodyweight (valid number) | Saved, chart updates |
-| H6 | Log bodyweight with 0 | Rejected (no save) |
-| H7 | Log bodyweight with negative | Rejected |
-| H8 | Log bodyweight with letters | Rejected |
-| H9 | Delete only bodyweight log | Profile bodyweight set to null |
-| H10 | Delete one bodyweight log when multiple exist | Profile bodyweight becomes second-latest |
-| H11 | Toggle kg/lbs on weight chart | Values convert correctly |
-| H12 | Filter weight logs by 1w, 1m, 1y | Chart range changes accordingly |
+| H2 | Open app with no nutrition logged today | Calories show 0 / goal | Verified
+| H3 | Open app with no bodyweight logged | Bodyweight section shows prompt | Verified
+| H4 | Tap nutrition card | Navigates to Nutrition tab | Verified
+| H5 | Log bodyweight (valid number) | Saved, chart updates | Verified
+| H6 | Log bodyweight with 0 | Rejected (no save) | Verified
+| H7 | Log bodyweight with negative | Rejected | Verified
+| H8 | Log bodyweight with letters | Rejected | Verified
+| H9 | Delete only bodyweight log | Profile bodyweight set to null | Verified
+| H10 | Delete one bodyweight log when multiple exist | Profile bodyweight becomes second-latest | Verified
+| H11 | Toggle kg/lbs on weight chart | Values convert correctly | Verified
+| H12 | Filter weight logs by 1w, 1m, 1y | Chart range changes accordingly | Verified
 | H13 | Tap calendar day with a workout | Day detail opens, shows exercises |
 | H14 | Tap calendar day with no workout | Nothing or empty state |
 | H15 | Check streak counter | Correct count of consecutive workout days |
@@ -207,6 +207,7 @@
 | R19 | Add a second chest exercise at lower rank than first | Chest muscle group rank stays close to the highest (decay penalises lower ranks heavily) |
 | R20 | All tier badges visible in legend | Iron, Bronze, Silver, Gold, Platinum, Diamond, Master, Grandmaster, Elite all render correctly |
 | R21 | Badge colors match tier (spot-check) | Gold = amber, Diamond = deep blue, Grandmaster = deep purple, Elite = red |
+| R22 | Filter workout logs by 1w, 1m, 1y | Chart range changes accordingly
 
 ---
 

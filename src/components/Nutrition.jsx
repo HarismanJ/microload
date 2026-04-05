@@ -66,6 +66,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   const [savingGoals, setSavingGoals] = useState(false)
   const [feedFilter, setFeedFilter] = useState('all')
   const [feedSortDirection, setFeedSortDirection] = useState('desc')
+  const [deleteTargetId, setDeleteTargetId] = useState(null)
 
   useEffect(() => { load() }, [date])
 
@@ -546,9 +547,17 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                       <span className="nut-feed-pill nut-feed-pill-carbs">C {Math.round(log.carbs || 0)}g</span>
                       <span className="nut-feed-pill nut-feed-pill-fat">F {Math.round(log.fat || 0)}g</span>
                     </div>
-                    <button className="nut-feed-remove-btn" onClick={() => removeLog(log.id)}>
-                      Delete
-                    </button>
+                    {deleteTargetId === log.id ? (
+                      <div className="nut-feed-delete-confirm">
+                        <span className="nut-feed-delete-confirm-text">Remove this entry?</span>
+                        <button className="nut-feed-delete-cancel-btn" onClick={() => setDeleteTargetId(null)}>Cancel</button>
+                        <button className="nut-feed-remove-btn nut-feed-remove-btn-confirm" onClick={() => { removeLog(log.id); setDeleteTargetId(null) }}>Delete</button>
+                      </div>
+                    ) : (
+                      <button className="nut-feed-remove-btn" onClick={() => setDeleteTargetId(log.id)}>
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

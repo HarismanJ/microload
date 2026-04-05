@@ -3,19 +3,27 @@ import { convertWeight } from '../../lib/liftMath'
 
 // SVG line chart — shows bodyweight over time
 
-function formatXAxisLabel(point) {
-  const sourceDate = point?.loggedAt
+function getPointDate(point) {
+  const d = point?.loggedAt
     ? new Date(point.loggedAt)
     : point?.date
       ? new Date(`${point.date}T12:00:00`)
       : null
+  return d && !Number.isNaN(d.getTime()) ? d : null
+}
 
-  if (!sourceDate || Number.isNaN(sourceDate.getTime())) return ''
+function formatXAxisLabel(point, spanDays) {
+  const sourceDate = getPointDate(point)
+  if (!sourceDate) return ''
 
-  return sourceDate.toLocaleDateString('en-US', {
-    month: 'numeric',
-    day: 'numeric',
-  })
+  if (spanDays > 365) {
+    // e.g. "Mar '25"
+    const mon = sourceDate.toLocaleDateString('en-US', { month: 'short' })
+    const yr = String(sourceDate.getFullYear()).slice(2)
+    return `${mon} '${yr}`
+  }
+  // e.g. "28 Mar"
+  return sourceDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })
 }
 
 function getNiceStep(range, tickCount) {
@@ -132,7 +140,11 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
     })
   }
 
-  const xLabelIdx = [...new Set([0, Math.floor((normalizedData.length - 1) / 2), normalizedData.length - 1])]
+  const n = normalizedData.length - 1
+  const xLabelIdx = [...new Set([0, Math.round(n / 4), Math.round(n / 2), Math.round((3 * n) / 4), n])]
+  const firstDate = getPointDate(normalizedData[0])
+  const lastDate = getPointDate(normalizedData.at(-1))
+  const spanDays = firstDate && lastDate ? (lastDate - firstDate) / 86400000 : 0
 
   return (
     <div ref={containerRef} style={{ width: '100%' }}>
@@ -202,7 +214,7 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
 
         {xLabelIdx.map(i => (
           <text key={i} x={xAt(i)} y={H - 6} fontSize="8.5" fill="#6b7280" textAnchor="middle">
-            {formatXAxisLabel(normalizedData[i])}
+            {formatXAxisLabel(normalizedData[i], spanDays)}
           </text>
         ))}
 

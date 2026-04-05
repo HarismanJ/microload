@@ -13,6 +13,7 @@ import {
 } from '../lib/strengthStandards'
 import {
   MAX_REPS,
+  convertWeight,
   getWeightInputMax,
   getWeightInputMin,
   isRepsWithinInputRange,
@@ -330,10 +331,11 @@ export default function Ranks() {
 
   async function saveBW() {
     const val = parseFloat(bwInput)
+    const unit = profile?.unit_preference || 'kg'
     if (!val || val <= 0) return
+    if (convertWeight(val, unit, 'kg') > 600) return
     setBwSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
-    const unit = profile?.unit_preference || 'kg'
     await Promise.all([
       supabase.from('profiles').update({ bodyweight: val }).eq('id', user.id),
       supabase.from('body_weight_logs').insert({ user_id: user.id, weight: val, unit }),

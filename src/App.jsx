@@ -14,6 +14,7 @@ import {
   respondToBattleInvite,
 } from './lib/battles'
 import { cancelRestNotification, scheduleRestEndNotification } from './lib/restNotification'
+import { convertWeight } from './lib/liftMath'
 import { useNetworkStatus } from './hooks/useNetworkStatus'
 import './App.css'
 
@@ -187,6 +188,7 @@ export default function App() {
   const [quickWeightUnit, setQuickWeightUnit] = useState('kg')
   const [quickWeightSaving, setQuickWeightSaving] = useState(false)
   const [quickWeightError, setQuickWeightError] = useState('')
+  const [weightRefreshTick, setWeightRefreshTick] = useState(0)
   const [homeWorkoutStreak, setHomeWorkoutStreak] = useState(0)
   const [showStreakInfo, setShowStreakInfo] = useState(false)
   const [session, setSession] = useState(undefined)
@@ -277,6 +279,12 @@ export default function App() {
     const value = Number.parseFloat(quickWeightInput)
     if (!session?.user?.id || !Number.isFinite(value) || value <= 0 || quickWeightSaving) return
 
+    const unit = quickWeightUnit || 'kg'
+    if (convertWeight(value, unit, 'kg') > 600) {
+      setQuickWeightError('Weight cannot exceed 600 kg.')
+      return
+    }
+
     setQuickWeightSaving(true)
     setQuickWeightError('')
     const timestamp = new Date().toISOString()
@@ -287,12 +295,12 @@ export default function App() {
       .eq('id', session.user.id)
       .single()
 
-    const unit = profileData?.unit_preference || quickWeightUnit || 'kg'
+    const unit2 = profileData?.unit_preference || quickWeightUnit || 'kg'
 
     const [{ error: insertError }, { error: profileUpdateError }] = await Promise.all([
       supabase
         .from('body_weight_logs')
-        .insert({ user_id: session.user.id, weight: value, unit, logged_at: timestamp }),
+        .insert({ user_id: session.user.id, weight: value, unit: unit2, logged_at: timestamp }),
       supabase
         .from('profiles')
         .update({ bodyweight: value })
@@ -305,8 +313,9 @@ export default function App() {
       return
     }
 
-    setQuickWeightUnit(unit)
+    setQuickWeightUnit(unit2)
     invalidateCache('home', 'profile', 'ranks', getCalendarMonthCacheKey(timestamp))
+    setWeightRefreshTick(t => t + 1)
     setQuickWeightInput('')
     setShowQuickWeight(false)
     setQuickActionSheetOpen(false)
@@ -724,7 +733,7 @@ export default function App() {
   const leftTabs = tabs.slice(0, 2)
   const rightTabs = tabs.slice(2)
   const otherScreens = {
-    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} />,
+    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} />,
     ranks: <Ranks />,
     nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
     profile: <Profile onChallenge={handleChallengeFriend} />,
