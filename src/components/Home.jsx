@@ -10,6 +10,17 @@ import { convertWeight } from '../lib/liftMath'
 import '../styles/Home.css'
 
 const BODY_WEIGHT_CHART_UNIT_KEY = 'bodyWeightChartUnitOverride'
+const BODY_WEIGHT_CHART_PERIOD_KEY = 'bodyWeightChartPeriod'
+
+function loadStoredBodyWeightChartPeriod() {
+  if (typeof window === 'undefined') return 'all'
+  try {
+    const stored = window.localStorage.getItem(BODY_WEIGHT_CHART_PERIOD_KEY)
+    return ['1w', '1m', '1y', 'all'].includes(stored) ? stored : 'all'
+  } catch {
+    return 'all'
+  }
+}
 const HOME_STARTUP_SNAPSHOT_TTL_MS = 15 * 60 * 1000
 
 function localDate(d = new Date()) {
@@ -48,7 +59,7 @@ function getCalendarMonthCacheKey(dateInput = new Date()) {
 let ghostChartHasPlayed = false
 let barGlowHasPlayed = false
 
-export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady }) {
+export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0 }) {
   const [profile, setProfile]         = useState(null)
   const [todayNut, setTodayNut]       = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 })
   const [workoutStreak, setWorkoutStreak] = useState(0)
@@ -61,7 +72,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [bwInput, setBwInput] = useState('')
   const [bwSaving, setBwSaving] = useState(false)
   const [bwError, setBwError] = useState('')
-  const [weightPeriod, setWeightPeriod] = useState('all')
+  const [weightPeriod, setWeightPeriod] = useState(() => loadStoredBodyWeightChartPeriod())
   const [weightDeleteTargetId, setWeightDeleteTargetId] = useState(null)
   const [weightDeletingId, setWeightDeletingId] = useState(null)
   const [weightDeleteError, setWeightDeleteError] = useState('')
@@ -219,6 +230,11 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [])
 
   useEffect(() => {
+    if (weightRefreshTick === 0) return
+    loadLatest()
+  }, [weightRefreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
     onWorkoutStreakChange?.(workoutStreak)
   }, [onWorkoutStreakChange, workoutStreak])
 
@@ -286,14 +302,23 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     }
   }, [weightSheetUnit])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(BODY_WEIGHT_CHART_PERIOD_KEY, weightPeriod)
+    } catch {
+      // ignore
+    }
+  }, [weightPeriod])
+
   async function logWeightFromHome() {
     const val = parseFloat(bwInput)
+    const unit = weightSheetUnit || profile?.unit_preference || 'kg'
     if (!val || val <= 0 || bwSaving) return
+    if (convertWeight(val, unit, 'kg') > 600) { setBwError('Weight cannot exceed 600 kg.'); return }
 
     setBwSaving(true)
     setBwError('')
-
-    const unit = weightSheetUnit || profile?.unit_preference || 'kg'
     const profileUnit = profile?.unit_preference || unit
     const timestamp = new Date().toISOString()
     const nextBodyweight = Math.round(convertWeight(val, unit, profileUnit) * 10) / 10
@@ -366,10 +391,6 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const calPct = Math.min(1, todayNut.calories / todayNut.goal)
   const calBarWidth = `${barsAnimatedIn ? calPct * 100 : 0}%`
   const activeWeightUnit = weightSheetUnit || profile?.unit_preference || 'kg'
-  const recentWeightDelta = weightLogs.length >= 2
-    ? convertWeight(weightLogs.at(-1)?.weight ?? 0, weightLogs.at(-1)?.unit || activeWeightUnit, activeWeightUnit)
-      - convertWeight(weightLogs.at(-2)?.weight ?? 0, weightLogs.at(-2)?.unit || activeWeightUnit, activeWeightUnit)
-    : null
   const homeChartHeight = isPhoneWidth ? 162 : 388
   const homeChartTickCount = 5
   const homeChartPadding = isPhoneWidth ? 'tight-mobile' : 'tight'
@@ -383,6 +404,10 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const filteredWeightLogs = weightPeriod === 'all'
     ? weightLogs
     : weightLogs.filter(d => (now - new Date(d.date)) / 86400000 <= periodDays[weightPeriod])
+  const recentWeightDelta = filteredWeightLogs.length >= 2
+    ? convertWeight(filteredWeightLogs.at(-1)?.weight ?? 0, filteredWeightLogs.at(-1)?.unit || activeWeightUnit, activeWeightUnit)
+      - convertWeight(filteredWeightLogs[0]?.weight ?? 0, filteredWeightLogs[0]?.unit || activeWeightUnit, activeWeightUnit)
+    : null
   const visibleWeightLogs = [...filteredWeightLogs].reverse()
   const recentWeightLogs = visibleWeightLogs.slice(0, 3)
   const displayWeight = (log) => Math.round(convertWeight(log.weight, log.unit || activeWeightUnit, activeWeightUnit) * 10) / 10
@@ -503,6 +528,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
           >
             <div className="home-weight-cap">
               <span className="home-weight-cap-label">Body Weight</span>
+              <span className="home-weight-cap-sublabel">Tap to expand</span>
             </div>
             <div className="home-weight-header">
               {recentWeightDelta !== null && (
@@ -514,7 +540,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
             {weightLogs.length > 0
               ? <div className="home-weight-chart-wrap">
                   <WeightChart
-                    data={weightLogs}
+                    data={filteredWeightLogs}
                     unit={activeWeightUnit}
                     height={homeChartHeight}
                     tickCount={homeChartTickCount}
