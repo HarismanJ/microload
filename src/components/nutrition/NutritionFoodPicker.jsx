@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { supabase } from '../../lib/supabase'
+import { getCached, setCached, invalidateCache } from '../../lib/cache'
 import CreateFood from './CreateFood'
 
 const BarcodeScanner = lazy(() => import('./BarcodeScanner'))
@@ -47,6 +48,13 @@ export default function NutritionFoodPicker({
 
   async function loadRecent() {
     const { data: { user } } = await supabase.auth.getUser()
+    const cacheKey = `recent_foods:${user.id}`
+    const cached = getCached(cacheKey)
+    if (cached) {
+      setRecent(cached)
+      return
+    }
+
     const { data } = await supabase
       .from('nutrition_logs')
       .select('food_id, food_name, foods(id, name, brand, serving_size, serving_unit, calories, protein, carbs, fat, fiber, sugar, saturated_fat, sodium, potassium, cholesterol)')
@@ -60,7 +68,9 @@ export default function NutritionFoodPicker({
       seen.add(r.food_id)
       return true
     }).map(r => r.foods)
-    setRecent(unique.slice(0, 10))
+    const recent = unique.slice(0, 10)
+    setCached(cacheKey, recent, 5 * 60 * 1000)
+    setRecent(recent)
   }
 
   useEffect(() => {

@@ -1,11 +1,29 @@
 import { supabase } from '../lib/supabase'
+import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
+
+const EXERCISES_CACHE_KEY = 'exercises'
 
 function isMissingExerciseUserColumn(error) {
   const message = error?.message?.toLowerCase?.() || ''
   return message.includes('user_id') && message.includes('exercises')
 }
 
+export function invalidateExercisesCache() {
+  invalidateCache(EXERCISES_CACHE_KEY)
+}
+
 export async function fetchExercises(userId) {
+  const cacheKey = `${EXERCISES_CACHE_KEY}:${userId || 'anon'}`
+
+  const cached = getCached(cacheKey)
+  if (cached) return cached
+
+  const snapshot = getStartupSnapshot(cacheKey)
+  if (snapshot) {
+    setCached(cacheKey, snapshot)
+    return snapshot
+  }
+
   let query = supabase
     .from('exercises')
     .select('*')
@@ -25,8 +43,13 @@ export async function fetchExercises(userId) {
       .order('name')
 
     if (fallback.error) throw fallback.error
+    setCached(cacheKey, fallback.data)
+    setStartupSnapshot(cacheKey, fallback.data)
     return fallback.data
   }
+
+  setCached(cacheKey, data)
+  setStartupSnapshot(cacheKey, data)
   return data
 }
 
@@ -48,6 +71,7 @@ export async function createCustomExercise(userId, payload) {
     }
     throw error
   }
+  invalidateCache(`${EXERCISES_CACHE_KEY}:${userId}`)
   return data
 }
 
