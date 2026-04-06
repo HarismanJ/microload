@@ -24,6 +24,10 @@ const FIELDS = [
   { key: 'iron',          label: 'Iron',           unit: 'mg',   type: 'number' },
 ]
 
+// BarcodeDetector is a native browser API — best focus and performance.
+// Supported on Android Chrome. Falls back to html5-qrcode for iOS/Firefox.
+const NATIVE_SCANNER = typeof window !== 'undefined' && 'BarcodeDetector' in window
+
 function parseOFF(product) {
   const n = product.nutriments || {}
   const per = n['energy-kcal_serving'] ? 'serving' : '100g'
@@ -60,47 +64,250 @@ export default function BarcodeScanner({ onSave, onBack }) {
   const [errorMsg, setErrorMsg] = useState('')
   const [form, setForm] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [manualCode, setManualCode] = useState('')
+  const [manualLooking, setManualLooking] = useState(false)
+  const [torchOn, setTorchOn] = useState(false)
+  const [torchSupported, setTorchSupported] = useState(false)
+
+  // html5-qrcode fallback refs
   const scannerRef = useRef(null)
+  // native scanner refs
+  const videoRef = useRef(null)
+  const animFrameRef = useRef(null)
+  // shared refs
   const scannedRef = useRef(false)
+  const runningRef = useRef(false)
+  const trackRef = useRef(null)
+
+  function stopCamera() {
+    runningRef.current = false
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current)
+      animFrameRef.current = null
+    }
+    if (scannerRef.current) {
+      scannerRef.current.stop().catch(() => {})
+    }
+    // Stops tracks for both native <video> and html5-qrcode injected video
+    document.querySelectorAll('video').forEach(v => {
+      v.srcObject?.getTracks().forEach(t => t.stop())
+      v.srcObject = null
+    })
+  }
+
+  function handleBack() {
+    stopCamera()
+    onBack()
+  }
 
   useEffect(() => {
-    const scanner = new Html5Qrcode('barcode-reader')
-    scannerRef.current = scanner
-    let running = false
-
-    scanner.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 280, height: 140 } },
-      async (barcode) => {
-        if (scannedRef.current) return
-        scannedRef.current = true
-        running = false
-        await scanner.stop()
-        // Release camera tracks so iOS doesn't leave the stream open
-        document.querySelectorAll('video').forEach(v => {
-          v.srcObject?.getTracks().forEach(t => t.stop())
-          v.srcObject = null
+    if (NATIVE_SCANNER) {
+      // ── Native BarcodeDetector path ─────────────────────────────────────
+      // We own the getUserMedia call so we can request focus constraints
+      // from the very start, rather than patching after the fact.
+      let detector
+      try {
+        detector = new BarcodeDetector({
+          formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93'],
         })
-        lookup(barcode)
-      },
-      () => {}
-    ).then(() => { running = true })
-     .catch(() => {
-      setErrorMsg('Camera access denied. Please allow camera access and try again.')
-      setPhase('error')
-    })
+      } catch {
+        // BarcodeDetector exists but constructor failed — fall through to html5-qrcode
+        initFallback()
+        return
+      }
+
+      runningRef.current = true
+
+      async function start() {
+        let stream
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+          })
+        } catch {
+          if (!runningRef.current) return
+          setErrorMsg('Camera access denied. Please allow camera access and try again.')
+          setPhase('error')
+          return
+        }
+
+        // Component may have unmounted while getUserMedia was pending
+        if (!runningRef.current) {
+          stream.getTracks().forEach(t => t.stop())
+          return
+        }
+
+        const video = videoRef.current
+        if (!video) {
+          stream.getTracks().forEach(t => t.stop())
+          return
+        }
+
+        video.srcObject = stream
+
+        const track = stream.getVideoTracks()[0]
+        trackRef.current = track
+
+        // Apply focus constraints only after the camera is fully running.
+        // Calling applyConstraints before play() resolves means the hardware
+        // hasn't initialised yet and the constraints are silently ignored.
+        video.addEventListener('loadedmetadata', () => {
+          const capabilities = track.getCapabilities?.() || {}
+          if (capabilities.focusMode?.includes('continuous')) {
+            track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {})
+          }
+          if (capabilities.torch) setTorchSupported(true)
+        }, { once: true })
+
+        try {
+          await video.play()
+        } catch {
+          // Autoplay blocked — shouldn't happen with muted + playsInline but guard anyway
+        }
+
+        async function scan() {
+          if (!runningRef.current || scannedRef.current) return
+          // readyState >= 2 means we have at least the current frame
+          if (video.readyState >= 2) {
+            try {
+              const barcodes = await detector.detect(video)
+              if (barcodes.length > 0 && !scannedRef.current) {
+                scannedRef.current = true
+                runningRef.current = false
+                cancelAnimationFrame(animFrameRef.current)
+                animFrameRef.current = null
+                stream.getTracks().forEach(t => t.stop())
+                video.srcObject = null
+                lookup(barcodes[0].rawValue)
+                return
+              }
+            } catch {
+              // detect() can throw if the video frame is not yet ready — just continue
+            }
+          }
+          if (runningRef.current) {
+            animFrameRef.current = requestAnimationFrame(scan)
+          }
+        }
+
+        animFrameRef.current = requestAnimationFrame(scan)
+      }
+
+      start()
+    } else {
+      // ── html5-qrcode fallback (iOS Safari, Firefox) ─────────────────────
+      initFallback()
+    }
+
+    function initFallback() {
+      const scanner = new Html5Qrcode('barcode-reader')
+      scannerRef.current = scanner
+      scanner.start(
+        { facingMode: 'environment' },
+        { fps: 15, qrbox: { width: 280, height: 140 }, aspectRatio: 1.333 },
+        async (barcode) => {
+          if (scannedRef.current) return
+          scannedRef.current = true
+          runningRef.current = false
+          await scanner.stop()
+          document.querySelectorAll('video').forEach(v => {
+            v.srcObject?.getTracks().forEach(t => t.stop())
+            v.srcObject = null
+          })
+          lookup(barcode)
+        },
+        () => {}
+      ).then(() => {
+        runningRef.current = true
+        const video = document.querySelector('#barcode-reader video')
+        if (video?.srcObject) {
+          const track = video.srcObject.getVideoTracks()[0]
+          if (track) {
+            trackRef.current = track
+            const capabilities = track.getCapabilities?.() || {}
+            if (capabilities.focusMode?.includes('continuous')) {
+              track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {})
+            }
+            if (capabilities.torch) setTorchSupported(true)
+          }
+        }
+      }).catch(() => {
+        setErrorMsg('Camera access denied. Please allow camera access and try again.')
+        setPhase('error')
+      })
+    }
 
     return () => {
-      if (running) {
-        scanner.stop().catch(() => {})
+      runningRef.current = false
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current)
+        animFrameRef.current = null
       }
-      // Always release any lingering camera tracks on unmount
+      if (scannerRef.current) {
+        scannerRef.current.stop().catch(() => {})
+      }
       document.querySelectorAll('video').forEach(v => {
         v.srcObject?.getTracks().forEach(t => t.stop())
         v.srcObject = null
       })
     }
   }, [])
+
+  function handleTapFocus(e) {
+    const track = trackRef.current
+    if (!track) return
+    const capabilities = track.getCapabilities?.() || {}
+    if (!capabilities.focusMode?.includes('manual') && !capabilities.pointOfInterest) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = (e.clientX - rect.left) / rect.width
+    const y = (e.clientY - rect.top) / rect.height
+    const constraints = {}
+    if (capabilities.pointOfInterest) constraints.pointOfInterest = { x, y }
+    if (capabilities.focusMode?.includes('manual')) constraints.focusMode = 'manual'
+    track.applyConstraints({ advanced: [constraints] }).then(() => {
+      if (capabilities.focusMode?.includes('continuous')) {
+        setTimeout(() => {
+          track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {})
+        }, 1500)
+      }
+    }).catch(() => {})
+  }
+
+  function toggleTorch() {
+    const track = trackRef.current
+    if (!track) return
+    const next = !torchOn
+    track.applyConstraints({ advanced: [{ torch: next }] })
+      .then(() => setTorchOn(next))
+      .catch(() => {})
+  }
+
+  async function handleManualLookup() {
+    const code = manualCode.trim()
+    if (!code) return
+    scannedRef.current = true
+    // Stop native scanner
+    runningRef.current = false
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current)
+      animFrameRef.current = null
+    }
+    // Stop html5-qrcode scanner
+    if (scannerRef.current) {
+      scannerRef.current.stop().catch(() => {})
+    }
+    document.querySelectorAll('video').forEach(v => {
+      v.srcObject?.getTracks().forEach(t => t.stop())
+      v.srcObject = null
+    })
+    setManualLooking(true)
+    await lookup(code)
+    setManualLooking(false)
+  }
 
   async function lookup(barcode) {
     setPhase('loading')
@@ -159,17 +366,48 @@ export default function BarcodeScanner({ onSave, onBack }) {
     return (
       <div className="bs-screen">
         <div className="bs-header">
-          <button className="back-btn" onClick={onBack}>
+          <button className="back-btn" onClick={handleBack}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
           </button>
           <span className="picker-title">Scan Barcode</span>
         </div>
-        <div className="bs-viewfinder">
-          <div id="barcode-reader" className="bs-reader" />
+        <div className="bs-viewfinder" onClick={handleTapFocus}>
+          {NATIVE_SCANNER
+            ? <video ref={videoRef} className="bs-reader" autoPlay playsInline muted />
+            : <div id="barcode-reader" className="bs-reader" />
+          }
           <div className="bs-overlay">
             <div className="bs-target" />
           </div>
-          <div className="bs-hint">Point at a food barcode</div>
+          {torchSupported && (
+            <button className={`bs-torch-btn ${torchOn ? 'on' : ''}`} onClick={e => { e.stopPropagation(); toggleTorch() }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill={torchOn ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 2h6l1 7H8L9 2z"/><path d="M8 9l-2 13h12L16 9"/><line x1="12" y1="13" x2="12" y2="17"/>
+              </svg>
+            </button>
+          )}
+          <div className="bs-hint">Tap to focus · Point at a food barcode</div>
+        </div>
+        <div className="bs-manual">
+          <div className="bs-manual-label">Or enter barcode manually</div>
+          <div className="bs-manual-row">
+            <input
+              className="bs-manual-input"
+              type="number"
+              placeholder="e.g. 0123456789012"
+              value={manualCode}
+              onChange={e => setManualCode(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleManualLookup()}
+            />
+            <button
+              className="bs-manual-btn"
+              onClick={handleManualLookup}
+              disabled={!manualCode.trim() || manualLooking}
+            >
+              {manualLooking ? '…' : 'Look up'}
+            </button>
+          </div>
+          <div className="bs-manual-hint">Type the numbers printed below the barcode on the packaging (including the numbers at each end)</div>
         </div>
       </div>
     )

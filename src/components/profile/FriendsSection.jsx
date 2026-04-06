@@ -73,6 +73,11 @@ export default function FriendsSection({ userId, username, profileLoaded = false
   }, [refreshFriends])
 
   useEffect(() => {
+    const interval = setInterval(() => refreshFriends({ silent: true }), 15000)
+    return () => clearInterval(interval)
+  }, [refreshFriends])
+
+  useEffect(() => {
     if (!userId) return undefined
 
     const channel = supabase
