@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useEffectEvent } from 'react'
 import RestWheelPicker from './RestWheelPicker'
 import { supabase } from '../lib/supabase'
-import { getCached, setCached, invalidateCache } from '../lib/cache'
+import { clearCache, getCached, setCached, invalidateCache } from '../lib/cache'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import WeightChart from './profile/WeightChart'
 import FriendsSection from './profile/FriendsSection'
@@ -197,6 +197,7 @@ export default function Profile({ onChallenge }) {
   }
 
   async function signOut() {
+    clearCache()
     await supabase.auth.signOut()
   }
 

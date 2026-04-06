@@ -178,28 +178,29 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     if (!goalsForm) return
     setSavingGoals(true)
     const { data: { user } } = await supabase.auth.getUser()
+    const n = k => +goalsForm[k] || 0
     const updates = {
-      calories_goal: goalsForm.calories_goal, protein_goal: goalsForm.protein_goal,
-      carbs_goal: goalsForm.carbs_goal, fat_goal: goalsForm.fat_goal,
-      fiber_goal: goalsForm.fiber_goal, sugar_goal: goalsForm.sugar_goal,
-      saturated_fat_goal: goalsForm.saturated_fat_goal, sodium_goal: goalsForm.sodium_goal,
-      potassium_goal: goalsForm.potassium_goal, cholesterol_goal: goalsForm.cholesterol_goal,
-      calcium_goal: goalsForm.calcium_goal, iron_goal: goalsForm.iron_goal,
-      magnesium_goal: goalsForm.magnesium_goal, zinc_goal: goalsForm.zinc_goal,
-      vitamin_a_goal: goalsForm.vitamin_a_goal, vitamin_c_goal: goalsForm.vitamin_c_goal,
-      vitamin_d_goal: goalsForm.vitamin_d_goal,
+      calories_goal: n('calories_goal'), protein_goal: n('protein_goal'),
+      carbs_goal: n('carbs_goal'), fat_goal: n('fat_goal'),
+      fiber_goal: n('fiber_goal'), sugar_goal: n('sugar_goal'),
+      saturated_fat_goal: n('saturated_fat_goal'), sodium_goal: n('sodium_goal'),
+      potassium_goal: n('potassium_goal'), cholesterol_goal: n('cholesterol_goal'),
+      calcium_goal: n('calcium_goal'), iron_goal: n('iron_goal'),
+      magnesium_goal: n('magnesium_goal'), zinc_goal: n('zinc_goal'),
+      vitamin_a_goal: n('vitamin_a_goal'), vitamin_c_goal: n('vitamin_c_goal'),
+      vitamin_d_goal: n('vitamin_d_goal'),
     }
     await supabase.from('profiles').update(updates).eq('id', user.id)
     setGoals({
-      calories: goalsForm.calories_goal, protein: goalsForm.protein_goal,
-      carbs: goalsForm.carbs_goal, fat: goalsForm.fat_goal,
-      fiber: goalsForm.fiber_goal, sugar: goalsForm.sugar_goal,
-      saturated_fat: goalsForm.saturated_fat_goal, sodium: goalsForm.sodium_goal,
-      potassium: goalsForm.potassium_goal, cholesterol: goalsForm.cholesterol_goal,
-      calcium: goalsForm.calcium_goal, iron: goalsForm.iron_goal,
-      magnesium: goalsForm.magnesium_goal, zinc: goalsForm.zinc_goal,
-      vitamin_a: goalsForm.vitamin_a_goal, vitamin_c: goalsForm.vitamin_c_goal,
-      vitamin_d: goalsForm.vitamin_d_goal,
+      calories: updates.calories_goal, protein: updates.protein_goal,
+      carbs: updates.carbs_goal, fat: updates.fat_goal,
+      fiber: updates.fiber_goal, sugar: updates.sugar_goal,
+      saturated_fat: updates.saturated_fat_goal, sodium: updates.sodium_goal,
+      potassium: updates.potassium_goal, cholesterol: updates.cholesterol_goal,
+      calcium: updates.calcium_goal, iron: updates.iron_goal,
+      magnesium: updates.magnesium_goal, zinc: updates.zinc_goal,
+      vitamin_a: updates.vitamin_a_goal, vitamin_c: updates.vitamin_c_goal,
+      vitamin_d: updates.vitamin_d_goal,
     })
     setSavingGoals(false)
     setEditingGoals(false)
@@ -313,7 +314,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
                   <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -332,7 +333,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
                   <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -353,7 +354,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
                   <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -371,7 +372,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
                   <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: +e.target.value }))} />
+                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>

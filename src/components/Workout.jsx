@@ -303,6 +303,20 @@ function ExerciseDragPreview({ exercise }) {
   )
 }
 
+function SortableRoutineRow({ name, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: name })
+  const style = {
+    transform: CSS.Translate.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  }
+  return (
+    <div ref={setNodeRef} style={style}>
+      {children({ listeners, attributes })}
+    </div>
+  )
+}
+
 function SortableExerciseBlock({ id, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
   const style = {
@@ -2167,23 +2181,47 @@ export default function Workout({
               No exercises added yet
             </div>
           ) : (
-            <div className="routine-exercise-list">
-              {routineExercises.map((ex, i) => (
-                <div key={i} className="routine-exercise-row">
-                  <div className="routine-exercise-name">{ex.name}</div>
-                  <div className="set-controls">
-                    <button className="set-ctrl-btn" onClick={() => setRoutineExercises(prev => prev.map((e, j) => j === i ? { ...e, sets: Math.max(1, e.sets - 1) } : e))}>−</button>
-                    <span className="set-count">{ex.sets} sets</span>
-                    <button className="set-ctrl-btn add" onClick={() => setRoutineExercises(prev => prev.map((e, j) => j === i ? { ...e, sets: e.sets + 1 } : e))}>+</button>
-                  </div>
-                  <button className="routine-remove-btn" onClick={() => setRoutineExercises(prev => prev.filter((_, j) => j !== i))}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                    </svg>
-                  </button>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={({ active, over }) => {
+                if (!over || active.id === over.id) return
+                setRoutineExercises(prev => {
+                  const oldIdx = prev.findIndex(e => e.name === active.id)
+                  const newIdx = prev.findIndex(e => e.name === over.id)
+                  return arrayMove(prev, oldIdx, newIdx)
+                })
+              }}
+            >
+              <SortableContext items={routineExercises.map(e => e.name)} strategy={verticalListSortingStrategy}>
+                <div className="routine-exercise-list">
+                  {routineExercises.map((ex, i) => (
+                    <SortableRoutineRow key={ex.name} name={ex.name}>
+                      {({ listeners, attributes }) => (
+                        <div className="routine-exercise-row">
+                          <button className="routine-drag-handle" {...listeners} {...attributes}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>
+                            </svg>
+                          </button>
+                          <div className="routine-exercise-name">{ex.name}</div>
+                          <div className="set-controls">
+                            <button className="set-ctrl-btn" onClick={() => setRoutineExercises(prev => prev.map((e, j) => j === i ? { ...e, sets: Math.max(1, e.sets - 1) } : e))}>−</button>
+                            <span className="set-count">{ex.sets} sets</span>
+                            <button className="set-ctrl-btn add" onClick={() => setRoutineExercises(prev => prev.map((e, j) => j === i ? { ...e, sets: e.sets + 1 } : e))}>+</button>
+                          </div>
+                          <button className="routine-remove-btn" onClick={() => setRoutineExercises(prev => prev.filter((_, j) => j !== i))}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                            </svg>
+                          </button>
+                        </div>
+                      )}
+                    </SortableRoutineRow>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </SortableContext>
+            </DndContext>
           )}
           <button className="empty-workout-btn" style={{ marginTop: 12 }} onClick={() => { setPickerContext('routine'); setShowExercises(true) }}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round">

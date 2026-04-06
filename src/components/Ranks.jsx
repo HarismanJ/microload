@@ -220,16 +220,10 @@ function buildMuscleGroupRank(muscleGroup, liftsWithDetails) {
     }
   }
 
-  let totalWeightedScore = 0
-  let totalWeight = 0
-  contributions.forEach((entry, index) => {
-    const decayWeight = 1 / (index + 1)
-    const effectiveWeight = entry.muscleWeight * decayWeight
-    totalWeightedScore += entry.score * effectiveWeight
-    totalWeight += effectiveWeight
-  })
-
-  const resolvedRank = resolveTierFromScore(totalWeightedScore / totalWeight)
+  // Weighted maximum: rank = best (score × muscleWeight) across all contributing exercises.
+  // This means additional exercises can only help (never hurt), and secondary-only muscles
+  // are naturally capped at SECONDARY_MUSCLE_WEIGHT × their score (no cancellation).
+  const resolvedRank = resolveTierFromScore(contributions[0].weightedScore)
 
   return {
     ...muscleGroup,
