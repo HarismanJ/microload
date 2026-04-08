@@ -26,7 +26,7 @@ function getFriendlyFriendsError(err, fallback) {
   return message || fallback
 }
 
-export default function FriendsSection({ userId, username, profileLoaded = false, onChallenge }) {
+export default function FriendsSection({ userId, username, profileLoaded = false, onChallenge, onViewProfile }) {
   const [overview, setOverview] = useState({ incoming: [], outgoing: [], friends: [], all: [] })
   const [headToHead, setHeadToHead] = useState({})
   const [loading, setLoading] = useState(true)
@@ -441,6 +441,12 @@ export default function FriendsSection({ userId, username, profileLoaded = false
                     )}
                   </div>
                   <div className="friends-row-actions">
+                    <button
+                      className="friends-secondary-btn"
+                      onClick={() => onViewProfile?.(friendship.otherProfile)}
+                    >
+                      View Profile
+                    </button>
                     <button
                       className="friends-primary-btn"
                       onClick={() => handleChallenge(friendship)}

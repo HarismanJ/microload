@@ -414,6 +414,8 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     const { data: profileVol } = await supabase.from('profiles').select('lifetime_volume_kg').eq('id', user.id).single()
     const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - sessionVolumeKg)
 
+    const affectedExerciseIds = [...new Set((targetSession?.groups || []).map(g => g.exerciseId).filter(Boolean))]
+
     const [{ error }, { error: profileError }] = await Promise.all([
       supabase.from('workout_sessions').delete().eq('id', targetSessionId),
       supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', user.id),
@@ -423,6 +425,33 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       setDeletingId(null)
       setDeleteError(error?.message || profileError?.message || 'Could not delete this workout.')
       return
+    }
+
+    // Recalculate cached PRs for exercises that were in the deleted session
+    if (affectedExerciseIds.length > 0) {
+      const { data: remainingBests } = await supabase
+        .from('workout_sets')
+        .select('exercise_id, estimated_1rm, unit')
+        .eq('user_id', user.id)
+        .in('exercise_id', affectedExerciseIds)
+        .not('estimated_1rm', 'is', null)
+
+      const newBestByExercise = {}
+      for (const s of remainingBests || []) {
+        const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
+        newBestByExercise[s.exercise_id] = Math.max(newBestByExercise[s.exercise_id] || 0, kg)
+      }
+
+      await Promise.all(affectedExerciseIds.map(exId =>
+        newBestByExercise[exId]
+          ? supabase.from('exercise_prs').upsert({
+              user_id: user.id,
+              exercise_id: exId,
+              best_1rm_kg: newBestByExercise[exId],
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'user_id,exercise_id' })
+          : supabase.from('exercise_prs').delete().eq('user_id', user.id).eq('exercise_id', exId)
+      ))
     }
 
     const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)

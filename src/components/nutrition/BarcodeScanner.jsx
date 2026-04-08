@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { Capacitor } from '@capacitor/core'
+import { BarcodeFormat, BarcodeScanner as NativeBarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
 import { Html5Qrcode } from 'html5-qrcode'
 import { supabase } from '../../lib/supabase'
 import LoadingSpinner from '../LoadingSpinner'
@@ -24,9 +26,38 @@ const FIELDS = [
   { key: 'iron',          label: 'Iron',           unit: 'mg',   type: 'number' },
 ]
 
-// BarcodeDetector is a native browser API — best focus and performance.
-// Supported on Android Chrome. Falls back to html5-qrcode for iOS/Firefox.
+// Native ML Kit is used on real phone builds.
+// Browser BarcodeDetector/html5-qrcode stays as the web fallback.
+const USE_NATIVE_PHONE_SCANNER = Capacitor.getPlatform() !== 'web'
 const NATIVE_SCANNER = typeof window !== 'undefined' && 'BarcodeDetector' in window
+const FOOD_BARCODE_PATTERN = /^\d{6,14}$/
+const NATIVE_SCAN_FORMATS = [
+  BarcodeFormat.Ean13,
+  BarcodeFormat.Ean8,
+  BarcodeFormat.UpcA,
+  BarcodeFormat.UpcE,
+]
+const ACCEPTED_WEB_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e']
+
+function getScannedValue(barcode) {
+  return String(barcode?.rawValue || barcode?.displayValue || barcode || '').trim()
+}
+
+function isAcceptedFoodBarcode(barcode) {
+  const value = getScannedValue(barcode)
+  if (!FOOD_BARCODE_PATTERN.test(value)) return false
+
+  const format = barcode?.format
+  if (!format) return true
+
+  return [
+    BarcodeFormat.Ean13,
+    BarcodeFormat.Ean8,
+    BarcodeFormat.UpcA,
+    BarcodeFormat.UpcE,
+    ...ACCEPTED_WEB_FORMATS,
+  ].includes(format)
+}
 
 function parseOFF(product) {
   const n = product.nutriments || {}
@@ -68,6 +99,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
   const [manualLooking, setManualLooking] = useState(false)
   const [torchOn, setTorchOn] = useState(false)
   const [torchSupported, setTorchSupported] = useState(false)
+  const [nativeScanOpening, setNativeScanOpening] = useState(false)
 
   // html5-qrcode fallback refs
   const scannerRef = useRef(null)
@@ -88,11 +120,70 @@ export default function BarcodeScanner({ onSave, onBack }) {
     if (scannerRef.current) {
       scannerRef.current.stop().catch(() => {})
     }
+    if (USE_NATIVE_PHONE_SCANNER) {
+      NativeBarcodeScanner.removeAllListeners().catch(() => {})
+      NativeBarcodeScanner.stopScan().catch(() => {})
+    }
     // Stops tracks for both native <video> and html5-qrcode injected video
     document.querySelectorAll('video').forEach(v => {
       v.srcObject?.getTracks().forEach(t => t.stop())
       v.srcObject = null
     })
+  }
+
+  async function startNativePhoneScan() {
+    if (!USE_NATIVE_PHONE_SCANNER || scannedRef.current || nativeScanOpening) return
+
+    setNativeScanOpening(true)
+    setErrorMsg('')
+
+    try {
+      const { supported } = await NativeBarcodeScanner.isSupported()
+      if (!supported) {
+        setErrorMsg('Barcode scanning is not supported on this device.')
+        setPhase('error')
+        return
+      }
+
+      const permissionState = await NativeBarcodeScanner.checkPermissions()
+      let cameraPermission = permissionState.camera
+
+      if (cameraPermission !== 'granted') {
+        const requested = await NativeBarcodeScanner.requestPermissions()
+        cameraPermission = requested.camera
+      }
+
+      if (cameraPermission !== 'granted') {
+        setErrorMsg('Camera access denied. Please allow camera access and try again.')
+        setPhase('error')
+        return
+      }
+
+      const { barcodes } = await NativeBarcodeScanner.scan({
+        formats: NATIVE_SCAN_FORMATS,
+        autoZoom: true,
+      })
+
+      const acceptedBarcode = (barcodes || []).find(isAcceptedFoodBarcode)
+      const rawValue = getScannedValue(acceptedBarcode)
+
+      if (!rawValue) {
+        setErrorMsg('Scan the numeric product barcode on the package, not a QR code or promo code.')
+        return
+      }
+
+      scannedRef.current = true
+      await lookup(rawValue)
+    } catch (error) {
+      const message = String(error?.message || error || '')
+      const cancelled = /cancel|cancell|user.*closed|dismiss/i.test(message)
+
+      if (!cancelled) {
+        setErrorMsg('Could not start the camera scanner. You can still enter the barcode manually.')
+      }
+    } finally {
+      setNativeScanOpening(false)
+    }
   }
 
   function handleBack() {
@@ -101,6 +192,14 @@ export default function BarcodeScanner({ onSave, onBack }) {
   }
 
   useEffect(() => {
+    if (USE_NATIVE_PHONE_SCANNER) {
+      startNativePhoneScan()
+      return () => {
+        NativeBarcodeScanner.removeAllListeners().catch(() => {})
+        NativeBarcodeScanner.stopScan().catch(() => {})
+      }
+    }
+
     if (NATIVE_SCANNER) {
       // ── Native BarcodeDetector path ─────────────────────────────────────
       // We own the getUserMedia call so we can request focus constraints
@@ -108,7 +207,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
       let detector
       try {
         detector = new BarcodeDetector({
-          formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93'],
+          formats: ACCEPTED_WEB_FORMATS,
         })
       } catch {
         // BarcodeDetector exists but constructor failed — fall through to html5-qrcode
@@ -175,14 +274,15 @@ export default function BarcodeScanner({ onSave, onBack }) {
           if (video.readyState >= 2) {
             try {
               const barcodes = await detector.detect(video)
-              if (barcodes.length > 0 && !scannedRef.current) {
+              const acceptedBarcode = barcodes.find(isAcceptedFoodBarcode)
+              if (acceptedBarcode && !scannedRef.current) {
                 scannedRef.current = true
                 runningRef.current = false
                 cancelAnimationFrame(animFrameRef.current)
                 animFrameRef.current = null
                 stream.getTracks().forEach(t => t.stop())
                 video.srcObject = null
-                lookup(barcodes[0].rawValue)
+                lookup(getScannedValue(acceptedBarcode))
                 return
               }
             } catch {
@@ -210,7 +310,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
         { facingMode: 'environment' },
         { fps: 15, qrbox: { width: 280, height: 140 }, aspectRatio: 1.333 },
         async (barcode) => {
-          if (scannedRef.current) return
+          if (scannedRef.current || !FOOD_BARCODE_PATTERN.test(getScannedValue(barcode))) return
           scannedRef.current = true
           runningRef.current = false
           await scanner.stop()
@@ -218,7 +318,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
             v.srcObject?.getTracks().forEach(t => t.stop())
             v.srcObject = null
           })
-          lookup(barcode)
+          lookup(getScannedValue(barcode))
         },
         () => {}
       ).then(() => {
@@ -290,20 +390,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
     const code = manualCode.trim()
     if (!code) return
     scannedRef.current = true
-    // Stop native scanner
-    runningRef.current = false
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current)
-      animFrameRef.current = null
-    }
-    // Stop html5-qrcode scanner
-    if (scannerRef.current) {
-      scannerRef.current.stop().catch(() => {})
-    }
-    document.querySelectorAll('video').forEach(v => {
-      v.srcObject?.getTracks().forEach(t => t.stop())
-      v.srcObject = null
-    })
+    stopCamera()
     setManualLooking(true)
     await lookup(code)
     setManualLooking(false)
@@ -371,44 +458,43 @@ export default function BarcodeScanner({ onSave, onBack }) {
           </button>
           <span className="picker-title">Scan Barcode</span>
         </div>
-        <div className="bs-viewfinder" onClick={handleTapFocus}>
-          {NATIVE_SCANNER
-            ? <video ref={videoRef} className="bs-reader" autoPlay playsInline muted />
-            : <div id="barcode-reader" className="bs-reader" />
-          }
-          <div className="bs-overlay">
-            <div className="bs-target" />
-          </div>
-          {torchSupported && (
-            <button className={`bs-torch-btn ${torchOn ? 'on' : ''}`} onClick={e => { e.stopPropagation(); toggleTorch() }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill={torchOn ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 2h6l1 7H8L9 2z"/><path d="M8 9l-2 13h12L16 9"/><line x1="12" y1="13" x2="12" y2="17"/>
+        {USE_NATIVE_PHONE_SCANNER ? (
+          <div className="bs-native-shell">
+            <div className="bs-native-icon">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 5h2M19 5h2M3 19h2M19 19h2" />
+                <path d="M5 3v4M19 3v4M5 17v4M19 17v4" />
+                <path d="M8 10h8M8 14h8" />
               </svg>
+            </div>
+            <div className="bs-native-title">Native scanner ready</div>
+            <div className="bs-native-sub">
+              Your phone is using the native camera scanner for better focus and faster barcode detection.
+            </div>
+            <button className="bs-native-open-btn" onClick={startNativePhoneScan} disabled={nativeScanOpening || manualLooking}>
+              {nativeScanOpening ? 'Opening…' : 'Open Camera'}
             </button>
-          )}
-          <div className="bs-hint">Tap to focus · Point at a food barcode</div>
-        </div>
-        <div className="bs-manual">
-          <div className="bs-manual-label">Or enter barcode manually</div>
-          <div className="bs-manual-row">
-            <input
-              className="bs-manual-input"
-              type="number"
-              placeholder="e.g. 0123456789012"
-              value={manualCode}
-              onChange={e => setManualCode(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleManualLookup()}
-            />
-            <button
-              className="bs-manual-btn"
-              onClick={handleManualLookup}
-              disabled={!manualCode.trim() || manualLooking}
-            >
-              {manualLooking ? '…' : 'Look up'}
-            </button>
+            {errorMsg && <div className="bs-inline-error">{errorMsg}</div>}
           </div>
-          <div className="bs-manual-hint">Type the numbers printed below the barcode on the packaging (including the numbers at each end)</div>
-        </div>
+        ) : (
+          <div className="bs-viewfinder" onClick={handleTapFocus}>
+            {NATIVE_SCANNER
+              ? <video ref={videoRef} className="bs-reader" autoPlay playsInline muted />
+              : <div id="barcode-reader" className="bs-reader" />
+            }
+            <div className="bs-overlay">
+              <div className="bs-target" />
+            </div>
+            {torchSupported && (
+              <button className={`bs-torch-btn ${torchOn ? 'on' : ''}`} onClick={e => { e.stopPropagation(); toggleTorch() }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill={torchOn ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M9 2h6l1 7H8L9 2z"/><path d="M8 9l-2 13h12L16 9"/><line x1="12" y1="13" x2="12" y2="17"/>
+                </svg>
+              </button>
+            )}
+            <div className="bs-hint">Tap to focus · Point at a food barcode</div>
+          </div>
+        )}
       </div>
     )
   }
@@ -442,6 +528,30 @@ export default function BarcodeScanner({ onSave, onBack }) {
         <span className="picker-title">Confirm Food</span>
       </div>
       {errorMsg && <div className="bs-not-found-note">{errorMsg}</div>}
+      <div className="bs-verify-note">
+        Scanned nutrition data may not be fully accurate. Please verify the food details before adding it to your log.
+      </div>
+      <div className="bs-manual">
+        <div className="bs-manual-label">Or enter barcode manually</div>
+        <div className="bs-manual-row">
+          <input
+            className="bs-manual-input"
+            type="number"
+            placeholder="e.g. 0123456789012"
+            value={manualCode}
+            onChange={e => setManualCode(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleManualLookup()}
+          />
+          <button
+            className="bs-manual-btn"
+            onClick={handleManualLookup}
+            disabled={!manualCode.trim() || manualLooking}
+          >
+            {manualLooking ? '…' : 'Look up'}
+          </button>
+        </div>
+        <div className="bs-manual-hint">Type the numbers printed below the barcode on the packaging (including the numbers at each end)</div>
+      </div>
       <div className="cf-section">
         <div className="cf-section-title">Food Info</div>
         {FIELDS.slice(0, 4).map(f => (

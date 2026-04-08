@@ -86,6 +86,24 @@
   justify-content: center;
 }
 
+/* Dumbbell hint banner */
+.ex-db-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.35);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #ca9b00;
+}
+
+.ex-db-hint svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
 /* Stats row */
 .ex-stats-grid {
   display: grid;

@@ -5,6 +5,7 @@ import { clearCache, getCached, setCached, invalidateCache } from '../lib/cache'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import WeightChart from './profile/WeightChart'
 import FriendsSection from './profile/FriendsSection'
+import FriendProfileDetail from './profile/FriendProfileDetail'
 import Achievements from './Achievements'
 import { useTheme } from '../context/ThemeContext'
 import { convertWeight } from '../lib/liftMath'
@@ -42,6 +43,7 @@ export default function Profile({ onChallenge }) {
   const [saveError, setSaveError] = useState('')
   const [viewingSession, setViewingSession] = useState(null) // { sessionIds, dateStr }
   const [viewingAchievements, setViewingAchievements] = useState(false)
+  const [viewingFriendProfile, setViewingFriendProfile] = useState(null)
   const [weightLogs, setWeightLogs] = useState([])
   const [weightPeriod, setWeightPeriod] = useState('all')
   const [weightDeleteTargetId, setWeightDeleteTargetId] = useState(null)
@@ -235,6 +237,16 @@ export default function Profile({ onChallenge }) {
     )
   }
 
+  if (viewingFriendProfile) {
+    return (
+      <FriendProfileDetail
+        friendId={viewingFriendProfile.id}
+        fallbackProfile={viewingFriendProfile}
+        onBack={() => setViewingFriendProfile(null)}
+      />
+    )
+  }
+
   return (
     <div className="profile-screen">
       <div className="profile-header">
@@ -328,6 +340,7 @@ export default function Profile({ onChallenge }) {
         username={profile?.username || ''}
         profileLoaded={profile !== null}
         onChallenge={onChallenge}
+        onViewProfile={setViewingFriendProfile}
       />
       <div>
         <button className="signout-btn" onClick={signOut}>Sign Out</button>

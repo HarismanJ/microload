@@ -223,6 +223,7 @@ body {
 }
 
 .topbar-profile-btn {
+  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 14px;
@@ -252,6 +253,16 @@ body {
   background: var(--blue);
   border-color: color-mix(in srgb, var(--blue) 45%, var(--border));
   box-shadow: 0 12px 24px color-mix(in srgb, var(--blue) 24%, transparent);
+}
+
+.topbar-profile-plus {
+  position: absolute;
+  bottom: 4px;
+  right: 3px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  color: currentColor;
 }
 
 .topbar-home-streak {
