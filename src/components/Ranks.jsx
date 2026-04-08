@@ -135,6 +135,39 @@ const MUSCLE_GROUP_KEYS = new Set(MUSCLE_GROUPS.map(group => group.key))
 function lbsToKg(v) { return v * 0.453592 }
 function kgToLbs(v) { return v * 2.20462 }
 
+function normalizeSearchValue(value = '') {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+function matchesSearchQuery(query, ...fields) {
+  const normalizedQuery = normalizeSearchValue(query)
+  if (!normalizedQuery) return true
+
+  const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  const haystack = fields.map(normalizeSearchValue).filter(Boolean).join(' ')
+  const compactHaystack = haystack.replace(/\s+/g, '')
+
+  return tokens.every(token => haystack.includes(token) || compactHaystack.includes(token))
+}
+
+function scoreExerciseMatch(query, exercise) {
+  const q = normalizeSearchValue(query)
+  if (!q) return 0
+  const name = normalizeSearchValue(exercise.name)
+  const tokens = q.split(/\s+/).filter(Boolean)
+
+  if (name === q) return 100
+  if (name.startsWith(q)) return 90
+  if (name.includes(q)) return 80
+  if (tokens.every(t => name.includes(t))) return 70
+  const nameHits = tokens.filter(t => name.includes(t)).length
+  if (nameHits > 0) return 40 + nameHits * 10
+  return 10
+}
+
 function getLiftRank(lift, ormKg, bodyweightKg, gender) {
   const anchors = ANCHORS[gender]?.[lift.name]
   if (!anchors || !bodyweightKg) return null
@@ -372,25 +405,23 @@ export default function Ranks() {
       const anchorNames = Object.keys(ANCHORS.male)
       const anchorNameSet = new Set(anchorNames)
 
-      const [{ data: profileData }, { data: setsData }, exerciseRows] = await Promise.all([
+      const [{ data: profileData }, { data: prsData }, exerciseRows] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase
-          .from('workout_sets')
-          .select('exercise_id, estimated_1rm, unit, exercises(name, category)')
-          .eq('user_id', user.id)
-          .not('estimated_1rm', 'is', null),
+          .from('exercise_prs')
+          .select('exercise_id, best_1rm_kg')
+          .eq('user_id', user.id),
         fetchExercises(user.id),
       ])
 
-      // Best ORM per exercise name
+      // Best ORM per exercise name (from cached PRs table)
+      const exerciseById = new Map((exerciseRows ?? []).map(ex => [ex.id, ex]))
       const liftMap = {}
-      setsData?.forEach(s => {
-        const exerciseName = s.exercises?.name
+      prsData?.forEach(pr => {
+        const exercise = exerciseById.get(pr.exercise_id)
+        const exerciseName = exercise?.name
         if (!exerciseName) return
-        const ormKg = s.unit === 'lbs' ? lbsToKg(s.estimated_1rm) : s.estimated_1rm
-        if (!liftMap[exerciseName] || ormKg > liftMap[exerciseName].ormKg) {
-          liftMap[exerciseName] = { ormKg, exerciseId: s.exercise_id }
-        }
+        liftMap[exerciseName] = { ormKg: pr.best_1rm_kg, exerciseId: pr.exercise_id }
       })
 
       const preferredExercisesByName = new Map()
@@ -504,11 +535,23 @@ export default function Ranks() {
         return false
       }
       if (!search.trim()) return true
-      const query = search.toLowerCase()
-      return lift.name.toLowerCase().includes(query) || lift.category.toLowerCase().includes(query)
+      return matchesSearchQuery(
+        search,
+        lift.name,
+        lift.category,
+        lift.equipment,
+        (lift.primary_muscles || []).join(' '),
+        (lift.secondary_muscles || []).join(' ')
+      )
     })
     .slice()
     .sort((a, b) => {
+      if (search.trim()) {
+        const diff = scoreExerciseMatch(search, b) - scoreExerciseMatch(search, a)
+        if (diff !== 0) return diff
+        const lengthDiff = a.name.length - b.name.length
+        if (lengthDiff !== 0) return lengthDiff
+      }
       if (!a.cardRank && !b.cardRank) return a.name.localeCompare(b.name)
       if (!a.cardRank) return 1
       if (!b.cardRank) return -1
@@ -589,6 +632,13 @@ export default function Ranks() {
       setTopSetError(error.message || 'Could not save your imported top set.')
       return
     }
+
+    await supabase.from('exercise_prs').upsert({
+      user_id: user.id,
+      exercise_id: lift.exerciseId,
+      best_1rm_kg: estimated1RMKg,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,exercise_id' })
 
     invalidateCache('ranks', 'profile', 'achievements')
     setLifts(prev => prev.map(item => (
@@ -850,6 +900,7 @@ export default function Ranks() {
                             <input
                               className="lift-import-input"
                               type="number"
+                              inputMode={getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg) < 0 ? 'text' : 'decimal'}
                               min={String(getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg))}
                               max={String(getWeightInputMax(lift.equipment, useLbs ? 'lbs' : 'kg'))}
                               step="any"
@@ -975,6 +1026,7 @@ export default function Ranks() {
                           <input
                             className="lift-import-input"
                             type="number"
+                            inputMode={getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg) < 0 ? 'text' : 'decimal'}
                             min={String(getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg))}
                             max={String(getWeightInputMax(lift.equipment, useLbs ? 'lbs' : 'kg'))}
                             step="any"

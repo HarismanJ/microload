@@ -11,7 +11,7 @@ import LoadingSpinner from './LoadingSpinner'
 import RestWheelPicker from './RestWheelPicker'
 import {
   DndContext, closestCenter, PointerSensor, TouchSensor,
-  useSensor, useSensors, DragOverlay
+  useSensor, useSensors, MeasuringStrategy
 } from '@dnd-kit/core'
 import {
   SortableContext, verticalListSortingStrategy,
@@ -62,6 +62,21 @@ function matchesSearchQuery(query, ...fields) {
   const compactHaystack = haystack.replace(/\s+/g, '')
 
   return tokens.every(token => haystack.includes(token) || compactHaystack.includes(token))
+}
+
+function scoreExerciseMatch(query, exercise) {
+  const q = normalizeSearchValue(query)
+  if (!q) return 0
+  const name = normalizeSearchValue(exercise.name)
+  const tokens = q.split(/\s+/).filter(Boolean)
+
+  if (name === q) return 100
+  if (name.startsWith(q)) return 90
+  if (name.includes(q)) return 80
+  if (tokens.every(t => name.includes(t))) return 70
+  const nameHits = tokens.filter(t => name.includes(t)).length
+  if (nameHits > 0) return 40 + nameHits * 10
+  return 10 // matched via category / equipment / muscles
 }
 
 function getWorkoutDraftStorageKey(userId, roomId = null) {
@@ -133,20 +148,6 @@ function createRestTimer(seconds, exerciseName) {
 
 function getRemainingRestSeconds(restTimer) {
   return Math.max(0, Math.ceil((restTimer.endTime - Date.now()) / 1000))
-}
-
-function reorderExercises(list, activeId, overId) {
-  const oldIdx = list.findIndex(exercise => exercise.id === activeId)
-  const newIdx = list.findIndex(exercise => exercise.id === overId)
-
-  if (oldIdx === -1 || newIdx === -1 || oldIdx === newIdx) return list
-  return arrayMove(list, oldIdx, newIdx)
-}
-
-function restoreExerciseOrder(list, order) {
-  if (!order?.length) return list
-  const byId = new Map(list.map(exercise => [exercise.id, exercise]))
-  return order.map(id => byId.get(id)).filter(Boolean)
 }
 
 function buildRemoteWorkouts(events, exerciseLibrary, participants = []) {
@@ -252,56 +253,6 @@ function buildRemoteWorkouts(events, exerciseLibrary, participants = []) {
     })
 }
 
-function ExerciseDragPreview({ exercise }) {
-  if (!exercise) return null
-  const previewSets = exercise.sets.slice(0, 3)
-  const restSeconds = exercise.restSeconds || 0
-  const restLabel = `${Math.floor(restSeconds / 60)}:${String(restSeconds % 60).padStart(2, '0')}`
-
-  return (
-    <div className="exercise-drag-overlay">
-      <div className="exercise-block exercise-block-preview">
-        <div className="exercise-block-header">
-          <div className="drag-handle drag-handle-preview" aria-hidden="true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="18" x2="16" y2="18"/>
-            </svg>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div className="exercise-block-name">{exercise.name}</div>
-            <div className="exercise-category">{exercise.category}</div>
-          </div>
-          <div className="exercise-preview-meta">
-            <span className="exercise-preview-pill">{exercise.unit}</span>
-            <span className="exercise-preview-pill">{exercise.sets.length} sets</span>
-          </div>
-        </div>
-
-        <div className="exercise-preview-stats">
-          <div className="exercise-preview-stat">
-            <span>Rest</span>
-            <strong>{restLabel}</strong>
-          </div>
-          <div className="exercise-preview-stat">
-            <span>Progress</span>
-            <strong>{exercise.sets.filter(set => set.done).length}/{exercise.sets.length} done</strong>
-          </div>
-        </div>
-
-        <div className="exercise-preview-sets">
-          {previewSets.length > 0 ? previewSets.map((set, index) => (
-            <div key={`${exercise.id}-preview-${index}`} className={`exercise-preview-set ${set.done ? 'done' : ''}`}>
-              <span>Set {index + 1}</span>
-              <strong>{set.weight || 0} {exercise.unit} x {set.reps || 0}</strong>
-            </div>
-          )) : (
-            <div className="exercise-preview-empty">Drag to reorder this exercise</div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
 
 function SortableRoutineRow({ name, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: name })
@@ -322,14 +273,11 @@ function SortableExerciseBlock({ id, children }) {
   const style = {
     transform: CSS.Translate.toString(transform),
     transition,
+    opacity: isDragging ? 0.4 : 1,
   }
 
   return (
-    <div
-      ref={setNodeRef}
-      className={`sortable-exercise-shell${isDragging ? ' dragging' : ''}`}
-      style={style}
-    >
+    <div ref={setNodeRef} className="sortable-exercise-shell" style={style}>
       {children({ listeners, attributes, isDragging })}
     </div>
   )
@@ -360,8 +308,6 @@ export default function Workout({
   const [defaultRest, setDefaultRest] = useState(90)
   const [restTimer, setRestTimer] = useState(null)
   const [editingRest, setEditingRest] = useState(null)
-  const [activeDragId, setActiveDragId] = useState(null)
-  const dragStartOrderRef = useRef([])
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 100, tolerance: 6 } }),
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
@@ -421,10 +367,6 @@ export default function Workout({
   const [routineExercises, setRoutineExercises] = useState([]) // [{ name, sets }]
   const [editingRoutineId, setEditingRoutineId] = useState(null)
   const [pickerContext, setPickerContext] = useState('workout') // 'workout' | 'routine'
-  const activeDraggedExercise = useMemo(
-    () => workoutExercises.find(exercise => exercise.id === activeDragId) || null,
-    [workoutExercises, activeDragId]
-  )
 
   useEffect(() => {
     const init = async () => {
@@ -1292,10 +1234,29 @@ export default function Workout({
     }
 
     if (sessionId) {
-      await Promise.all([
+      const seen = new Set()
+      const prUpserts = exercisesOverride
+        .filter(ex => {
+          if (seen.has(ex.id) || newOrmKg[ex.id] === undefined) return false
+          if (newOrmKg[ex.id] <= (prevOrmKg[ex.id] || 0)) return false
+          seen.add(ex.id)
+          return true
+        })
+        .map(ex => ({
+          user_id: user.id,
+          exercise_id: ex.id,
+          best_1rm_kg: newOrmKg[ex.id],
+          updated_at: new Date().toISOString(),
+        }))
+
+      const sessionOps = [
         supabase.from('workout_sessions').update({ finished_at: new Date().toISOString(), exercise_notes: exerciseNotes }).eq('id', sessionId),
         supabase.from('profiles').update({ lifetime_volume_kg: newTotalVolumeKg }).eq('id', user.id),
-      ])
+      ]
+      if (prUpserts.length > 0) {
+        sessionOps.push(supabase.from('exercise_prs').upsert(prUpserts, { onConflict: 'user_id,exercise_id' }))
+      }
+      await Promise.all(sessionOps)
     }
 
     const now = new Date()
@@ -1676,16 +1637,21 @@ export default function Workout({
   }
 
   const filteredLibrary = searchQuery.trim()
-    ? exerciseLibrary.filter(e =>
-        matchesSearchQuery(
-          searchQuery,
-          e.name,
-          e.category,
-          e.equipment,
-          (e.primary_muscles || []).join(' '),
-          (e.secondary_muscles || []).join(' ')
+    ? exerciseLibrary
+        .filter(e =>
+          matchesSearchQuery(
+            searchQuery,
+            e.name,
+            e.category,
+            e.equipment,
+            (e.primary_muscles || []).join(' '),
+            (e.secondary_muscles || []).join(' ')
+          )
         )
-      )
+        .sort((a, b) => {
+          const diff = scoreExerciseMatch(searchQuery, b) - scoreExerciseMatch(searchQuery, a)
+          return diff !== 0 ? diff : a.name.length - b.name.length
+        })
     : exerciseLibrary
 
   const addSet = (exId) => {
@@ -1952,7 +1918,7 @@ export default function Workout({
     setWorkoutExercises(prev => prev.map(e => e.id === exId ? { ...e, restSeconds: seconds } : e))
     setEditingRest(null)
     await supabase.from('exercises').update({ default_rest_seconds: seconds }).eq('id', exId)
-    invalidateExercisesCache()
+    invalidateExercisesCache(userId)
   }
 
   if (detailExerciseId) {
@@ -2361,24 +2327,15 @@ export default function Workout({
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
-          onDragStart={({ active }) => {
-            dragStartOrderRef.current = workoutExercises.map(exercise => exercise.id)
-            setActiveDragId(active.id)
-          }}
-          onDragCancel={() => {
-            setActiveDragId(null)
-            setWorkoutExercises(prev => restoreExerciseOrder(prev, dragStartOrderRef.current))
-            dragStartOrderRef.current = []
-          }}
-          onDragOver={({ active, over }) => {
-            if (!over || active.id === over.id) return
-            setWorkoutExercises(prev => reorderExercises(prev, active.id, over.id))
-          }}
+          measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragEnd={({ active, over }) => {
-            setActiveDragId(null)
-            dragStartOrderRef.current = []
             if (!over || active.id === over.id) return
-            setWorkoutExercises(prev => reorderExercises(prev, active.id, over.id))
+            setWorkoutExercises(prev => {
+              const oldIdx = prev.findIndex(exercise => exercise.id === active.id)
+              const newIdx = prev.findIndex(exercise => exercise.id === over.id)
+              if (oldIdx === -1 || newIdx === -1 || oldIdx === newIdx) return prev
+              return arrayMove(prev, oldIdx, newIdx)
+            })
           }}
         >
           <SortableContext items={workoutExercises.map(e => e.id)} strategy={verticalListSortingStrategy}>
@@ -2400,7 +2357,7 @@ export default function Workout({
               </button>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="exercise-block-name">{ex.name}</div>
-                <div className="exercise-category">{ex.category}</div>
+                <div className="exercise-category">{ex.category}{ex.equipment === 'Dumbbell' && <span className="db-per-hint-inline"> · log 1 dumbbell</span>}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div className="unit-toggle">
@@ -2467,7 +2424,7 @@ export default function Workout({
             <div className="set-row header-row">
               <span className="col-set">Set</span>
               <span className="col-prev">Previous</span>
-              <span className="col-kg">{ex.unit}</span>
+              <span className="col-kg">{ex.unit}{ex.equipment === 'Dumbbell' && <span className="db-per-hint">per DB</span>}</span>
               <span className="col-reps">Reps</span>
               <span className="col-done"></span>
             </div>
@@ -2519,7 +2476,7 @@ export default function Workout({
                 <input
                   className="col-kg set-input"
                   type="number"
-                  inputMode="decimal"
+                  inputMode={minWeight < 0 ? 'text' : 'decimal'}
                   value={s.weight}
                   placeholder="0"
                   min={String(minWeight)}
@@ -2541,7 +2498,6 @@ export default function Workout({
               </SortableExerciseBlock>
             ))}
           </SortableContext>
-          <DragOverlay dropAnimation={null} />
         </DndContext>
 
         <div className="workout-actions">

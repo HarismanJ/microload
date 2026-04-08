@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent } from 'react'
+import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { getCached, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
 import LoadingSpinner from './LoadingSpinner'
@@ -77,6 +77,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [weightDeletingId, setWeightDeletingId] = useState(null)
   const [weightDeleteError, setWeightDeleteError] = useState('')
   const [selectedDay, setSelectedDay] = useState(null) // { sessionIds, dateStr }
+  const appWasBackgroundedRef = useRef(false)
+  const [calendarInitialReady, setCalendarInitialReady] = useState(false)
   const [isPhoneWidth, setIsPhoneWidth] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ))
@@ -225,8 +227,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const loadLatest = useEffectEvent(() => { load() })
 
   useEffect(() => {
-    ghostChartHasPlayed = false
-    barGlowHasPlayed = false
+    setCalendarInitialReady(false)
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
   }, [userId])
@@ -241,9 +242,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [onWorkoutStreakChange, workoutStreak])
 
   useEffect(() => {
-    if (loading) return
+    if (loading || !calendarInitialReady) return
     onInitialReady?.()
-  }, [loading, onInitialReady])
+  }, [calendarInitialReady, loading, onInitialReady])
 
   useEffect(() => {
     if (!splashDone) return
@@ -264,7 +265,13 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'hidden') {
+        appWasBackgroundedRef.current = true
+        return
+      }
+
+      if (document.visibilityState === 'visible' && appWasBackgroundedRef.current) {
+        appWasBackgroundedRef.current = false
         ghostChartHasPlayed = false
         barGlowHasPlayed = false
         setAppReturnTick(t => t + 1)
@@ -581,6 +588,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
             variant="hybrid"
             visualLoading={firstEntryWidgetHold}
             refreshKey={calendarRefreshKey}
+            onInitialLoadComplete={() => setCalendarInitialReady(true)}
             onDayClick={(sessionIds, dateStr) => setSelectedDay({ sessionIds, dateStr })}
           />
         </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent } from 'react'
+import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getCached, setCached } from '../../lib/cache'
 import '../../styles/Profile.css'
@@ -30,6 +30,7 @@ export default function WorkoutCalendar({
   cardPressable = false,
   visualLoading = false,
   refreshKey = 0,
+  onInitialLoadComplete = null,
 }) {
   const today = new Date()
   const startingMonth = initialMonth
@@ -40,6 +41,7 @@ export default function WorkoutCalendar({
   const [nutDates, setNutDates] = useState({}) // 'YYYY-MM-DD' → true
   const [weightDates, setWeightDates] = useState({}) // 'YYYY-MM-DD' → true
   const [loading, setLoading] = useState(true)
+  const initialLoadReportedRef = useRef(false)
 
   async function loadMonth() {
     setLoading(true)
@@ -131,6 +133,12 @@ export default function WorkoutCalendar({
   useEffect(() => {
     onMonthChange?.(month)
   }, [month, onMonthChange])
+
+  useEffect(() => {
+    if (loading || initialLoadReportedRef.current) return
+    initialLoadReportedRef.current = true
+    onInitialLoadComplete?.()
+  }, [loading, onInitialLoadComplete, initialLoadReportedRef])
 
   function prevMonth() { setMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1)) }
   function nextMonth() { setMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1)) }

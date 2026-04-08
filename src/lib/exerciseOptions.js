@@ -31,6 +31,7 @@ export const SUPPORTED_MUSCLES = [
 export const CUSTOM_EQUIPMENT_OPTIONS = [
   'Bodyweight',
   'Barbell',
+  'EZ Bar',
   'Dumbbell',
   'Cable',
   'Machine',

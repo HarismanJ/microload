@@ -57,18 +57,18 @@
 | H10 | Delete one bodyweight log when multiple exist | Profile bodyweight becomes second-latest | Verified
 | H11 | Toggle kg/lbs on weight chart | Values convert correctly | Verified
 | H12 | Filter weight logs by 1w, 1m, 1y | Chart range changes accordingly | Verified
-| H13 | Tap calendar day with a workout | Day detail opens, shows exercises |
-| H14 | Tap calendar day with no workout | Nothing or empty state |
-| H15 | Check streak counter | Correct count of consecutive workout days |
-| H16 | Streak with a gap day | Resets to 0 or shows current streak |
-| H17 | Open app fresh with no weight history | Ghost line chart draws left-to-right, then erases left-to-right, then "No weight history yet" label appears |
-| H18 | Switch to Home tab (no weight history, animation already played) | No animation — only "No weight history yet" label shown |
-| H19 | Background app and return (no weight history) | Ghost chart animation plays again |
-| H20 | Open app fresh with no nutrition logged | Macro bars pulse/glow briefly |
-| H21 | Switch to Home tab (no nutrition, animation already played) | No bar glow animation on tab switch |
-| H22 | Background app and return (no nutrition) | Bar glow animation plays again |
-| H23 | Log weight — return to Home | Ghost chart no longer appears (replaced by real chart) |
-| H24 | Log food — return to Home | Bar glow no longer appears (data present) |
+| H13 | Tap calendar day with a workout | Day detail opens, shows exercises | Verified
+| H14 | Tap calendar day with no workout | Nothing or empty state | Verified
+| H15 | Check streak counter | Correct count of consecutive workout days | Verified
+| H16 | Streak with a gap day | Resets to 0 or shows current streak | ?????
+| H17 | Open app fresh with no weight history | Ghost line chart draws left-to-right, then erases left-to-right, then "No weight history yet" label appears | Verified
+| H18 | Switch to Home tab (no weight history, animation already played) | No animation — only "No weight history yet" label shown | Verified
+| H19 | Background app and return (no weight history) | Ghost chart animation plays again | Verified
+| H20 | Open app fresh with no nutrition logged | Macro bars pulse/glow briefly | Verified
+| H21 | Switch to Home tab (no nutrition, animation already played) | No bar glow animation on tab switch | Verified
+| H22 | Background app and return (no nutrition) | Bar glow animation plays again | Verified
+| H23 | Log weight — return to Home | Ghost chart no longer appears (replaced by real chart) | Verified
+| H24 | Log food — return to Home | Bar glow no longer appears (data present) | Verified
 
 ---
 

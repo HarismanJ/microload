@@ -1,15 +1,33 @@
 import { supabase } from '../lib/supabase'
-import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
+import { getCached, setCached, invalidateCache } from '../lib/cache'
+import { STRENGTHLEVEL_EXERCISES } from './strengthLevelCatalog'
 
 const EXERCISES_CACHE_KEY = 'exercises'
+
+// Purge any stale localStorage snapshots from the old fetchExercises implementation
+try {
+  const prefix = 'liftlog:startup-snapshot:exercises'
+  Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => localStorage.removeItem(k))
+} catch { /* ignore */ }
+
+// Pre-build default exercise objects from catalog (metadata only, no id yet)
+const CATALOG_DEFAULTS = STRENGTHLEVEL_EXERCISES.map(ex => ({
+  id: undefined,
+  name: ex.name,
+  category: ex.category,
+  equipment: ex.equipment,
+  user_id: null,
+  primary_muscles: ex.primaryMuscles,
+  secondary_muscles: ex.secondaryMuscles,
+}))
 
 function isMissingExerciseUserColumn(error) {
   const message = error?.message?.toLowerCase?.() || ''
   return message.includes('user_id') && message.includes('exercises')
 }
 
-export function invalidateExercisesCache() {
-  invalidateCache(EXERCISES_CACHE_KEY)
+export function invalidateExercisesCache(userId) {
+  invalidateCache(`${EXERCISES_CACHE_KEY}:${userId || 'anon'}`)
 }
 
 export async function fetchExercises(userId) {
@@ -18,39 +36,36 @@ export async function fetchExercises(userId) {
   const cached = getCached(cacheKey)
   if (cached) return cached
 
-  const snapshot = getStartupSnapshot(cacheKey)
-  if (snapshot) {
-    setCached(cacheKey, snapshot)
-    return snapshot
-  }
-
-  let query = supabase
+  // Fetch only IDs for default exercises — metadata comes from catalog
+  const { data: idRows, error: idError } = await supabase
     .from('exercises')
-    .select('*')
-    .order('name')
+    .select('id, name')
+    .is('user_id', null)
+
+  if (idError) throw idError
+
+  const idByName = new Map((idRows ?? []).map(r => [r.name, r.id]))
+  const defaultExercises = CATALOG_DEFAULTS.map(ex => ({ ...ex, id: idByName.get(ex.name) }))
+
+  let result = defaultExercises
 
   if (userId) {
-    query = query.or(`user_id.is.null,user_id.eq.${userId}`)
-  }
-
-  const { data, error } = await query
-  if (error) {
-    if (!isMissingExerciseUserColumn(error)) throw error
-
-    const fallback = await supabase
+    const { data: custom, error: customError } = await supabase
       .from('exercises')
       .select('*')
-      .order('name')
+      .eq('user_id', userId)
 
-    if (fallback.error) throw fallback.error
-    setCached(cacheKey, fallback.data)
-    setStartupSnapshot(cacheKey, fallback.data)
-    return fallback.data
+    if (customError) {
+      if (!isMissingExerciseUserColumn(customError)) throw customError
+    } else if (custom?.length) {
+      result = [...defaultExercises, ...custom]
+    }
   }
 
-  setCached(cacheKey, data)
-  setStartupSnapshot(cacheKey, data)
-  return data
+  result.sort((a, b) => a.name.localeCompare(b.name))
+
+  setCached(cacheKey, result)
+  return result
 }
 
 export async function createCustomExercise(userId, payload) {
