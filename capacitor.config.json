@@ -8,5 +8,12 @@
   },
   "android": {
     "keyboardResize": "body"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_launcher_foreground",
+      "iconColor": "#3b9eff",
+      "sound": "default"
+    }
   }
 }

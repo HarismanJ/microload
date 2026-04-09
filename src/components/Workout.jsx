@@ -2,10 +2,11 @@ import { useState, useEffect, useRef, useEffectEvent, lazy, Suspense, useMemo, u
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { createCustomExercise, fetchExercises, invalidateExercisesCache } from '../data/exercises'
+import { fetchExerciseRankStates, mapExerciseRankStates, upsertExerciseRankStates } from '../data/rankStates'
 import { calculateORM } from '../lib/orm'
 import { TEMPLATES } from '../data/templates'
 import { invalidateCache } from '../lib/cache'
-import { ANCHORS, TIERS, expandAnchors, getTierIdx, tierColor } from '../lib/strengthStandards'
+import { ANCHORS, TIERS, expandAnchors, getTierIdx, getProgress, tierColor } from '../lib/strengthStandards'
 import { ACHIEVEMENTS } from '../data/achievements'
 import LoadingSpinner from './LoadingSpinner'
 import RestWheelPicker from './RestWheelPicker'
@@ -19,6 +20,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { scheduleRestEndNotification, cancelRestNotification } from '../lib/restNotification'
+import { normalizeSearchValue, matchesSearchQuery, scoreExerciseMatch } from '../lib/exerciseSearch'
 import {
   DEFAULT_BODYWEIGHT_KG,
   MAX_REPS,
@@ -37,6 +39,7 @@ import {
   resolveWorkoutRoomIfComplete,
 } from '../lib/battles'
 import { CUSTOM_EQUIPMENT_OPTIONS, SUPPORTED_MUSCLES } from '../lib/exerciseOptions'
+import { clampContinuousTierScore, updateRollingScore } from '../lib/rollingRanks'
 import '../styles/Workout.css'
 
 const ExerciseDetail = lazy(() => import('./exercise/ExerciseDetail'))
@@ -45,39 +48,6 @@ const SOLO_WORKOUT_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000
 const SHARED_WORKOUT_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 const defaultSet = () => ({ reps: '', weight: '', done: false })
-
-function normalizeSearchValue(value = '') {
-  return String(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function matchesSearchQuery(query, ...fields) {
-  const normalizedQuery = normalizeSearchValue(query)
-  if (!normalizedQuery) return true
-
-  const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
-  const haystack = fields.map(normalizeSearchValue).filter(Boolean).join(' ')
-  const compactHaystack = haystack.replace(/\s+/g, '')
-
-  return tokens.every(token => haystack.includes(token) || compactHaystack.includes(token))
-}
-
-function scoreExerciseMatch(query, exercise) {
-  const q = normalizeSearchValue(query)
-  if (!q) return 0
-  const name = normalizeSearchValue(exercise.name)
-  const tokens = q.split(/\s+/).filter(Boolean)
-
-  if (name === q) return 100
-  if (name.startsWith(q)) return 90
-  if (name.includes(q)) return 80
-  if (tokens.every(t => name.includes(t))) return 70
-  const nameHits = tokens.filter(t => name.includes(t)).length
-  if (nameHits > 0) return 40 + nameHits * 10
-  return 10 // matched via category / equipment / muscles
-}
 
 function getWorkoutDraftStorageKey(userId, roomId = null) {
   return roomId
@@ -135,6 +105,13 @@ function getRankRatio(exercise, ormKg, bodyweightKg) {
   return exercise.equipment === 'Bodyweight'
     ? (ormKg + bodyweightKg) / bodyweightKg
     : ormKg / bodyweightKg
+}
+
+function getContinuousExerciseScore(exercise, ormKg, bodyweightKg, thresholds) {
+  const ratio = getRankRatio(exercise, ormKg, bodyweightKg)
+  const tierIdx = getTierIdx(ratio, thresholds)
+  const progress = getProgress(ratio, thresholds, tierIdx)
+  return clampContinuousTierScore(tierIdx + Math.min(0.999, progress / 100))
 }
 
 function createRestTimer(seconds, exerciseName) {
@@ -578,7 +555,7 @@ export default function Workout({
           await publishWorkoutRoomEvent(battleRoom.id, userId, 'workout_stale', {
             sessionId: expiredBattleWorkoutDraftSessionId,
           })
-          await resolveWorkoutRoomIfComplete(battleRoom.id)
+          await resolveWorkoutRoomIfComplete(battleRoom.id, userId)
         }
 
         await supabase
@@ -655,7 +632,7 @@ export default function Workout({
 
   async function resolveCurrentBattleRoom() {
     if (!battleRoom?.id) return false
-    return resolveWorkoutRoomIfComplete(battleRoom.id)
+    return resolveWorkoutRoomIfComplete(battleRoom.id, userId)
   }
 
   async function loadCurrentBattleRecap() {
@@ -1133,16 +1110,16 @@ export default function Workout({
     })
 
     const exerciseIds = exercisesOverride.map(e => e.id)
-    const [{ data: prevBests }, { data: prof }, { count: prevSessionCount }] = await Promise.all([
-      supabase.from('workout_sets').select('exercise_id, estimated_1rm, unit').eq('user_id', user.id).in('exercise_id', exerciseIds).not('estimated_1rm', 'is', null),
+    const [{ data: prevBests }, { data: prof }, { count: prevSessionCount }, rankStatesResult] = await Promise.all([
+      supabase.from('exercise_prs').select('exercise_id, best_1rm_kg').eq('user_id', user.id).in('exercise_id', exerciseIds),
       supabase.from('profiles').select('gender, bodyweight, unit_preference, lifetime_volume_kg').eq('id', user.id).single(),
       supabase.from('workout_sessions').select('*', { count: 'exact', head: true }).eq('user_id', user.id).not('finished_at', 'is', null),
+      fetchExerciseRankStates(user.id, exerciseIds),
     ])
 
     const prevOrmKg = {}
-    for (const s of prevBests || []) {
-      const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
-      prevOrmKg[s.exercise_id] = Math.max(prevOrmKg[s.exercise_id] || 0, kg)
+    for (const pr of prevBests || []) {
+      if (pr.best_1rm_kg) prevOrmKg[pr.exercise_id] = pr.best_1rm_kg
     }
 
     const newOrmKg = { ...prevOrmKg }
@@ -1151,6 +1128,13 @@ export default function Workout({
         const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
         newOrmKg[s.exercise_id] = Math.max(newOrmKg[s.exercise_id] || 0, kg)
       }
+    }
+
+    const sessionBestOrmKg = {}
+    for (const s of setsToInsert) {
+      if (s.estimated_1rm === null || s.estimated_1rm === undefined) continue
+      const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
+      sessionBestOrmKg[s.exercise_id] = Math.max(sessionBestOrmKg[s.exercise_id] || 0, kg)
     }
 
     const bwKg = getProfileBodyweightKg(prof, DEFAULT_BODYWEIGHT_KG)
@@ -1249,12 +1233,59 @@ export default function Workout({
           updated_at: new Date().toISOString(),
         }))
 
+      const nowIso = new Date().toISOString()
+      const rankStatesByExerciseId = mapExerciseRankStates(rankStatesResult.rows)
+      const activeRankStateUpserts = exercisesOverride
+        .map(ex => {
+          const sessionOrmKg = sessionBestOrmKg[ex.id]
+          if (!Number.isFinite(sessionOrmKg)) return null
+
+          const anchors = ANCHORS[genderKey]?.[ex.name]
+          if (!anchors) return null
+          const thresholds = expandAnchors(anchors)
+
+          const sessionScore = getContinuousExerciseScore(ex, sessionOrmKg, bwKg, thresholds)
+          const previousState = rankStatesByExerciseId.get(ex.id) || null
+          const previousStoredScore = Number.isFinite(previousState?.current_score)
+            ? Number(previousState.current_score)
+            : null
+
+          const previousBestOrm = prevOrmKg[ex.id]
+          const fallbackPriorScore = Number.isFinite(previousBestOrm)
+            ? getContinuousExerciseScore(ex, previousBestOrm, bwKg, thresholds)
+            : sessionScore
+          const priorScore = previousStoredScore ?? fallbackPriorScore
+
+          const nextScore = updateRollingScore({
+            priorScore,
+            priorLastRankedAt: previousState?.last_ranked_at ?? null,
+            sessionScore,
+            now: nowIso,
+          })
+
+          const previousPeakScore = Number.isFinite(previousState?.peak_score)
+            ? Number(previousState.peak_score)
+            : priorScore
+
+          return {
+            exerciseId: ex.id,
+            currentScore: nextScore,
+            peakScore: Math.max(previousPeakScore, nextScore),
+            lastRankedAt: nowIso,
+            updatedAt: nowIso,
+          }
+        })
+        .filter(Boolean)
+
       const sessionOps = [
         supabase.from('workout_sessions').update({ finished_at: new Date().toISOString(), exercise_notes: exerciseNotes }).eq('id', sessionId),
         supabase.from('profiles').update({ lifetime_volume_kg: newTotalVolumeKg }).eq('id', user.id),
       ]
       if (prUpserts.length > 0) {
         sessionOps.push(supabase.from('exercise_prs').upsert(prUpserts, { onConflict: 'user_id,exercise_id' }))
+      }
+      if (activeRankStateUpserts.length > 0) {
+        sessionOps.push(upsertExerciseRankStates(user.id, activeRankStateUpserts))
       }
       await Promise.all(sessionOps)
     }
@@ -1636,23 +1667,25 @@ export default function Workout({
     return `Saved on ${new Date(timestamp).toLocaleDateString()}`
   }
 
-  const filteredLibrary = searchQuery.trim()
-    ? exerciseLibrary
-        .filter(e =>
-          matchesSearchQuery(
-            searchQuery,
-            e.name,
-            e.category,
-            e.equipment,
-            (e.primary_muscles || []).join(' '),
-            (e.secondary_muscles || []).join(' ')
-          )
+  const filteredLibrary = useMemo(() => {
+    if (!searchQuery.trim()) return exerciseLibrary
+
+    return exerciseLibrary
+      .filter(e =>
+        matchesSearchQuery(
+          searchQuery,
+          e.name,
+          e.category,
+          e.equipment,
+          (e.primary_muscles || []).join(' '),
+          (e.secondary_muscles || []).join(' ')
         )
-        .sort((a, b) => {
-          const diff = scoreExerciseMatch(searchQuery, b) - scoreExerciseMatch(searchQuery, a)
-          return diff !== 0 ? diff : a.name.length - b.name.length
-        })
-    : exerciseLibrary
+      )
+      .sort((a, b) => {
+        const diff = scoreExerciseMatch(searchQuery, b) - scoreExerciseMatch(searchQuery, a)
+        return diff !== 0 ? diff : a.name.length - b.name.length
+      })
+  }, [exerciseLibrary, searchQuery])
 
   const addSet = (exId) => {
     setWorkoutExercises(prev => prev.map(ex => {

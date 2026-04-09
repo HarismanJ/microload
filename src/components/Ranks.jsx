@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
 import { calculateORM } from '../lib/orm'
 import { fetchExercises } from '../data/exercises'
+import { fetchExerciseRankStates, mapExerciseRankStates, upsertExerciseRankStates } from '../data/rankStates'
 import RankBadge from './RankBadge'
 import LoadingSpinner from './LoadingSpinner'
 import {
@@ -19,6 +20,17 @@ import {
   isRepsWithinInputRange,
   isWeightWithinInputRange,
 } from '../lib/liftMath'
+import {
+  ACTIVE_RANK_MODE,
+  ALL_TIME_RANK_MODE,
+  applyInactivityDecay,
+  clampContinuousTierScore,
+  getContinuousTierScore,
+  inferRatioFromScore,
+  resolveTierFromScore,
+  updateRollingScore,
+} from '../lib/rollingRanks'
+import { matchesSearchQuery, scoreExerciseMatch } from '../lib/exerciseSearch'
 import '../styles/Ranks.css'
 
 const ExerciseDetail = lazy(() => import('./exercise/ExerciseDetail'))
@@ -131,42 +143,10 @@ const MUSCLE_GROUPS = [
 ]
 const MUSCLE_CHART_COLORS = TIER_GROUPS.slice(1).map(group => TIER_COLORS[group])
 const MUSCLE_GROUP_KEYS = new Set(MUSCLE_GROUPS.map(group => group.key))
+const RANK_DISPLAY_MODE_STORAGE_KEY = 'ranks:display-mode'
 
 function lbsToKg(v) { return v * 0.453592 }
 function kgToLbs(v) { return v * 2.20462 }
-
-function normalizeSearchValue(value = '') {
-  return String(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function matchesSearchQuery(query, ...fields) {
-  const normalizedQuery = normalizeSearchValue(query)
-  if (!normalizedQuery) return true
-
-  const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
-  const haystack = fields.map(normalizeSearchValue).filter(Boolean).join(' ')
-  const compactHaystack = haystack.replace(/\s+/g, '')
-
-  return tokens.every(token => haystack.includes(token) || compactHaystack.includes(token))
-}
-
-function scoreExerciseMatch(query, exercise) {
-  const q = normalizeSearchValue(query)
-  if (!q) return 0
-  const name = normalizeSearchValue(exercise.name)
-  const tokens = q.split(/\s+/).filter(Boolean)
-
-  if (name === q) return 100
-  if (name.startsWith(q)) return 90
-  if (name.includes(q)) return 80
-  if (tokens.every(t => name.includes(t))) return 70
-  const nameHits = tokens.filter(t => name.includes(t)).length
-  if (nameHits > 0) return 40 + nameHits * 10
-  return 10
-}
 
 function getLiftRank(lift, ormKg, bodyweightKg, gender) {
   const anchors = ANCHORS[gender]?.[lift.name]
@@ -194,22 +174,32 @@ function getLiftRank(lift, ormKg, bodyweightKg, gender) {
   }
 }
 
-function getContinuousTierScore(rank) {
-  return rank.tierIdx + Math.min(0.999, (rank.progress ?? 0) / 100)
+function getLiftScoreFromOrm(lift, ormKg, bodyweightKg, thresholds = []) {
+  if (!Number.isFinite(ormKg) || !bodyweightKg || !thresholds.length) return null
+  const ratio = lift.equipment === 'Bodyweight'
+    ? (ormKg + bodyweightKg) / bodyweightKg
+    : ormKg / bodyweightKg
+  const tierIdx = getTierIdx(ratio, thresholds)
+  const progress = getProgress(ratio, thresholds, tierIdx)
+  return clampContinuousTierScore(tierIdx + Math.min(0.999, progress / 100))
 }
 
-function resolveTierFromScore(score) {
-  const cappedScore = Math.max(0, Math.min(TIERS.length - 0.001, score))
-  const tierIdx = Math.floor(cappedScore)
-  const tier = TIERS[tierIdx]
-  const isMax = tierIdx === TIERS.length - 1
+function getRankFromScore(lift, score, thresholds = []) {
+  const resolved = resolveTierFromScore(score)
   return {
-    tierIdx,
-    tier,
-    color: tierColor(tier),
-    progress: isMax ? 100 : Math.round((cappedScore - tierIdx) * 100),
-    isMax,
-    nextTier: isMax ? null : TIERS[tierIdx + 1],
+    ...resolved,
+    thresholds,
+    isBW: lift.equipment === 'Bodyweight',
+    ratio: inferRatioFromScore(score, thresholds),
+  }
+}
+
+function readRankDisplayMode() {
+  try {
+    const value = localStorage.getItem(RANK_DISPLAY_MODE_STORAGE_KEY)
+    return value === ALL_TIME_RANK_MODE ? ALL_TIME_RANK_MODE : ACTIVE_RANK_MODE
+  } catch {
+    return ACTIVE_RANK_MODE
   }
 }
 
@@ -342,6 +332,7 @@ function TierSwiper({ thresholds, isBW, bodyweightKg, currentTierIdx, fmt, useLb
 export default function Ranks() {
   const [profile, setProfile] = useState(null)
   const [lifts, setLifts] = useState([])
+  const [rankDisplayMode, setRankDisplayMode] = useState(readRankDisplayMode)
   const [loading, setLoading] = useState(true)
   const [muscleLoadingActive, setMuscleLoadingActive] = useState(true)
   const [muscleRevealActive, setMuscleRevealActive] = useState(false)
@@ -355,6 +346,14 @@ export default function Ranks() {
   const [topSetSaving, setTopSetSaving] = useState(false)
   const [topSetError, setTopSetError] = useState('')
   const [topSetNotice, setTopSetNotice] = useState('')
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RANK_DISPLAY_MODE_STORAGE_KEY, rankDisplayMode)
+    } catch {
+      // Ignore storage issues and keep in-memory preference.
+    }
+  }, [rankDisplayMode])
 
   async function saveBW() {
     const val = parseFloat(bwInput)
@@ -405,13 +404,14 @@ export default function Ranks() {
       const anchorNames = Object.keys(ANCHORS.male)
       const anchorNameSet = new Set(anchorNames)
 
-      const [{ data: profileData }, { data: prsData }, exerciseRows] = await Promise.all([
+      const [{ data: profileData }, { data: prsData }, exerciseRows, rankStatesResult] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase
           .from('exercise_prs')
           .select('exercise_id, best_1rm_kg')
           .eq('user_id', user.id),
         fetchExercises(user.id),
+        fetchExerciseRankStates(user.id),
       ])
 
       // Best ORM per exercise name (from cached PRs table)
@@ -423,6 +423,7 @@ export default function Ranks() {
         if (!exerciseName) return
         liftMap[exerciseName] = { ormKg: pr.best_1rm_kg, exerciseId: pr.exercise_id }
       })
+      const rankStateByExerciseId = mapExerciseRankStates(rankStatesResult.rows)
 
       const preferredExercisesByName = new Map()
       for (const ex of exerciseRows ?? []) {
@@ -446,6 +447,9 @@ export default function Ranks() {
           ormKg: liftMap[ex.name]?.ormKg ?? null,
           primary_muscles: ex.primary_muscles || [],
           secondary_muscles: ex.secondary_muscles || [],
+          activeCurrentScore: rankStateByExerciseId.get(ex.id)?.current_score ?? null,
+          activePeakScore: rankStateByExerciseId.get(ex.id)?.peak_score ?? null,
+          activeLastRankedAt: rankStateByExerciseId.get(ex.id)?.last_ranked_at ?? null,
         }))
 
       const ranksData = { profile: profileData, lifts: allLifts }
@@ -488,16 +492,41 @@ export default function Ranks() {
     ? (useLbs ? lbsToKg(profile.bodyweight) : profile.bodyweight)
     : null
   const missingBodyweight = profileLoaded && (profile.bodyweight === null || profile.bodyweight === undefined)
+  const isActiveMode = rankDisplayMode === ACTIVE_RANK_MODE
+  const rankNow = Date.now()
 
   const liftsWithDetails = lifts.map(lift => {
     const anchors = ANCHORS[gender]?.[lift.name] ?? null
-    const cardRank = lift.ormKg !== null && bodyweightKg && anchors
+    const thresholds = anchors ? expandAnchors(anchors) : null
+    const allTimeCardRank = lift.ormKg !== null && bodyweightKg && anchors
       ? getLiftRank(lift, lift.ormKg, bodyweightKg, gender)
       : null
+
+    let activeScore = null
+    if (bodyweightKg && thresholds) {
+      if (Number.isFinite(lift.activeCurrentScore)) {
+        activeScore = applyInactivityDecay(
+          Number(lift.activeCurrentScore),
+          lift.activeLastRankedAt,
+          rankNow
+        ).score
+      } else if (allTimeCardRank) {
+        activeScore = getContinuousTierScore(allTimeCardRank)
+      }
+    }
+
+    const activeCardRank = activeScore !== null && thresholds
+      ? getRankFromScore(lift, activeScore, thresholds)
+      : null
+
     return {
       ...lift,
       anchors,
-      cardRank,
+      thresholds,
+      allTimeCardRank,
+      activeCardRank,
+      activeScore,
+      cardRank: isActiveMode ? activeCardRank : allTimeCardRank,
     }
   })
 
@@ -560,7 +589,7 @@ export default function Ranks() {
       return a.name.localeCompare(b.name)
     })
 
-  const editingLift = lifts.find(lift => lift.exerciseId === editingLiftId) ?? null
+  const editingLift = liftsWithDetails.find(lift => lift.exerciseId === editingLiftId) ?? null
   const enteredWeight = Number.parseFloat(topSetForm.weight)
   const enteredReps = Number.parseInt(topSetForm.reps, 10)
   const weightReady = editingLift
@@ -578,9 +607,33 @@ export default function Ranks() {
   const previewOrmKg = previewOrm === null
     ? null
     : useLbs ? lbsToKg(previewOrm) : previewOrm
-  const previewRank = editingLift && previewOrmKg !== null
+  const previewAllTimeRank = editingLift && previewOrmKg !== null
     ? getLiftRank(editingLift, previewOrmKg, bodyweightKg, gender)
     : null
+  const previewActiveRank = (() => {
+    if (!editingLift || previewOrmKg === null || !editingLift.thresholds || !bodyweightKg) return null
+
+    const sessionScore = getLiftScoreFromOrm(editingLift, previewOrmKg, bodyweightKg, editingLift.thresholds)
+    if (sessionScore === null) return null
+
+    const currentActiveScore = Number.isFinite(editingLift.activeCurrentScore)
+      ? applyInactivityDecay(
+          Number(editingLift.activeCurrentScore),
+          editingLift.activeLastRankedAt,
+          rankNow
+        ).score
+      : (editingLift.allTimeCardRank ? getContinuousTierScore(editingLift.allTimeCardRank) : sessionScore)
+
+    const nextScore = updateRollingScore({
+      priorScore: currentActiveScore,
+      priorLastRankedAt: editingLift.activeLastRankedAt,
+      sessionScore,
+      now: rankNow,
+    })
+
+    return getRankFromScore(editingLift, nextScore, editingLift.thresholds)
+  })()
+  const previewRank = isActiveMode ? previewActiveRank : previewAllTimeRank
   const improvesTopSet = editingLift && previewOrmKg !== null
     ? editingLift.ormKg === null || previewOrmKg > editingLift.ormKg + 0.01
     : false
@@ -633,24 +686,71 @@ export default function Ranks() {
       return
     }
 
+    const nowIso = new Date().toISOString()
+
     await supabase.from('exercise_prs').upsert({
       user_id: user.id,
       exercise_id: lift.exerciseId,
       best_1rm_kg: estimated1RMKg,
-      updated_at: new Date().toISOString(),
+      updated_at: nowIso,
     }, { onConflict: 'user_id,exercise_id' })
+
+    let nextActiveScore = null
+    let nextActivePeakScore = null
+    if (bodyweightKg && lift.thresholds) {
+      const sessionScore = getLiftScoreFromOrm(lift, estimated1RMKg, bodyweightKg, lift.thresholds)
+      if (sessionScore !== null) {
+        const currentActiveScore = Number.isFinite(lift.activeCurrentScore)
+          ? applyInactivityDecay(
+              Number(lift.activeCurrentScore),
+              lift.activeLastRankedAt,
+              nowIso
+            ).score
+          : (lift.allTimeCardRank ? getContinuousTierScore(lift.allTimeCardRank) : sessionScore)
+
+        nextActiveScore = updateRollingScore({
+          priorScore: currentActiveScore,
+          priorLastRankedAt: lift.activeLastRankedAt,
+          sessionScore,
+          now: nowIso,
+        })
+
+        const previousPeak = Number.isFinite(lift.activePeakScore)
+          ? Number(lift.activePeakScore)
+          : currentActiveScore
+        nextActivePeakScore = Math.max(previousPeak, nextActiveScore)
+
+        await upsertExerciseRankStates(user.id, [{
+          exerciseId: lift.exerciseId,
+          currentScore: nextActiveScore,
+          peakScore: nextActivePeakScore,
+          lastRankedAt: nowIso,
+          updatedAt: nowIso,
+        }])
+      }
+    }
 
     invalidateCache('ranks', 'profile', 'achievements')
     setLifts(prev => prev.map(item => (
       item.exerciseId === lift.exerciseId
-        ? { ...item, ormKg: Math.max(item.ormKg ?? 0, estimated1RMKg) }
+        ? {
+            ...item,
+            ormKg: Math.max(item.ormKg ?? 0, estimated1RMKg),
+            activeCurrentScore: nextActiveScore ?? item.activeCurrentScore,
+            activePeakScore: nextActivePeakScore ?? item.activePeakScore,
+            activeLastRankedAt: nextActiveScore !== null ? nowIso : item.activeLastRankedAt,
+          }
         : item
     )))
 
-    const savedRank = getLiftRank(lift, estimated1RMKg, bodyweightKg, gender)
+    const savedAllTimeRank = getLiftRank(lift, estimated1RMKg, bodyweightKg, gender)
+    const savedActiveRank = nextActiveScore !== null && lift.thresholds
+      ? getRankFromScore(lift, nextActiveScore, lift.thresholds)
+      : null
+    const savedRank = isActiveMode ? (savedActiveRank || savedAllTimeRank) : savedAllTimeRank
     setTopSetNotice(
       savedRank
-        ? `${lift.name} saved. Current rank: ${savedRank.tier}.`
+        ? `${lift.name} saved. ${isActiveMode ? 'Active' : 'All-time'} rank: ${savedRank.tier}.`
         : `${lift.name} saved as your top set.`
     )
     setTopSetSaving(false)
@@ -660,7 +760,11 @@ export default function Ranks() {
   if (detailExerciseId) {
     return (
       <Suspense fallback={<LoadingSpinner fullPage />}>
-        <ExerciseDetail exerciseId={detailExerciseId} onBack={() => setDetailExerciseId(null)} />
+        <ExerciseDetail
+          exerciseId={detailExerciseId}
+          rankMode={rankDisplayMode}
+          onBack={() => setDetailExerciseId(null)}
+        />
       </Suspense>
     )
   }
@@ -669,7 +773,28 @@ export default function Ranks() {
     <div className="ranks-screen">
       <div className="ranks-header">
         <div className="ranks-title">Strength Ranks</div>
-        <div className="ranks-subtitle">Your 1RM relative to bodyweight · {TIERS.length} tiers · {lifts.length} exercises</div>
+        <div className="ranks-subtitle">
+          {isActiveMode
+            ? 'Current ranks track recent form with rolling updates and a 21-day inactivity grace period.'
+            : 'All-time ranks are based on your best recorded 1RM for each exercise.'}
+          {' '}· {TIERS.length} tiers · {lifts.length} exercises
+        </div>
+        <div className="ranks-mode-toggle" role="tablist" aria-label="Rank display mode">
+          <button
+            type="button"
+            className={`ranks-mode-btn ${rankDisplayMode === ACTIVE_RANK_MODE ? 'active' : ''}`}
+            onClick={() => setRankDisplayMode(ACTIVE_RANK_MODE)}
+          >
+            Current
+          </button>
+          <button
+            type="button"
+            className={`ranks-mode-btn ${rankDisplayMode === ALL_TIME_RANK_MODE ? 'active' : ''}`}
+            onClick={() => setRankDisplayMode(ALL_TIME_RANK_MODE)}
+          >
+            All-Time
+          </button>
+        </div>
       </div>
 
       {topSetNotice && (
@@ -856,7 +981,7 @@ export default function Ranks() {
       ) : (
         <div className="lift-cards">
           {filteredLifts.map(lift => {
-            const thresholds = lift.anchors ? expandAnchors(lift.anchors) : null
+            const thresholds = lift.thresholds
             const isLogged = lift.ormKg !== null
             const cardRank = lift.cardRank
             const isEditing = editingLiftId === lift.exerciseId

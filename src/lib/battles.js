@@ -2,6 +2,8 @@ import { supabase } from './supabase'
 import { calculateORM } from './orm'
 import { DEFAULT_BODYWEIGHT_KG, getSetVolumeKg, toKg } from './liftMath'
 
+const BATTLE_HEAD_TO_HEAD_TABLE = 'battle_head_to_head'
+
 async function fetchProfilesByIds(ids) {
   if (!ids.length) return {}
 
@@ -44,6 +46,96 @@ function compareMetric(yourValue, opponentValue) {
   if (yourValue === null || opponentValue === null) return null
   if (Math.abs(yourValue - opponentValue) <= 0.01) return 'tie'
   return yourValue > opponentValue ? 'you' : 'opponent'
+}
+
+function isMissingBattleHeadToHeadTable(error) {
+  const code = error?.code || ''
+  const message = error?.message?.toLowerCase?.() || ''
+  return (
+    code === '42P01'
+    || (message.includes('battle_head_to_head') && message.includes('does not exist'))
+  )
+}
+
+function createEmptyHeadToHeadSummary() {
+  return {
+    wins: 0,
+    losses: 0,
+    ties: 0,
+    total: 0,
+    lastBattleAt: null,
+    lastOutcome: null,
+  }
+}
+
+function normalizeStoredHeadToHeadRow(row) {
+  return {
+    wins: Number(row?.wins) || 0,
+    losses: Number(row?.losses) || 0,
+    ties: Number(row?.ties) || 0,
+    total: Number(row?.total) || 0,
+    lastBattleAt: row?.last_battle_at || null,
+    lastOutcome: row?.last_outcome || null,
+  }
+}
+
+async function loadStoredHeadToHeadSummaries(userId, opponentIds) {
+  if (!userId || !opponentIds?.length) {
+    return { rowsByOpponent: {}, missingTable: false }
+  }
+
+  const { data, error } = await supabase
+    .from(BATTLE_HEAD_TO_HEAD_TABLE)
+    .select('opponent_id, wins, losses, ties, total, last_battle_at, last_outcome')
+    .eq('user_id', userId)
+    .in('opponent_id', opponentIds)
+
+  if (error) {
+    if (isMissingBattleHeadToHeadTable(error)) {
+      return { rowsByOpponent: {}, missingTable: true }
+    }
+    throw error
+  }
+
+  const rowsByOpponent = {}
+  for (const row of data ?? []) {
+    if (!row?.opponent_id) continue
+    rowsByOpponent[row.opponent_id] = normalizeStoredHeadToHeadRow(row)
+  }
+
+  return { rowsByOpponent, missingTable: false }
+}
+
+async function upsertHeadToHeadSummaries(userId, summariesByOpponent = {}) {
+  const payload = Object.entries(summariesByOpponent)
+    .filter(([opponentId]) => Boolean(opponentId))
+    .map(([opponentId, summary]) => ({
+      user_id: userId,
+      opponent_id: opponentId,
+      wins: Number(summary?.wins) || 0,
+      losses: Number(summary?.losses) || 0,
+      ties: Number(summary?.ties) || 0,
+      total: Number(summary?.total) || 0,
+      last_battle_at: summary?.lastBattleAt || null,
+      last_outcome: summary?.lastOutcome || null,
+    }))
+
+  if (!userId || payload.length === 0) {
+    return { missingTable: false }
+  }
+
+  const { error } = await supabase
+    .from(BATTLE_HEAD_TO_HEAD_TABLE)
+    .upsert(payload, { onConflict: 'user_id,opponent_id' })
+
+  if (error) {
+    if (isMissingBattleHeadToHeadTable(error)) {
+      return { missingTable: true }
+    }
+    throw error
+  }
+
+  return { missingTable: false }
 }
 
 async function findPendingBattleInviteBetween(userA, userB) {
@@ -133,13 +225,18 @@ export async function loadLatestDeclinedBattleInvite(userId) {
   }
 }
 
-export async function loadHeadToHeadByOpponent(userId, opponentIds) {
+async function loadHeadToHeadByOpponentLegacy(userId, opponentIds) {
   if (!userId || !opponentIds?.length) return {}
+
+  const pairClauses = opponentIds.flatMap(opponentId => [
+    `and(challenger_id.eq.${userId},challenged_id.eq.${opponentId})`,
+    `and(challenger_id.eq.${opponentId},challenged_id.eq.${userId})`,
+  ])
 
   const { data, error } = await supabase
     .from('workout_rooms')
     .select('id, challenger_id, challenged_id, finalized_at, ended_at, created_at, status')
-    .or(`challenger_id.eq.${userId},challenged_id.eq.${userId}`)
+    .or(pairClauses.join(','))
     .in('status', ['finished', 'cancelled'])
     .not('finalized_at', 'is', null)
     .order('finalized_at', { ascending: false })
@@ -192,6 +289,45 @@ export async function loadHeadToHeadByOpponent(userId, opponentIds) {
   }
 
   return headToHead
+}
+
+async function rebuildHeadToHeadSummaries(userId, opponentIds) {
+  const uniqueOpponentIds = [...new Set((opponentIds || []).filter(Boolean))]
+  if (!userId || uniqueOpponentIds.length === 0) {
+    return { summaries: {}, missingTable: false }
+  }
+
+  const legacyHeadToHead = await loadHeadToHeadByOpponentLegacy(userId, uniqueOpponentIds)
+  const rebuilt = Object.fromEntries(
+    uniqueOpponentIds.map(opponentId => [
+      opponentId,
+      legacyHeadToHead[opponentId] || createEmptyHeadToHeadSummary(),
+    ])
+  )
+
+  const { missingTable } = await upsertHeadToHeadSummaries(userId, rebuilt)
+  return { summaries: rebuilt, missingTable }
+}
+
+export async function loadHeadToHeadByOpponent(userId, opponentIds) {
+  const uniqueOpponentIds = [...new Set((opponentIds || []).filter(Boolean))]
+  if (!userId || uniqueOpponentIds.length === 0) return {}
+
+  const stored = await loadStoredHeadToHeadSummaries(userId, uniqueOpponentIds)
+  if (stored.missingTable) {
+    return loadHeadToHeadByOpponentLegacy(userId, uniqueOpponentIds)
+  }
+
+  const missingOpponentIds = uniqueOpponentIds.filter(opponentId => !(opponentId in stored.rowsByOpponent))
+  if (!missingOpponentIds.length) {
+    return stored.rowsByOpponent
+  }
+
+  const { summaries: rebuilt } = await rebuildHeadToHeadSummaries(userId, missingOpponentIds)
+  return {
+    ...stored.rowsByOpponent,
+    ...rebuilt,
+  }
 }
 
 export async function loadActiveBattleRoom(userId) {
@@ -250,6 +386,7 @@ export async function loadUnseenBattleResult(userId) {
   const room = data?.[0]
   if (!room) return null
 
+  await syncHeadToHeadSummaryForRoom(room.id, userId)
   return loadBattleRecap(room.id, userId)
 }
 
@@ -359,7 +496,7 @@ export async function loadOpponentEvents(roomId, userId, limit = 100) {
   return data ?? []
 }
 
-export async function resolveWorkoutRoomIfComplete(roomId) {
+export async function resolveWorkoutRoomIfComplete(roomId, userId = null) {
   const { data, error } = await supabase
     .from('workout_room_events')
     .select('user_id, event_type, created_at')
@@ -385,6 +522,7 @@ export async function resolveWorkoutRoomIfComplete(roomId) {
       .eq('id', roomId)
 
     if (updateError) throw updateError
+    if (userId) await syncHeadToHeadSummaryForRoom(roomId, userId)
     return true
   }
 
@@ -399,6 +537,7 @@ export async function resolveWorkoutRoomIfComplete(roomId) {
       .eq('id', roomId)
 
     if (updateError) throw updateError
+    if (userId) await syncHeadToHeadSummaryForRoom(roomId, userId)
     return true
   }
 
@@ -416,10 +555,37 @@ export async function resolveWorkoutRoomIfComplete(roomId) {
       .eq('id', roomId)
 
     if (updateError) throw updateError
+    if (userId) await syncHeadToHeadSummaryForRoom(roomId, userId)
     return true
   }
 
   return false
+}
+
+export async function syncHeadToHeadSummaryForRoom(roomId, userId) {
+  if (!roomId || !userId) return { missingTable: false }
+
+  const { data: room, error } = await supabase
+    .from('workout_rooms')
+    .select('challenger_id, challenged_id, status')
+    .eq('id', roomId)
+    .single()
+
+  if (error) throw error
+  if (!room || (room.status !== 'finished' && room.status !== 'cancelled')) {
+    return { missingTable: false }
+  }
+
+  const opponentId = room.challenger_id === userId
+    ? room.challenged_id
+    : room.challenged_id === userId
+      ? room.challenger_id
+      : null
+
+  if (!opponentId) return { missingTable: false }
+
+  const { missingTable } = await rebuildHeadToHeadSummaries(userId, [opponentId])
+  return { missingTable }
 }
 
 export async function loadBattleRecap(roomId, userId) {

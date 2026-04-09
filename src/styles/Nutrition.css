@@ -1453,6 +1453,275 @@
   padding: 4px 0;
 }
 
+.cf-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.cf-mode-toggle-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: background 0.26s ease, color 0.26s ease, border-color 0.26s ease, transform 0.26s ease;
+}
+
+.cf-mode-toggle-btn.active,
+.cf-mode-toggle-btn:hover {
+  background: var(--blue-dim);
+  border-color: rgba(59, 158, 255, 0.34);
+  color: var(--blue);
+}
+
+.cf-mode-toggle-btn:hover {
+  transform: translateY(-1px);
+}
+
+.nut-search-item.selected {
+  border-bottom-color: color-mix(in srgb, var(--blue) 24%, var(--border));
+  background: linear-gradient(180deg, rgba(59, 158, 255, 0.08), rgba(59, 158, 255, 0.02));
+  border-radius: 12px;
+  padding-inline: 12px;
+}
+
+.cf-search-results {
+  display: flex;
+  flex-direction: column;
+}
+
+.cf-ingredient-builder {
+  margin-top: 8px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--border));
+  background: linear-gradient(180deg, rgba(59, 158, 255, 0.12), rgba(59, 158, 255, 0.03));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cf-ingredient-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.cf-ingredient-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.cf-ingredient-brand {
+  font-size: 12px;
+  color: var(--blue);
+  margin-top: 2px;
+}
+
+.cf-ingredient-serving {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cf-amount-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.cf-amount-toggle-btn {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 9px 12px;
+  cursor: pointer;
+  transition: background 0.26s ease, color 0.26s ease, border-color 0.26s ease, transform 0.26s ease;
+}
+
+.cf-amount-toggle-btn.active,
+.cf-amount-toggle-btn:hover {
+  background: rgba(59, 158, 255, 0.16);
+  border-color: rgba(59, 158, 255, 0.32);
+  color: var(--blue);
+}
+
+.cf-amount-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cf-amount-row .rtp-btn {
+  flex-shrink: 0;
+}
+
+.cf-ingredient-preview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cf-ingredient-preview > div {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.cf-recipe-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cf-summary-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cf-summary-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.cf-summary-calories {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.cf-summary-calories span {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.cf-summary-macros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cf-recipe-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cf-recipe-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.cf-recipe-item-main {
+  min-width: 0;
+}
+
+.cf-recipe-item-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cf-recipe-item-meta {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cf-remove-btn {
+  flex-shrink: 0;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+  border-radius: 999px;
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 11px;
+  cursor: pointer;
+  transition: transform 0.24s ease, background 0.24s ease, border-color 0.24s ease;
+}
+
+.cf-remove-btn:hover {
+  transform: translateY(-1px);
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.24);
+}
+
+.cf-recipe-micros {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cf-recipe-micro-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.cf-recipe-micro-row:last-child {
+  border-bottom: none;
+}
+
+@media (max-width: 640px) {
+  .cf-row,
+  .cf-ingredient-header,
+  .cf-amount-row,
+  .cf-recipe-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cf-ingredient-serving,
+  .cf-remove-btn {
+    align-self: flex-start;
+  }
+
+  .cf-ingredient-preview,
+  .cf-recipe-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Goals Panel ─────────────────────────────────────── */
 
 .nut-goals-btn {

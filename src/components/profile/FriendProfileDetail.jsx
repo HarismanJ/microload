@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Model from 'react-body-highlighter'
 import { supabase } from '../../lib/supabase'
 import { fetchExercises } from '../../data/exercises'
+import { fetchExerciseRankStates, mapExerciseRankStates } from '../../data/rankStates'
 import RankBadge from '../RankBadge'
 import LoadingSpinner from '../LoadingSpinner'
 import {
@@ -15,11 +16,20 @@ import {
   getProgress,
 } from '../../lib/strengthStandards'
 import { convertWeight } from '../../lib/liftMath'
+import {
+  ACTIVE_RANK_MODE,
+  ALL_TIME_RANK_MODE,
+  applyInactivityDecay,
+  getContinuousTierScore,
+  inferRatioFromScore,
+  resolveTierFromScore,
+} from '../../lib/rollingRanks'
 import '../../styles/Ranks.css'
 import '../../styles/Profile.css'
 
 const FRIEND_TIER_GROUPS = ['Unranked', 'Iron', 'Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond', 'Master', 'Grandmaster', 'Elite']
 const SECONDARY_MUSCLE_WEIGHT = 0.35
+const RANK_DISPLAY_MODE_STORAGE_KEY = 'ranks:display-mode'
 const MUSCLE_GROUPS = [
   { key: 'chest', label: 'Chest', muscles: ['Chest', 'Upper Chest', 'Lower Chest'], chartMuscles: ['chest'] },
   { key: 'front-deltoids', label: 'Shoulders', muscles: ['Front Delts', 'Lateral Delts', 'Shoulders'], chartMuscles: ['front-deltoids', 'back-deltoids'] },
@@ -76,22 +86,22 @@ function getLiftRank(lift, ormKg, bodyweightKg, gender) {
   }
 }
 
-function getContinuousTierScore(rank) {
-  return rank.tierIdx + Math.min(0.999, (rank.progress ?? 0) / 100)
+function getRankFromScore(lift, score, thresholds = []) {
+  const resolved = resolveTierFromScore(score)
+  return {
+    ...resolved,
+    thresholds,
+    isBW: lift.equipment === 'Bodyweight',
+    ratio: inferRatioFromScore(score, thresholds),
+  }
 }
 
-function resolveTierFromScore(score) {
-  const cappedScore = Math.max(0, Math.min(TIERS.length - 0.001, score))
-  const tierIdx = Math.floor(cappedScore)
-  const tier = TIERS[tierIdx]
-  const isMax = tierIdx === TIERS.length - 1
-  return {
-    tierIdx,
-    tier,
-    color: tierColor(tier),
-    progress: isMax ? 100 : Math.round((cappedScore - tierIdx) * 100),
-    isMax,
-    nextTier: isMax ? null : TIERS[tierIdx + 1],
+function readRankDisplayMode() {
+  try {
+    const value = localStorage.getItem(RANK_DISPLAY_MODE_STORAGE_KEY)
+    return value === ALL_TIME_RANK_MODE ? ALL_TIME_RANK_MODE : ACTIVE_RANK_MODE
+  } catch {
+    return ACTIVE_RANK_MODE
   }
 }
 
@@ -194,6 +204,7 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
       .eq('user_id', userId)
       .order('logged_at', { ascending: false })
       .limit(1),
+    fetchExerciseRankStates(userId),
   ]
 
   if (includeSessions) {
@@ -207,7 +218,7 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
     )
   }
 
-  const [profileRes, prsRes, exerciseRows, weightLogRes, sessionsRes] = await Promise.all(queries)
+  const [profileRes, prsRes, exerciseRows, weightLogRes, rankStatesResult, sessionsRes] = await Promise.all(queries)
   if (profileRes.error) throw profileRes.error
   if (prsRes.error) throw prsRes.error
   if (sessionsRes?.error) throw sessionsRes.error
@@ -221,6 +232,7 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
   }
 
   const exerciseById = new Map((exerciseRows ?? []).map(ex => [ex.id, ex]))
+  const rankStateByExerciseId = mapExerciseRankStates(rankStatesResult.rows)
   const liftMap = {}
   prsRes.data?.forEach(pr => {
     const exercise = exerciseById.get(pr.exercise_id)
@@ -251,6 +263,9 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
       ormKg: liftMap[ex.name]?.ormKg ?? null,
       primary_muscles: ex.primary_muscles || [],
       secondary_muscles: ex.secondary_muscles || [],
+      activeCurrentScore: rankStateByExerciseId.get(ex.id)?.current_score ?? null,
+      activePeakScore: rankStateByExerciseId.get(ex.id)?.peak_score ?? null,
+      activeLastRankedAt: rankStateByExerciseId.get(ex.id)?.last_ranked_at ?? null,
     }))
     .filter(lift => lift.ormKg !== null)
 
@@ -261,13 +276,43 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
   }
 }
 
-function buildLiftDetails(lifts, bodyweightKg, gender) {
+function buildLiftDetails(lifts, bodyweightKg, gender, rankDisplayMode) {
+  const rankNow = Date.now()
   return lifts.map(lift => ({
     ...lift,
-    cardRank: lift.ormKg !== null && bodyweightKg
+    anchors: ANCHORS[gender]?.[lift.name] ?? null,
+  })).map(lift => {
+    const thresholds = lift.anchors ? expandAnchors(lift.anchors) : null
+    const allTimeCardRank = lift.ormKg !== null && bodyweightKg && lift.anchors
       ? getLiftRank(lift, lift.ormKg, bodyweightKg, gender)
-      : null,
-  }))
+      : null
+
+    let activeScore = null
+    if (bodyweightKg && thresholds) {
+      if (Number.isFinite(lift.activeCurrentScore)) {
+        activeScore = applyInactivityDecay(
+          Number(lift.activeCurrentScore),
+          lift.activeLastRankedAt,
+          rankNow
+        ).score
+      } else if (allTimeCardRank) {
+        activeScore = getContinuousTierScore(allTimeCardRank)
+      }
+    }
+
+    const activeCardRank = activeScore !== null && thresholds
+      ? getRankFromScore(lift, activeScore, thresholds)
+      : null
+
+    return {
+      ...lift,
+      thresholds,
+      allTimeCardRank,
+      activeScore,
+      activeCardRank,
+      cardRank: rankDisplayMode === ACTIVE_RANK_MODE ? activeCardRank : allTimeCardRank,
+    }
+  });
 }
 
 function buildMuscleChartData(muscleGroupRanks) {
@@ -349,11 +394,20 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
   const [workoutStreak, setWorkoutStreak] = useState(0)
   const [selfProfile, setSelfProfile] = useState(null)
   const [selfLifts, setSelfLifts] = useState([])
+  const [rankDisplayMode, setRankDisplayMode] = useState(readRankDisplayMode)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [selectedMuscleGroup, setSelectedMuscleGroup] = useState(null)
   const [compareMode, setCompareMode] = useState(false)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(RANK_DISPLAY_MODE_STORAGE_KEY, rankDisplayMode)
+    } catch {
+      // Keep the current in-memory preference if storage is unavailable.
+    }
+  }, [rankDisplayMode])
 
   useEffect(() => {
     let cancelled = false
@@ -410,14 +464,15 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
     ? convertWeight(selfProfile.bodyweight, selfProfile?.unit_preference || 'kg', 'kg')
     : null
   const canCompare = Boolean(selfProfile?.id && selfProfile.id !== friendId)
+  const isActiveMode = rankDisplayMode === ACTIVE_RANK_MODE
 
   const liftsWithDetails = useMemo(
-    () => buildLiftDetails(lifts, bodyweightKg, gender),
-    [bodyweightKg, gender, lifts]
+    () => buildLiftDetails(lifts, bodyweightKg, gender, rankDisplayMode),
+    [bodyweightKg, gender, lifts, rankDisplayMode]
   )
   const selfLiftsWithDetails = useMemo(
-    () => buildLiftDetails(selfLifts, selfBodyweightKg, selfGender),
-    [selfBodyweightKg, selfGender, selfLifts]
+    () => buildLiftDetails(selfLifts, selfBodyweightKg, selfGender, rankDisplayMode),
+    [selfBodyweightKg, selfGender, selfLifts, rankDisplayMode]
   )
 
   const muscleGroupRanks = useMemo(
@@ -523,7 +578,7 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
         <div className="friend-profile-identity">
           <div className="friend-profile-title">{getDisplayName(profile)}</div>
           <div className="friend-profile-subtitle">
-            {profile?.username ? `@${profile.username}` : 'No username'} · {filteredLifts.length} ranked exercise{filteredLifts.length === 1 ? '' : 's'}
+            {profile?.username ? `@${profile.username}` : 'No username'} · {filteredLifts.length} ranked exercise{filteredLifts.length === 1 ? '' : 's'} · {isActiveMode ? 'Current' : 'All-Time'} ranks
           </div>
         </div>
       </div>
@@ -531,6 +586,23 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
       <div className="friend-profile-streak">
         <span className="friend-profile-streak-label">Streak</span>
         <span className="friend-profile-streak-value">{workoutStreak} day{workoutStreak === 1 ? '' : 's'}</span>
+      </div>
+
+      <div className="ranks-mode-toggle" role="tablist" aria-label="Friend rank display mode">
+        <button
+          type="button"
+          className={`ranks-mode-btn ${rankDisplayMode === ACTIVE_RANK_MODE ? 'active' : ''}`}
+          onClick={() => setRankDisplayMode(ACTIVE_RANK_MODE)}
+        >
+          Current
+        </button>
+        <button
+          type="button"
+          className={`ranks-mode-btn ${rankDisplayMode === ALL_TIME_RANK_MODE ? 'active' : ''}`}
+          onClick={() => setRankDisplayMode(ALL_TIME_RANK_MODE)}
+        >
+          All-Time
+        </button>
       </div>
 
       {canCompare && (
