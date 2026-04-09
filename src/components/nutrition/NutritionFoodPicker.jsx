@@ -1,27 +1,18 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { supabase } from '../../lib/supabase'
-import { getCached, setCached, invalidateCache } from '../../lib/cache'
+import { getCached, invalidateCache, setCached } from '../../lib/cache'
+import { searchUsdaFoods } from '../../lib/usdaFoods'
+import {
+  buildFoodSearchKey,
+  matchesStoredFood,
+  mergeFoodSearchResults,
+  normalizeSearchValue,
+} from '../../lib/foodSearch'
 import CreateFood from './CreateFood'
 
 const BarcodeScanner = lazy(() => import('./BarcodeScanner'))
-
-function normalizeSearchValue(value = '') {
-  return String(value)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function matchesFoodSearch(food, query) {
-  const normalizedQuery = normalizeSearchValue(query)
-  if (!normalizedQuery) return true
-
-  const tokens = normalizedQuery.split(/\s+/).filter(Boolean)
-  const haystack = normalizeSearchValue(`${food?.name || ''} ${food?.brand || ''}`)
-  const compactHaystack = haystack.replace(/\s+/g, '')
-
-  return tokens.every(token => haystack.includes(token) || compactHaystack.includes(token))
-}
+const USDA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
+const USER_FOODS_CACHE_TTL_MS = 5 * 60 * 1000
 
 export default function NutritionFoodPicker({
   mealType = 'snacks',
@@ -45,6 +36,25 @@ export default function NutritionFoodPicker({
   const mealLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1)
   const pickerTitle = heading || `Add to ${mealLabel}`
   const pickerSubmitLabel = submitLabel || `Add to ${mealLabel}`
+
+  async function loadUserFoods(userId) {
+    const cacheKey = `user_foods:${userId}`
+    const cached = getCached(cacheKey)
+    if (cached) return cached
+
+    const { data, error } = await supabase
+      .from('foods')
+      .select('*')
+      .eq('user_id', userId)
+      .order('id', { ascending: false })
+      .limit(200)
+
+    if (error) throw error
+
+    const foods = data || []
+    setCached(cacheKey, foods, USER_FOODS_CACHE_TTL_MS)
+    return foods
+  }
 
   async function loadRecent() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -85,6 +95,8 @@ export default function NutritionFoodPicker({
 
   useEffect(() => {
     clearTimeout(searchTimer.current)
+    let cancelled = false
+    const controller = new AbortController()
     let statusTimer
     if (!search.trim()) {
       statusTimer = setTimeout(() => {
@@ -98,19 +110,45 @@ export default function NutritionFoodPicker({
     }, 0)
     searchTimer.current = setTimeout(async () => {
       const normalized = normalizeSearchValue(search)
-      const firstToken = normalized.split(/\s+/).filter(Boolean)[0] || normalized
-      const { data } = await supabase
-        .from('foods')
-        .select('*')
-        .or(`name.ilike.%${firstToken}%,brand.ilike.%${firstToken}%`)
-        .order('name')
-        .limit(80)
-      setResults((data || []).filter(food => matchesFoodSearch(food, search)))
-      setSearching(false)
+      const usdaCacheKey = `usda_food_search:${normalized}`
+
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          if (!cancelled) setResults([])
+          return
+        }
+
+        const [localFoods, usdaFoods] = await Promise.all([
+          loadUserFoods(user.id),
+          (() => {
+            const cachedUsda = getCached(usdaCacheKey)
+            if (cachedUsda) return Promise.resolve(cachedUsda)
+
+            return searchUsdaFoods(search, { signal: controller.signal, pageSize: 30 })
+              .then(foods => {
+                setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS)
+                return foods
+              })
+          })(),
+        ])
+
+        if (cancelled) return
+
+        setResults(mergeFoodSearchResults(localFoods, usdaFoods, search).slice(0, 30))
+      } catch (error) {
+        if (cancelled || error?.name === 'AbortError') return
+        console.error('Food search failed:', error)
+        setResults([])
+      } finally {
+        if (!cancelled) setSearching(false)
+      }
     }, 300)
     return () => {
+      cancelled = true
       clearTimeout(statusTimer)
       clearTimeout(searchTimer.current)
+      controller.abort()
     }
   }, [search])
 
@@ -133,9 +171,66 @@ export default function NutritionFoodPicker({
     return servings > 0 ? servings : 0
   }
 
-  function handleAdd() {
+  async function ensureFoodRecord(food) {
+    if (food?.id) return food
+
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: existingRows, error: existingError } = await supabase
+      .from('foods')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('name', String(food?.name || '').trim())
+      .limit(20)
+
+    if (!existingError) {
+      const existingMatch = (existingRows || []).find(row => matchesStoredFood(row, food))
+      if (existingMatch) return existingMatch
+    }
+
+    const payload = {
+      user_id: user.id,
+      name: String(food?.name || '').trim(),
+      brand: String(food?.brand || '').trim() || null,
+      serving_size: Number(food?.serving_size) || 100,
+      serving_unit: String(food?.serving_unit || 'g').trim() || 'g',
+      calories: Number(food?.calories) || 0,
+      protein: Number(food?.protein) || 0,
+      carbs: Number(food?.carbs) || 0,
+      fat: Number(food?.fat) || 0,
+      fiber: Number(food?.fiber) || 0,
+      sugar: Number(food?.sugar) || 0,
+      saturated_fat: Number(food?.saturated_fat) || 0,
+      sodium: Number(food?.sodium) || 0,
+      potassium: Number(food?.potassium) || 0,
+      cholesterol: Number(food?.cholesterol) || 0,
+      calcium: Number(food?.calcium) || 0,
+      iron: Number(food?.iron) || 0,
+      vitamin_a: Number(food?.vitamin_a) || 0,
+      vitamin_c: Number(food?.vitamin_c) || 0,
+    }
+
+    const { data, error } = await supabase
+      .from('foods')
+      .insert(payload)
+      .select()
+      .single()
+
+    if (error) throw error
+    invalidateCache(`user_foods:${user.id}`)
+    return data
+  }
+
+  async function handleAdd() {
     const amountMultiplier = getAmountMultiplier(selected)
-    if (selected && amountMultiplier > 0) onAdd(selected, amountMultiplier, mealType)
+    if (!selected || amountMultiplier <= 0) return
+
+    try {
+      const storedFood = await ensureFoodRecord(selected)
+      onAdd({ ...selected, ...storedFood, id: storedFood.id }, amountMultiplier, mealType)
+    } catch (error) {
+      console.error('Could not persist selected food before logging:', error)
+      onAdd(selected, amountMultiplier, mealType)
+    }
   }
 
   if (creating) {
@@ -349,7 +444,7 @@ export default function NutritionFoodPicker({
           </div>
         )}
         {list.map(food => (
-          <div key={food.id} className="nut-search-item" onClick={() => selectFood(food)}>
+          <div key={food.id ?? food.remoteKey ?? buildFoodSearchKey(food)} className="nut-search-item" onClick={() => selectFood(food)}>
             <div className="nut-search-info">
               <div className="nut-search-name">{food.name}</div>
               {food.brand && <div className="nut-search-brand">{food.brand}</div>}

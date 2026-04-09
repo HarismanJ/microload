@@ -51,6 +51,9 @@ const TAB_ORDER = ['home', 'workout', 'ranks', 'nutrition']
 const INTRO_MIN_DURATION_MS = 900
 const INTRO_EXIT_DURATION_MS = 520
 const INTRO_BAR_SETTLE_MS = 420
+const BATTLE_REALTIME_REFRESH_DEBOUNCE_MS = 120
+const BATTLE_FOREGROUND_REFRESH_DEBOUNCE_MS = 180
+const BATTLE_FALLBACK_POLL_MS = 120 * 1000
 
 function shouldIgnoreTabSwipeTarget(target) {
   if (!(target instanceof Element)) return false
@@ -215,7 +218,13 @@ export default function App() {
   const introHideTimerRef = useRef(null)
   const introRemoveTimerRef = useRef(null)
   const homeIntroMotionTimerRef = useRef(null)
-  const quickTimerNotificationRef = useRef({ running: false, secondsLeft: null })
+  const quickTimerNotificationRef = useRef({ scheduled: false })
+  const battleRefreshTimerRef = useRef(null)
+  const battleFallbackPollRef = useRef(null)
+  const battleRefreshInFlightRef = useRef(false)
+  const battleQueuedUserIdRef = useRef(null)
+  const battleRealtimeHealthyRef = useRef(true)
+  const runBattleRefreshRef = useRef(null)
   const tabSwipeRef = useRef({
     active: false,
     ignore: false,
@@ -322,48 +331,46 @@ export default function App() {
     setQuickWeightSaving(false)
   }, [quickWeightInput, quickWeightSaving, quickWeightUnit, session?.user?.id])
 
+  // Drive the quick timer display with a 250ms interval reading from endTime.
+  // No countdown state — seconds are derived from the timestamp so there's no drift.
+  const [quickTimerDisplay, setQuickTimerDisplay] = useState(0)
   useEffect(() => {
-    if (!quickTimer?.running) return
-    if (quickTimer.secondsLeft <= 0) return
-    const timer = setTimeout(() => {
-      setQuickTimer(current => current ? { ...current, secondsLeft: current.secondsLeft - 1 } : null)
-    }, 1000)
-    return () => clearTimeout(timer)
+    if (!quickTimer?.running) {
+      const remaining = quickTimer
+        ? quickTimer.pausedSecondsLeft ?? 0
+        : 0
+      setQuickTimerDisplay(remaining)
+      return
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((quickTimer.endTime - Date.now()) / 1000))
+      setQuickTimerDisplay(remaining)
+    }
+    tick()
+    const interval = setInterval(tick, 250)
+    return () => clearInterval(interval)
   }, [quickTimer])
 
+  // Schedule notification once when the timer starts or time is adjusted.
+  // Cancel when stopped or done.
   useEffect(() => {
-    const prev = quickTimerNotificationRef.current
-
-    if (!quickTimer || !quickTimer.running || quickTimer.secondsLeft <= 0) {
-      if (prev.running || (prev.secondsLeft ?? 0) > 0) {
+    if (!quickTimer?.running) {
+      if (quickTimerNotificationRef.current.scheduled) {
         cancelRestNotification('quick')
-      }
-      quickTimerNotificationRef.current = {
-        running: !!quickTimer?.running,
-        secondsLeft: quickTimer?.secondsLeft ?? null,
+        quickTimerNotificationRef.current.scheduled = false
       }
       return
     }
-
-    const shouldReschedule = (
-      !prev.running
-      || prev.secondsLeft === null
-      || quickTimer.secondsLeft !== prev.secondsLeft - 1
-    )
-
-    if (shouldReschedule) {
-      scheduleRestEndNotification(quickTimer.secondsLeft, null, {
-        kind: 'quick',
-        title: 'Timer Complete',
-        body: 'Your quick rest timer has finished.',
-      })
-    }
-
-    quickTimerNotificationRef.current = {
-      running: quickTimer.running,
-      secondsLeft: quickTimer.secondsLeft,
-    }
-  }, [quickTimer])
+    const secondsLeft = Math.max(0, Math.ceil((quickTimer.endTime - Date.now()) / 1000))
+    scheduleRestEndNotification(secondsLeft, null, {
+      kind: 'quick',
+      title: 'Timer Complete',
+      body: 'Your quick rest timer has finished.',
+    })
+    quickTimerNotificationRef.current.scheduled = true
+  // Re-schedule when endTime changes (user adjusts +5s/-5s) or running flips
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickTimer?.endTime, quickTimer?.running])
 
   const navigateToTab = useCallback((nextTab) => {
     const currentTab = tabRef.current
@@ -438,19 +445,19 @@ export default function App() {
   }, [workoutStatus.restTimer?.secondsLeft])
 
   useEffect(() => {
-    if (!quickTimer?.running || quickTimer.secondsLeft !== 0) return
+    if (!quickTimer?.running || quickTimerDisplay !== 0) return
 
     setQuickTimer(current => (current ? { ...current, running: false } : null))
     setRestDoneToast(current => current || 'quick')
-  }, [quickTimer?.running, quickTimer?.secondsLeft])
+  }, [quickTimer?.running, quickTimerDisplay])
 
   const dismissRestDoneToast = useCallback(() => {
-    if (restDoneToast === 'quick' && quickTimer?.secondsLeft === 0) {
+    if (restDoneToast === 'quick' && quickTimerDisplay === 0) {
       setQuickTimer(null)
       setShowQuickTimer(false)
     }
     setRestDoneToast(null)
-  }, [quickTimer?.secondsLeft, restDoneToast])
+  }, [quickTimerDisplay, restDoneToast])
 
   useEffect(() => {
     tabRef.current = tab
@@ -568,54 +575,162 @@ export default function App() {
     await maybeShowPendingBattleResult(userId, Boolean(visibleRoom))
   }, [maybeShowPendingBattleResult, navigateToTab])
 
+  const clearBattleRefreshTimer = useCallback(() => {
+    clearTimeout(battleRefreshTimerRef.current)
+    battleRefreshTimerRef.current = null
+  }, [])
+
+  const clearBattleFallbackPoll = useCallback(() => {
+    clearInterval(battleFallbackPollRef.current)
+    battleFallbackPollRef.current = null
+  }, [])
+
+  const runBattleRefresh = useCallback(async (userId) => {
+    if (!userId) return
+
+    if (battleRefreshInFlightRef.current) {
+      battleQueuedUserIdRef.current = userId
+      return
+    }
+
+    battleRefreshInFlightRef.current = true
+
+    try {
+      await refreshBattleState(userId)
+    } finally {
+      battleRefreshInFlightRef.current = false
+      const queuedUserId = battleQueuedUserIdRef.current
+      if (queuedUserId) {
+        battleQueuedUserIdRef.current = null
+        Promise.resolve().then(() => runBattleRefreshRef.current?.(queuedUserId))
+      }
+    }
+  }, [refreshBattleState])
+
+  runBattleRefreshRef.current = runBattleRefresh
+
+  const scheduleBattleRefresh = useCallback((userId, { delayMs = 0 } = {}) => {
+    if (!userId) return
+
+    clearBattleRefreshTimer()
+
+    if (delayMs <= 0) {
+      runBattleRefresh(userId)
+      return
+    }
+
+    battleRefreshTimerRef.current = setTimeout(() => {
+      battleRefreshTimerRef.current = null
+      runBattleRefresh(userId)
+    }, delayMs)
+  }, [clearBattleRefreshTimer, runBattleRefresh])
+
+  const restartBattleFallbackPoll = useCallback((userId) => {
+    clearBattleFallbackPoll()
+    if (!userId || battleRealtimeHealthyRef.current) return
+
+    battleFallbackPollRef.current = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      scheduleBattleRefresh(userId)
+    }, BATTLE_FALLBACK_POLL_MS)
+  }, [clearBattleFallbackPoll, scheduleBattleRefresh])
+
   useEffect(() => {
     const userId = session?.user?.id
     if (!userId) {
+      clearBattleRefreshTimer()
+      clearBattleFallbackPoll()
+      battleRefreshInFlightRef.current = false
+      battleQueuedUserIdRef.current = null
+      battleRealtimeHealthyRef.current = true
       setIncomingBattleInvite(null)
       setBattleRoom(null)
       battleRoomIdRef.current = null
       return
     }
 
-    refreshBattleState(userId)
+    battleRealtimeHealthyRef.current = true
+    scheduleBattleRefresh(userId)
 
-    const refreshNow = () => { refreshBattleState(userId) }
+    const scheduleRealtimeRefresh = () => {
+      scheduleBattleRefresh(userId, { delayMs: BATTLE_REALTIME_REFRESH_DEBOUNCE_MS })
+    }
+
+    const scheduleForegroundRefresh = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      scheduleBattleRefresh(userId, { delayMs: BATTLE_FOREGROUND_REFRESH_DEBOUNCE_MS })
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return
+      scheduleForegroundRefresh()
+    }
+
+    const handleChannelStatus = (status) => {
+      if (status === 'SUBSCRIBED') {
+        const wasHealthy = battleRealtimeHealthyRef.current
+        battleRealtimeHealthyRef.current = true
+        clearBattleFallbackPoll()
+        if (!wasHealthy) {
+          scheduleBattleRefresh(userId)
+        }
+        return
+      }
+
+      if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+        battleRealtimeHealthyRef.current = false
+        restartBattleFallbackPoll(userId)
+      }
+    }
 
     const channel = supabase
       .channel(`battle-updates-${userId}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'battle_invites', filter: `challenged_id=eq.${userId}` },
-        () => { refreshBattleState(userId) }
+        scheduleRealtimeRefresh
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'battle_invites', filter: `challenger_id=eq.${userId}` },
-        () => { refreshBattleState(userId) }
+        scheduleRealtimeRefresh
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'workout_rooms', filter: `challenger_id=eq.${userId}` },
-        () => { refreshBattleState(userId) }
+        scheduleRealtimeRefresh
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'workout_rooms', filter: `challenged_id=eq.${userId}` },
-        () => { refreshBattleState(userId) }
+        scheduleRealtimeRefresh
       )
-      .subscribe()
+      .subscribe(handleChannelStatus)
 
-    const poll = setInterval(refreshNow, 30000)
-    window.addEventListener('focus', refreshNow)
-    document.addEventListener('visibilitychange', refreshNow)
+    window.addEventListener('focus', scheduleForegroundRefresh)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
 
     return () => {
-      clearInterval(poll)
-      window.removeEventListener('focus', refreshNow)
-      document.removeEventListener('visibilitychange', refreshNow)
+      clearBattleRefreshTimer()
+      clearBattleFallbackPoll()
+      battleQueuedUserIdRef.current = null
+      window.removeEventListener('focus', scheduleForegroundRefresh)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       supabase.removeChannel(channel)
     }
-  }, [refreshBattleState, session?.user?.id])
+  }, [
+    clearBattleFallbackPoll,
+    clearBattleRefreshTimer,
+    restartBattleFallbackPoll,
+    scheduleBattleRefresh,
+    session?.user?.id,
+  ])
+
+  useEffect(() => {
+    const userId = session?.user?.id
+    if (!userId || !justCameOnline) return
+    scheduleBattleRefresh(userId)
+  }, [justCameOnline, scheduleBattleRefresh, session?.user?.id])
 
   async function handleChallengeFriend(friendship) {
     const userId = session?.user?.id
@@ -991,7 +1106,7 @@ export default function App() {
                   <path d="M12 9v4l2.5 2.5"/>
                   <path d="M9 2h6"/>
                 </svg>
-                <span>{quickTimer ? `Rest Timer ${fmtRest(quickTimer.secondsLeft)}` : 'Rest Timer'}</span>
+                <span>{quickTimer ? `Rest Timer ${fmtRest(quickTimerDisplay)}` : 'Rest Timer'}</span>
               </button>
               {(showQuickTimer || quickTimer) && (
                 <div className="quick-timer-card">
@@ -1000,30 +1115,45 @@ export default function App() {
                       <RestTimePicker value={quickTimerValue} onChange={setQuickTimerValue} />
                       <button
                         className="quick-timer-start"
-                        onClick={() => setQuickTimer({ secondsLeft: quickTimerValue, total: quickTimerValue, running: true })}
+                        onClick={() => setQuickTimer({ endTime: Date.now() + quickTimerValue * 1000, total: quickTimerValue, running: true })}
                       >
                         Start
                       </button>
                     </>
                   ) : (
                     <>
-                      <div className="quick-timer-name">{quickTimer.secondsLeft === 0 ? "Time's up!" : 'Countdown'}</div>
-                      <div className="quick-timer-countdown" style={{ color: quickTimer.secondsLeft === 0 ? '#22c55e' : 'var(--blue)' }}>
-                        {fmtRest(quickTimer.secondsLeft)}
+                      <div className="quick-timer-name">{quickTimerDisplay === 0 ? "Time's up!" : 'Countdown'}</div>
+                      <div className="quick-timer-countdown" style={{ color: quickTimerDisplay === 0 ? '#22c55e' : 'var(--blue)' }}>
+                        {fmtRest(quickTimerDisplay)}
                       </div>
                       <div className="quick-timer-track">
                         <div
                           className="quick-timer-fill"
                           style={{
-                            width: `${(quickTimer.secondsLeft / quickTimer.total) * 100}%`,
-                            background: quickTimer.secondsLeft === 0 ? '#22c55e' : 'var(--blue)',
+                            width: `${(quickTimerDisplay / quickTimer.total) * 100}%`,
+                            background: quickTimerDisplay === 0 ? '#22c55e' : 'var(--blue)',
                           }}
                         />
                       </div>
                       <div className="quick-timer-actions">
-                        <button className="quick-timer-step" onClick={() => setQuickTimer(current => current ? { ...current, secondsLeft: Math.max(0, current.secondsLeft - 5) } : null)}>−5s</button>
-                        {quickTimer.secondsLeft > 0 ? (
-                          <button className="quick-timer-pause" onClick={() => setQuickTimer(current => current ? { ...current, running: !current.running } : null)}>
+                        <button className="quick-timer-step" onClick={() => setQuickTimer(current => {
+                          if (!current) return null
+                          if (current.running) {
+                            const newEnd = Math.max(Date.now(), current.endTime - 5000)
+                            return { ...current, endTime: newEnd }
+                          }
+                          return { ...current, pausedSecondsLeft: Math.max(0, (current.pausedSecondsLeft ?? 0) - 5) }
+                        })}>−5s</button>
+                        {quickTimerDisplay > 0 ? (
+                          <button className="quick-timer-pause" onClick={() => setQuickTimer(current => {
+                            if (!current) return null
+                            if (current.running) {
+                              // Pause: store remaining seconds
+                              return { ...current, running: false, pausedSecondsLeft: Math.max(0, Math.ceil((current.endTime - Date.now()) / 1000)) }
+                            }
+                            // Resume: set new endTime from remaining
+                            return { ...current, running: true, endTime: Date.now() + (current.pausedSecondsLeft ?? 0) * 1000 }
+                          })}>
                             {quickTimer.running ? 'Pause' : 'Resume'}
                           </button>
                         ) : (
@@ -1031,7 +1161,13 @@ export default function App() {
                             Done
                           </button>
                         )}
-                        <button className="quick-timer-step" onClick={() => setQuickTimer(current => current ? { ...current, secondsLeft: current.secondsLeft + 5 } : null)}>+5s</button>
+                        <button className="quick-timer-step" onClick={() => setQuickTimer(current => {
+                          if (!current) return null
+                          if (current.running) {
+                            return { ...current, endTime: current.endTime + 5000 }
+                          }
+                          return { ...current, pausedSecondsLeft: (current.pausedSecondsLeft ?? 0) + 5 }
+                        })}>+5s</button>
                       </div>
                       <button className="quick-timer-reset" onClick={() => { setQuickTimer(null); setShowQuickTimer(false) }}>
                         Reset

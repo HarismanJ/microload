@@ -424,7 +424,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
                   <div>
                     <div className="friends-person-name">{getDisplayName(friendship.otherProfile)}</div>
                     <div className="friends-person-handle">{getUsername(friendship.otherProfile)}</div>
-                    {tracker ? (
+                    {tracker?.total > 0 ? (
                       <div className="friends-headtohead">
                         <div className="friends-headtohead-label">Head to Head</div>
                         <div className="friends-headtohead-record">

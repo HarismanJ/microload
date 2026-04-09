@@ -32,6 +32,42 @@
   margin-top: 3px;
 }
 
+.ranks-mode-toggle {
+  margin-top: 10px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.ranks-mode-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 7px 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.22s ease, color 0.22s ease, transform 0.22s ease;
+}
+
+.ranks-mode-btn:hover {
+  color: var(--text);
+}
+
+.ranks-mode-btn.active {
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+
 .ranks-dropdown {
   background: var(--surface);
   border: 1px solid var(--border);

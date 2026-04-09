@@ -3,6 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { BarcodeFormat, BarcodeScanner as NativeBarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
 import { Html5Qrcode } from 'html5-qrcode'
 import { supabase } from '../../lib/supabase'
+import { invalidateCache } from '../../lib/cache'
 import LoadingSpinner from '../LoadingSpinner'
 
 const FIELDS = [
@@ -444,6 +445,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
     }).select().single()
     setSaving(false)
     if (error) { setErrorMsg(error.message); return }
+    invalidateCache(`user_foods:${user.id}`)
     onSave(data)
   }
 

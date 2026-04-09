@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useEffectEvent } from 'react'
 import Model from 'react-body-highlighter'
 import { supabase } from '../../lib/supabase'
+import { fetchExerciseRankStates } from '../../data/rankStates'
 import RankBadge from '../RankBadge'
 import LoadingSpinner from '../LoadingSpinner'
 import ExerciseChart from './ExerciseChart'
@@ -9,7 +10,18 @@ import {
   tierGroup, tierColor,
   expandAnchors, getTierIdx, getProgress, weightForOrm,
 } from '../../lib/strengthStandards'
+import {
+  ALL_TIME_RANK_MODE,
+  ACTIVE_RANK_MODE,
+  applyInactivityDecay,
+  getContinuousTierScore,
+  inferRatioFromScore,
+  resolveTierFromScore,
+} from '../../lib/rollingRanks'
 import './ExerciseDetail.css'
+
+const EXERCISE_DAILY_ORM_POINTS_RPC = 'get_exercise_daily_orm_points'
+const EXERCISE_HISTORY_SUMMARY_RPC = 'get_exercise_history_summary'
 
 // Maps our DB muscle names to the closest library regions.
 const MUSCLE_MAP = {
@@ -95,11 +107,91 @@ function buildDiagramEntries(primaryMuscles = [], secondaryMuscles = []) {
 function lbsToKg(v) { return v * 0.453592 }
 function kgToLbs(v) { return v * 2.20462 }
 
-export default function ExerciseDetail({ exerciseId, onBack }) {
+function isMissingExerciseHistoryRpc(error, functionName) {
+  const code = error?.code || ''
+  const message = error?.message?.toLowerCase?.() || ''
+  return (
+    code === 'PGRST202'
+    || message.includes(functionName.toLowerCase())
+    || message.includes('could not find the function')
+  )
+}
+
+async function fetchExerciseDailyOrmPoints(userId, exerciseId) {
+  const { data, error } = await supabase.rpc(EXERCISE_DAILY_ORM_POINTS_RPC, {
+    p_user_id: userId,
+    p_exercise_id: exerciseId,
+  })
+
+  if (error) {
+    if (isMissingExerciseHistoryRpc(error, EXERCISE_DAILY_ORM_POINTS_RPC)) {
+      return { rows: [], missingFunction: true }
+    }
+    throw error
+  }
+
+  return { rows: data ?? [], missingFunction: false }
+}
+
+async function fetchExerciseHistorySummary(userId, exerciseId) {
+  const { data, error } = await supabase.rpc(EXERCISE_HISTORY_SUMMARY_RPC, {
+    p_user_id: userId,
+    p_exercise_id: exerciseId,
+  })
+
+  if (error) {
+    if (isMissingExerciseHistoryRpc(error, EXERCISE_HISTORY_SUMMARY_RPC)) {
+      return { row: null, missingFunction: true }
+    }
+    throw error
+  }
+
+  return { row: data?.[0] ?? null, missingFunction: false }
+}
+
+function deriveExerciseHistoryFromSets(sets = []) {
+  if (!sets.length) return { chartData: [], stats: null }
+
+  let bestOrmKg = 0
+  let bestSet = null
+  let totalVolumeKg = 0
+  const chartPointsByDate = new Map()
+
+  sets.forEach(set => {
+    const ormKg = set.unit === 'lbs' ? lbsToKg(set.estimated_1rm) : set.estimated_1rm
+    const weightKg = set.unit === 'lbs' ? lbsToKg(set.weight) : set.weight
+    const date = String(set.created_at || '').split('T')[0]
+
+    totalVolumeKg += weightKg * set.reps
+
+    if (ormKg > bestOrmKg) {
+      bestOrmKg = ormKg
+      bestSet = { weight: set.weight, reps: set.reps, unit: set.unit }
+    }
+
+    const existingPoint = chartPointsByDate.get(date)
+    if (!existingPoint || ormKg > existingPoint.orm) {
+      chartPointsByDate.set(date, { date, orm: ormKg })
+    }
+  })
+
+  return {
+    chartData: [...chartPointsByDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    stats: {
+      bestOrmKg,
+      bestSet,
+      totalVolumeKg,
+      totalSets: sets.length,
+    },
+  }
+}
+
+export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME_RANK_MODE }) {
   const [exercise, setExercise]   = useState(null)
   const [profile, setProfile]     = useState(null)
   const [chartData, setChartData] = useState([])
   const [stats, setStats]         = useState(null)
+  const [activeRankState, setActiveRankState] = useState(null)
   const [loading, setLoading]     = useState(true)
   const [chartPeriod, setChartPeriod] = useState('all')
   const [muscleLabel, setMuscleLabel] = useState(null)
@@ -114,40 +206,61 @@ export default function ExerciseDetail({ exerciseId, onBack }) {
     setLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
 
-    const [{ data: ex }, { data: prof }, { data: sets }] = await Promise.all([
+    const [{ data: ex }, { data: prof }, activeRankResult, dailyHistoryResult, summaryResult] = await Promise.all([
       supabase.from('exercises').select('*').eq('id', exerciseId).single(),
       supabase.from('profiles').select('bodyweight, gender, unit_preference').eq('id', user.id).single(),
-      supabase
+      fetchExerciseRankStates(user.id, [exerciseId]),
+      fetchExerciseDailyOrmPoints(user.id, exerciseId),
+      fetchExerciseHistorySummary(user.id, exerciseId),
+    ])
+
+    setExercise(ex)
+    setProfile(prof)
+    setActiveRankState(activeRankResult.rows.find(row => row.exercise_id === exerciseId) || null)
+
+    const useLegacyHistory = dailyHistoryResult.missingFunction || summaryResult.missingFunction
+
+    if (useLegacyHistory) {
+      const { data: sets, error: setsError } = await supabase
         .from('workout_sets')
         .select('estimated_1rm, weight, reps, unit, created_at')
         .eq('user_id', user.id)
         .eq('exercise_id', exerciseId)
         .not('estimated_1rm', 'is', null)
-        .order('created_at', { ascending: true }),
-    ])
+        .order('created_at', { ascending: true })
 
-    setExercise(ex)
-    setProfile(prof)
+      if (setsError) throw setsError
 
-    if (sets && sets.length > 0) {
-      let bestOrmKg = 0, bestSet = null, totalVolumeKg = 0
-      const allPoints = []
-
-      sets.forEach(s => {
-        const ormKg = s.unit === 'lbs' ? lbsToKg(s.estimated_1rm) : s.estimated_1rm
-        const wKg   = s.unit === 'lbs' ? lbsToKg(s.weight) : s.weight
-        totalVolumeKg += wKg * s.reps
-
-        if (ormKg > bestOrmKg) {
-          bestOrmKg = ormKg
-          bestSet   = { weight: s.weight, reps: s.reps, unit: s.unit }
-        }
-        allPoints.push({ date: s.created_at.split('T')[0], orm: ormKg })
-      })
-
-      setChartData(allPoints)
-      setStats({ bestOrmKg, bestSet, totalVolumeKg, totalSets: sets.length })
+      const legacyHistory = deriveExerciseHistoryFromSets(sets || [])
+      setChartData(legacyHistory.chartData)
+      setStats(legacyHistory.stats)
+      setLoading(false)
+      return
     }
+
+    const nextChartData = (dailyHistoryResult.rows || [])
+      .map(row => ({
+        date: String(row.day).slice(0, 10),
+        orm: Number(row.best_orm_kg) || 0,
+      }))
+      .filter(point => point.date && point.orm > 0)
+
+    const summaryRow = summaryResult.row
+    const nextStats = summaryRow && Number(summaryRow.total_sets) > 0
+      ? {
+        bestOrmKg: Number(summaryRow.best_orm_kg) || 0,
+        bestSet: {
+          weight: Number(summaryRow.best_set_weight) || 0,
+          reps: Number(summaryRow.best_set_reps) || 0,
+          unit: summaryRow.best_set_unit || 'kg',
+        },
+        totalVolumeKg: Number(summaryRow.total_volume_kg) || 0,
+        totalSets: Number(summaryRow.total_sets) || 0,
+      }
+      : null
+
+    setChartData(nextChartData)
+    setStats(nextStats)
 
     setLoading(false)
   }
@@ -181,10 +294,12 @@ export default function ExerciseDetail({ exerciseId, onBack }) {
     ? filteredChart.map(d => ({ ...d, orm: kgToLbs(d.orm) }))
     : filteredChart
 
+  const rankModeLabel = rankMode === ACTIVE_RANK_MODE ? 'Active' : 'All-Time'
+
   // Rank
   const isBW = exercise?.equipment === 'Bodyweight'
   const exerciseAnchors = exercise ? ANCHORS[gender]?.[exercise.name] : null
-  let rankSection = null
+  let allTimeRankSection = null
   if (stats && bodyweightKg && exerciseAnchors) {
     const thresholds = expandAnchors(exerciseAnchors)
     const ratio      = isBW
@@ -201,8 +316,38 @@ export default function ExerciseDetail({ exerciseId, onBack }) {
           ? thresholds[tierIdx + 1] * bodyweightKg - bodyweightKg
           : thresholds[tierIdx + 1] * bodyweightKg)
       : null
-    rankSection = { tier, color, progress, isMax, nextTier, targetKg, ratio }
+    allTimeRankSection = { tierIdx, tier, color, progress, isMax, nextTier, targetKg, ratio }
   }
+
+  let activeRankSection = null
+  if (bodyweightKg && exerciseAnchors) {
+    const thresholds = expandAnchors(exerciseAnchors)
+    const storedScore = Number.isFinite(activeRankState?.current_score)
+      ? Number(activeRankState.current_score)
+      : null
+    const fallbackScore = allTimeRankSection ? getContinuousTierScore(allTimeRankSection) : null
+    const activeScore = storedScore !== null
+      ? applyInactivityDecay(storedScore, activeRankState?.last_ranked_at).score
+      : fallbackScore
+
+    if (activeScore !== null) {
+      const resolved = resolveTierFromScore(activeScore)
+      const targetKg = !resolved.isMax
+        ? (isBW
+            ? thresholds[resolved.tierIdx + 1] * bodyweightKg - bodyweightKg
+            : thresholds[resolved.tierIdx + 1] * bodyweightKg)
+        : null
+      activeRankSection = {
+        ...resolved,
+        ratio: inferRatioFromScore(activeScore, thresholds),
+        targetKg,
+      }
+    }
+  }
+
+  const rankSection = rankMode === ACTIVE_RANK_MODE
+    ? (activeRankSection || allTimeRankSection)
+    : allTimeRankSection
 
   // Iron target shown when unranked but standards + bodyweight are available
   const ironTargetKg = !stats && exerciseAnchors && bodyweightKg
@@ -249,7 +394,7 @@ export default function ExerciseDetail({ exerciseId, onBack }) {
           {exercise?.equipment === 'Dumbbell' && (
             <div className="ex-db-hint">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              Log the weight of <strong>one dumbbell</strong>, not the pair
+              <strong>Log the weight of one dumbbell.</strong>
             </div>
           )}
 
@@ -288,7 +433,7 @@ export default function ExerciseDetail({ exerciseId, onBack }) {
 
           {/* Rank */}
           <div className="ex-section">
-            <div className="ex-section-title">Strength Rank</div>
+            <div className="ex-section-title">Strength Rank ({rankModeLabel})</div>
             {rankSection ? (
               <div className="ex-rank-card">
                 <div className="ex-rank-top">
