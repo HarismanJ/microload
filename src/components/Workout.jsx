@@ -349,13 +349,18 @@ export default function Workout({
     const init = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
-        const [exercises, { data: prof }, { data: routines }] = await Promise.all([
+        const [exercises, { data: prof }, { data: routines }, { data: restPrefs }] = await Promise.all([
           fetchExercises(user.id),
           supabase.from('profiles').select('default_rest_seconds, unit_preference, bodyweight').eq('id', user.id).single(),
           supabase.from('user_routines').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+          supabase.from('user_exercise_preferences').select('exercise_id, rest_seconds').eq('user_id', user.id),
         ])
         setUserId(user.id)
-        setExerciseLibrary(exercises || [])
+        const prefMap = new Map((restPrefs || []).map(p => [p.exercise_id, p.rest_seconds]))
+        const libraryWithPrefs = (exercises || []).map(ex =>
+          prefMap.has(ex.id) ? { ...ex, default_rest_seconds: prefMap.get(ex.id) } : ex
+        )
+        setExerciseLibrary(libraryWithPrefs)
         setDefaultRest(prof?.default_rest_seconds ?? 90)
         setDefaultUnit(prof?.unit_preference || 'kg')
         setUserBodyweightKg(getProfileBodyweightKg(prof))
@@ -1949,9 +1954,10 @@ export default function Workout({
 
   const updateRestTime = async (exId, seconds) => {
     setWorkoutExercises(prev => prev.map(e => e.id === exId ? { ...e, restSeconds: seconds } : e))
+    setExerciseLibrary(prev => prev.map(e => e.id === exId ? { ...e, default_rest_seconds: seconds } : e))
     setEditingRest(null)
-    await supabase.from('exercises').update({ default_rest_seconds: seconds }).eq('id', exId)
-    invalidateExercisesCache(userId)
+    await supabase.from('user_exercise_preferences')
+      .upsert({ user_id: userId, exercise_id: exId, rest_seconds: seconds }, { onConflict: 'user_id,exercise_id' })
   }
 
   if (detailExerciseId) {
