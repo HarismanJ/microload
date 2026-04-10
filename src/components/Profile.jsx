@@ -343,6 +343,19 @@ export default function Profile({ onChallenge }) {
         onViewProfile={setViewingFriendProfile}
       />
       <div>
+        <button
+          className="report-bug-btn"
+          onClick={() => {
+            const subject = encodeURIComponent('Microload Bug Report')
+            const body = encodeURIComponent(
+              'Describe the bug below:\n\n\n\n--- Device Info ---\nPlatform: ' +
+              (navigator.userAgent || 'unknown')
+            )
+            window.open(`mailto:harismanjeyakanthan@gmail.com?subject=${subject}&body=${body}`, '_blank')
+          }}
+        >
+          Report a Bug
+        </button>
         <button className="signout-btn" onClick={signOut}>Sign Out</button>
       </div>
 

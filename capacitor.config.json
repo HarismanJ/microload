@@ -1,5 +1,5 @@
 {
-  "appId": "com.example.app",
+  "appId": "com.harisman.microload",
   "appName": "microload",
   "webDir": "dist",
   "ios": {

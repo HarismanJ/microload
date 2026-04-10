@@ -1,4 +1,4 @@
-package com.example.app;
+package com.harisman.microload;
 
 import com.getcapacitor.BridgeActivity;
 

@@ -352,10 +352,20 @@ export default function App() {
   }, [quickTimer])
 
   // Schedule notification once when the timer starts or time is adjusted.
-  // Cancel when stopped or done.
+  // Only cancel when the user explicitly resets (quickTimer === null) or pauses.
+  // Do NOT cancel when the timer completes naturally — the notification should fire.
   useEffect(() => {
-    if (!quickTimer?.running) {
+    if (!quickTimer) {
+      // User reset — cancel any pending notification
       if (quickTimerNotificationRef.current.scheduled) {
+        cancelRestNotification('quick')
+        quickTimerNotificationRef.current.scheduled = false
+      }
+      return
+    }
+    if (!quickTimer.running) {
+      // Paused manually — cancel so it doesn't fire while paused
+      if (quickTimerNotificationRef.current.scheduled && quickTimer.endTime > Date.now()) {
         cancelRestNotification('quick')
         quickTimerNotificationRef.current.scheduled = false
       }
@@ -370,7 +380,7 @@ export default function App() {
     quickTimerNotificationRef.current.scheduled = true
   // Re-schedule when endTime changes (user adjusts +5s/-5s) or running flips
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickTimer?.endTime, quickTimer?.running])
+  }, [quickTimer?.endTime, quickTimer?.running, !!quickTimer])
 
   const navigateToTab = useCallback((nextTab) => {
     const currentTab = tabRef.current
@@ -446,10 +456,11 @@ export default function App() {
 
   useEffect(() => {
     if (!quickTimer?.running || quickTimerDisplay !== 0) return
+    if (Date.now() < quickTimer.endTime) return
 
     setQuickTimer(current => (current ? { ...current, running: false } : null))
     setRestDoneToast(current => current || 'quick')
-  }, [quickTimer?.running, quickTimerDisplay])
+  }, [quickTimer?.running, quickTimer?.endTime, quickTimerDisplay])
 
   const dismissRestDoneToast = useCallback(() => {
     if (restDoneToast === 'quick' && quickTimerDisplay === 0) {
