@@ -49,6 +49,11 @@ export default function Profile({ onChallenge }) {
   const [weightDeleteTargetId, setWeightDeleteTargetId] = useState(null)
   const [weightDeletingId, setWeightDeletingId] = useState(null)
   const [weightDeleteError, setWeightDeleteError] = useState('')
+  const [showBugReport, setShowBugReport] = useState(false)
+  const [bugMessage, setBugMessage] = useState('')
+  const [bugSubmitting, setBugSubmitting] = useState(false)
+  const [bugSubmitted, setBugSubmitted] = useState(false)
+  const [bugError, setBugError] = useState('')
 
   async function load() {
     const cached = getCached('profile')
@@ -343,17 +348,7 @@ export default function Profile({ onChallenge }) {
         onViewProfile={setViewingFriendProfile}
       />
       <div>
-        <button
-          className="report-bug-btn"
-          onClick={() => {
-            const subject = encodeURIComponent('Microload Bug Report')
-            const body = encodeURIComponent(
-              'Describe the bug below:\n\n\n\n--- Device Info ---\nPlatform: ' +
-              (navigator.userAgent || 'unknown')
-            )
-            window.open(`mailto:harismanjeyakanthan@gmail.com?subject=${subject}&body=${body}`, '_blank')
-          }}
-        >
+        <button className="report-bug-btn" onClick={() => { setShowBugReport(true); setBugMessage(''); setBugError(''); setBugSubmitted(false) }}>
           Report a Bug
         </button>
         <button className="signout-btn" onClick={signOut}>Sign Out</button>
@@ -364,6 +359,69 @@ export default function Profile({ onChallenge }) {
           <div className="theme-toast-modal">
             <div className="theme-toast-msg">Preferred colour set to <strong>{themeToast}</strong></div>
             <button className="theme-toast-ok" onClick={() => setThemeToast(null)}>OK</button>
+          </div>
+        </div>
+      )}
+
+      {showBugReport && (
+        <div className="bug-report-overlay" onClick={() => setShowBugReport(false)}>
+          <div className="bug-report-modal" onClick={e => e.stopPropagation()}>
+            {bugSubmitted ? (
+              <>
+                <div className="bug-report-title">Thanks!</div>
+                <div className="bug-report-sent">Your report was submitted.</div>
+                <button className="theme-toast-ok" onClick={() => setShowBugReport(false)}>Done</button>
+              </>
+            ) : (
+              <>
+                <div className="bug-report-title">Report a Bug</div>
+                <textarea
+                  className="bug-report-textarea"
+                  placeholder="Describe what happened..."
+                  value={bugMessage}
+                  onChange={e => setBugMessage(e.target.value)}
+                  rows={5}
+                />
+                {bugError ? <div className="bug-report-error">{bugError}</div> : null}
+                <div className="bug-report-actions">
+                  <button className="bug-report-cancel" onClick={() => setShowBugReport(false)}>Cancel</button>
+                  <button
+                    className="bug-report-submit"
+                    disabled={bugSubmitting || !bugMessage.trim()}
+                    onClick={async () => {
+                      if (!bugMessage.trim() || bugSubmitting) return
+                      setBugSubmitting(true)
+                      setBugError('')
+                      const { data: { user } } = await supabase.auth.getUser()
+                      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+                      const { count } = await supabase
+                        .from('bug_reports')
+                        .select('*', { count: 'exact', head: true })
+                        .eq('user_id', user.id)
+                        .gte('created_at', since)
+                      if (count >= 10) {
+                        setBugSubmitting(false)
+                        setBugError('You\'ve submitted 10 reports in the last 24 hours. Please try again later.')
+                        return
+                      }
+                      const { error } = await supabase.from('bug_reports').insert({
+                        user_id: user.id,
+                        message: bugMessage.trim(),
+                      })
+                      setBugSubmitting(false)
+                      if (error) {
+                        setBugError('Could not submit. Please try again.')
+                      } else {
+                        setBugSubmitted(true)
+                        setBugMessage('')
+                      }
+                    }}
+                  >
+                    {bugSubmitting ? 'Submitting...' : 'Submit'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
