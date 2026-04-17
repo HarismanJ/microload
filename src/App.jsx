@@ -192,6 +192,7 @@ export default function App() {
   const [quickWeightSaving, setQuickWeightSaving] = useState(false)
   const [quickWeightError, setQuickWeightError] = useState('')
   const [weightRefreshTick, setWeightRefreshTick] = useState(0)
+  const [ranksRefreshTick, setRanksRefreshTick] = useState(0)
   const [homeWorkoutStreak, setHomeWorkoutStreak] = useState(0)
   const [showStreakInfo, setShowStreakInfo] = useState(false)
   const [session, setSession] = useState(undefined)
@@ -613,7 +614,7 @@ export default function App() {
       const queuedUserId = battleQueuedUserIdRef.current
       if (queuedUserId) {
         battleQueuedUserIdRef.current = null
-        Promise.resolve().then(() => runBattleRefreshRef.current?.(queuedUserId))
+        Promise.resolve().then(() => runBattleRefreshRef.current?.(queuedUserId)).catch(err => console.error('battle refresh failed:', err))
       }
     }
   }, [refreshBattleState])
@@ -859,10 +860,10 @@ export default function App() {
   const leftTabs = tabs.slice(0, 2)
   const rightTabs = tabs.slice(2)
   const otherScreens = {
-    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} />,
-    ranks: <Ranks />,
+    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} />,
+    ranks: <Ranks refreshTick={ranksRefreshTick} />,
     nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
-    profile: <Profile onChallenge={handleChallengeFriend} />,
+    profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} workoutActive={workoutStatus.active} />,
   }
   const contentScreenClassName = `content-screen content-screen-${tabTransitionDirection} content-screen-${tabTransitionTick % 2}`
 
@@ -1249,7 +1250,7 @@ export default function App() {
             data-tab-swipe-ignore="true"
           >
             <span className="tab-plus-icon">+</span>
-            {quickTimer && <span className="tab-plus-timer-badge">{fmtRest(quickTimer.secondsLeft)}</span>}
+            {quickTimer && <span className="tab-plus-timer-badge">{fmtRest(quickTimerDisplay)}</span>}
           </button>
           <div className="tabbar-group">
             {rightTabs.map(t => (

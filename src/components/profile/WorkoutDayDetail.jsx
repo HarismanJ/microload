@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent } from 'react'
+import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
 import { calculateORM } from '../../lib/orm'
@@ -74,6 +74,9 @@ function buildUpdatedNutritionLog(log, foodName, mealType, servings) {
 }
 
 export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], dateStr, onBack, onDeleteWorkout, onRefresh }) {
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
+
   const [workoutSessions, setWorkoutSessions] = useState([])
   const [nutLogs, setNutLogs] = useState([])
   const [weightLogs, setWeightLogs] = useState([])
@@ -283,6 +286,8 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       supabase.from('profiles').select('lifetime_volume_kg').eq('id', user.id).single(),
     ])
 
+    if (!mountedRef.current) return
+
     if (deleteError) {
       setDeletingSetId(null)
       setDeleteSetError(deleteError.message || 'Could not delete this set.')
@@ -442,16 +447,20 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
         newBestByExercise[s.exercise_id] = Math.max(newBestByExercise[s.exercise_id] || 0, kg)
       }
 
-      await Promise.all(affectedExerciseIds.map(exId =>
-        newBestByExercise[exId]
-          ? supabase.from('exercise_prs').upsert({
-              user_id: user.id,
-              exercise_id: exId,
-              best_1rm_kg: newBestByExercise[exId],
-              updated_at: new Date().toISOString(),
-            }, { onConflict: 'user_id,exercise_id' })
-          : supabase.from('exercise_prs').delete().eq('user_id', user.id).eq('exercise_id', exId)
-      ))
+      try {
+        await Promise.all(affectedExerciseIds.map(exId =>
+          newBestByExercise[exId]
+            ? supabase.from('exercise_prs').upsert({
+                user_id: user.id,
+                exercise_id: exId,
+                best_1rm_kg: newBestByExercise[exId],
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'user_id,exercise_id' })
+            : supabase.from('exercise_prs').delete().eq('user_id', user.id).eq('exercise_id', exId)
+        ))
+      } catch (err) {
+        console.error('PR cache update failed after workout deletion:', err)
+      }
     }
 
     const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)

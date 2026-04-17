@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useMemo } from 'react'
 import Model from 'react-body-highlighter'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
@@ -329,11 +329,12 @@ function TierSwiper({ thresholds, isBW, bodyweightKg, currentTierIdx, fmt, useLb
   )
 }
 
-export default function Ranks() {
+export default function Ranks({ refreshTick = 0 }) {
   const [profile, setProfile] = useState(null)
   const [lifts, setLifts] = useState([])
   const [rankDisplayMode, setRankDisplayMode] = useState(readRankDisplayMode)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
   const [muscleLoadingActive, setMuscleLoadingActive] = useState(true)
   const [muscleRevealActive, setMuscleRevealActive] = useState(false)
   const [detailExerciseId, setDetailExerciseId] = useState(null)
@@ -457,6 +458,9 @@ export default function Ranks() {
       setStartupSnapshot('ranks', ranksData)
       setProfile(profileData)
       setLifts(allLifts)
+    } catch (err) {
+      console.error('Ranks load failed:', err)
+      setLoadError(err?.message || 'Could not load ranks.')
     } finally {
       setLoading(false)
     }
@@ -465,7 +469,7 @@ export default function Ranks() {
   useEffect(() => {
     const timer = setTimeout(() => { load() }, 0)
     return () => clearTimeout(timer)
-  }, [])
+  }, [refreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function openTopSetEditor(lift) {
     setEditingLiftId(lift.exerciseId)
@@ -495,42 +499,47 @@ export default function Ranks() {
   const isActiveMode = rankDisplayMode === ACTIVE_RANK_MODE
   const rankNow = Date.now()
 
-  const liftsWithDetails = lifts.map(lift => {
-    const anchors = ANCHORS[gender]?.[lift.name] ?? null
-    const thresholds = anchors ? expandAnchors(anchors) : null
-    const allTimeCardRank = lift.ormKg !== null && bodyweightKg && anchors
-      ? getLiftRank(lift, lift.ormKg, bodyweightKg, gender)
-      : null
+  const liftsWithDetails = useMemo(() => {
+    const now = Date.now()
+    return lifts.map(lift => {
+      const anchors = ANCHORS[gender]?.[lift.name] ?? null
+      const thresholds = anchors ? expandAnchors(anchors) : null
+      const allTimeCardRank = lift.ormKg !== null && bodyweightKg && anchors
+        ? getLiftRank(lift, lift.ormKg, bodyweightKg, gender)
+        : null
 
-    let activeScore = null
-    if (bodyweightKg && thresholds) {
-      if (Number.isFinite(lift.activeCurrentScore)) {
-        activeScore = applyInactivityDecay(
-          Number(lift.activeCurrentScore),
-          lift.activeLastRankedAt,
-          rankNow
-        ).score
-      } else if (allTimeCardRank) {
-        activeScore = getContinuousTierScore(allTimeCardRank)
+      let activeScore = null
+      if (bodyweightKg && thresholds) {
+        if (lift.ormKg !== null && Number.isFinite(lift.activeCurrentScore)) {
+          activeScore = applyInactivityDecay(
+            Number(lift.activeCurrentScore),
+            lift.activeLastRankedAt,
+            now
+          ).score
+        } else if (allTimeCardRank) {
+          activeScore = getContinuousTierScore(allTimeCardRank)
+        }
       }
-    }
 
-    const activeCardRank = activeScore !== null && thresholds
-      ? getRankFromScore(lift, activeScore, thresholds)
-      : null
+      const activeCardRank = activeScore !== null && thresholds
+        ? getRankFromScore(lift, activeScore, thresholds)
+        : null
 
-    return {
-      ...lift,
-      anchors,
-      thresholds,
-      allTimeCardRank,
-      activeCardRank,
-      activeScore,
-      cardRank: isActiveMode ? activeCardRank : allTimeCardRank,
-    }
-  })
+      return {
+        ...lift,
+        anchors,
+        thresholds,
+        allTimeCardRank,
+        activeCardRank,
+        activeScore,
+        cardRank: isActiveMode ? activeCardRank : allTimeCardRank,
+      }
+    })
+  }, [lifts, gender, bodyweightKg, isActiveMode])
 
-  const muscleGroupRanks = MUSCLE_GROUPS.map(group => buildMuscleGroupRank(group, liftsWithDetails))
+  const muscleGroupRanks = useMemo(() =>
+    MUSCLE_GROUPS.map(group => buildMuscleGroupRank(group, liftsWithDetails)),
+  [liftsWithDetails])
   const selectedMuscleGroupData = muscleGroupRanks.find(group => group.key === selectedMuscleGroup) ?? null
   const muscleChartData = muscleGroupRanks
     .filter(group => group.chartFrequency > 0)
@@ -558,7 +567,7 @@ export default function Ranks() {
     }
   }, [loading, muscleChartSignature])
 
-  const filteredLifts = liftsWithDetails
+  const filteredLifts = useMemo(() => liftsWithDetails
     .filter(lift => {
       if (selectedMuscleGroupData && getMuscleContributionWeight(lift, selectedMuscleGroupData) === 0) {
         return false
@@ -588,6 +597,7 @@ export default function Ranks() {
       if (b.cardRank.ratio !== a.cardRank.ratio) return b.cardRank.ratio - a.cardRank.ratio
       return a.name.localeCompare(b.name)
     })
+  , [liftsWithDetails, selectedMuscleGroupData, search])
 
   const editingLift = liftsWithDetails.find(lift => lift.exerciseId === editingLiftId) ?? null
   const enteredWeight = Number.parseFloat(topSetForm.weight)
@@ -970,6 +980,8 @@ export default function Ranks() {
 
       {loading ? (
         <LoadingSpinner fullPage />
+      ) : loadError ? (
+        <div className="ranks-empty">{loadError}</div>
       ) : filteredLifts.length === 0 ? (
         <div className="ranks-empty">
           {selectedMuscleGroupData

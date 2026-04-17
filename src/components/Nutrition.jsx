@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
 import NutritionFoodPicker from './nutrition/NutritionFoodPicker'
@@ -179,9 +179,10 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     setSavingGoals(true)
     const { data: { user } } = await supabase.auth.getUser()
     const n = k => +goalsForm[k] || 0
+    const nMacro = k => Math.max(1, +goalsForm[k] || 0)
     const updates = {
-      calories_goal: n('calories_goal'), protein_goal: n('protein_goal'),
-      carbs_goal: n('carbs_goal'), fat_goal: n('fat_goal'),
+      calories_goal: nMacro('calories_goal'), protein_goal: nMacro('protein_goal'),
+      carbs_goal: nMacro('carbs_goal'), fat_goal: nMacro('fat_goal'),
       fiber_goal: n('fiber_goal'), sugar_goal: n('sugar_goal'),
       saturated_fat_goal: n('saturated_fat_goal'), sodium_goal: n('sodium_goal'),
       potassium_goal: n('potassium_goal'), cholesterol_goal: n('cholesterol_goal'),
@@ -190,7 +191,11 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       vitamin_a_goal: n('vitamin_a_goal'), vitamin_c_goal: n('vitamin_c_goal'),
       vitamin_d_goal: n('vitamin_d_goal'),
     }
-    await supabase.from('profiles').update(updates).eq('id', user.id)
+    const { error } = await supabase.from('profiles').update(updates).eq('id', user.id)
+    if (error) {
+      setSavingGoals(false)
+      return
+    }
     setGoals({
       calories: updates.calories_goal, protein: updates.protein_goal,
       carbs: updates.carbs_goal, fat: updates.fat_goal,
@@ -214,9 +219,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       title: 'Macros',
       items: [
         { label: 'Calories', key: 'calories', unit: 'kcal', color: 'var(--blue)' },
-        { label: 'Protein', key: 'protein', unit: 'g', color: '#a855f7' },
-        { label: 'Carbohydrates', key: 'carbs', unit: 'g', color: '#f97316' },
-        { label: 'Fat', key: 'fat', unit: 'g', color: '#eab308' },
+        { label: 'Protein', key: 'protein', unit: 'g', color: 'var(--blue)' },
+        { label: 'Carbohydrates', key: 'carbs', unit: 'g', color: 'var(--blue)' },
+        { label: 'Fat', key: 'fat', unit: 'g', color: 'var(--blue)' },
         { label: 'Fiber', key: 'fiber', unit: 'g', color: '#22c55e', type: 'target' },
         { label: 'Sugar', key: 'sugar', unit: 'g', color: '#f43f5e', type: 'max' },
         { label: 'Saturated Fat', key: 'saturated_fat', unit: 'g', color: '#f43f5e', type: 'max' },
@@ -249,7 +254,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     animationIndex: detailAnimationIndex++,
     items: section.items.map(item => ({ ...item, animationIndex: detailAnimationIndex++ })),
   }))
-  const feedLogs = (() => {
+  const feedLogs = useMemo(() => {
     const items = [...logs]
     const directionMultiplier = feedSortDirection === 'asc' ? 1 : -1
     const dateDiff = (a, b) => {
@@ -267,7 +272,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       dateDiff(a, b) ||
       ((a.id || 0) - (b.id || 0)) * directionMultiplier
     ))
-  })()
+  }, [logs, feedFilter, feedSortDirection])
 
   const feedListKey = `${date}-${feedFilter}-${feedSortDirection}-${logs.length}`
 
@@ -406,9 +411,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
 
         <div className="nut-macros">
           {[
-            { label: 'Protein', key: 'protein', color: '#a855f7' },
-            { label: 'Carbs',   key: 'carbs',   color: '#f97316' },
-            { label: 'Fat',     key: 'fat',      color: '#eab308' },
+            { label: 'Protein', key: 'protein', color: 'var(--blue)' },
+            { label: 'Carbs',   key: 'carbs',   color: 'var(--blue)' },
+            { label: 'Fat',     key: 'fat',      color: 'var(--blue)' },
           ].map(m => (
             <div key={m.label} className="nut-macro-row">
               <div className="nut-macro-header">

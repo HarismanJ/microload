@@ -328,6 +328,7 @@ export default function Workout({
   })
   const battleStartedRoomRef = useRef(null)
   const completedBattleRoomRef = useRef(null)
+  const isFinishingRef = useRef(false)
   const latestWorkoutDraftRef = useRef(null)
   const latestBattleWorkoutDraftRef = useRef(null)
   const battleModeActive = Boolean(battleRoom?.id) && completedBattleRoomRef.current !== battleRoom.id
@@ -1075,7 +1076,8 @@ export default function Workout({
   }, [hasIncompleteFinishableSets])
 
   const runConfirmedAction = async () => {
-    if (!confirmAction || confirmBusy) return
+    if (!confirmAction || confirmBusy || isFinishingRef.current) return
+    isFinishingRef.current = true
     setConfirmBusy(true)
     try {
       if (confirmAction === 'cancel') await confirmCancel()
@@ -1087,8 +1089,11 @@ export default function Workout({
       if (confirmAction === 'finish') await finishWorkout()
       if (confirmAction === 'restart') await restartWorkoutFromSavedDraft()
       setConfirmAction(null)
+    } catch (err) {
+      console.error('runConfirmedAction failed:', err)
     } finally {
       setConfirmBusy(false)
+      isFinishingRef.current = false
     }
   }
 
@@ -1361,6 +1366,7 @@ export default function Workout({
         }
       } catch (err) {
         setBattleSyncError(err.message || 'Could not finish the battle room cleanly.')
+        return
       }
     }
 
@@ -2396,7 +2402,7 @@ export default function Workout({
               </button>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="exercise-block-name">{ex.name}</div>
-                <div className="exercise-category">{ex.category}{ex.equipment === 'Dumbbell' && <span className="db-per-hint-inline"> · log 1 dumbbell</span>}</div>
+                <div className="exercise-category">{ex.category}{(ex.equipment === 'Dumbbell' || ex.name === 'Cable Lateral Raise') && <span className="db-per-hint-inline"> · log 1 side</span>}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div className="unit-toggle">
@@ -2463,7 +2469,7 @@ export default function Workout({
             <div className="set-row header-row">
               <span className="col-set">Set</span>
               <span className="col-prev">Previous</span>
-              <span className="col-kg">{ex.unit}{ex.equipment === 'Dumbbell' && <span className="db-per-hint">per DB</span>}</span>
+              <span className="col-kg">{ex.unit}{(ex.equipment === 'Dumbbell' || ex.name === 'Cable Lateral Raise') && <span className="db-per-hint">per side</span>}</span>
               <span className="col-reps">Reps</span>
               <span className="col-done"></span>
             </div>

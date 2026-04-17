@@ -80,20 +80,22 @@ export async function sendFriendRequest(requesterId, addresseeId) {
   if (error) throw error
 }
 
-export async function acceptFriendRequest(friendshipId) {
+export async function acceptFriendRequest(friendshipId, userId) {
   const { error } = await supabase
     .from('friendships')
     .update({ status: 'accepted', responded_at: new Date().toISOString() })
     .eq('id', friendshipId)
+    .eq('addressee_id', userId)
 
   if (error) throw error
 }
 
-export async function removeFriendship(friendshipId) {
+export async function removeFriendship(friendshipId, userId) {
   const { error } = await supabase
     .from('friendships')
     .delete()
     .eq('id', friendshipId)
+    .or(`requester_id.eq.${userId},addressee_id.eq.${userId}`)
 
   if (error) throw error
 }

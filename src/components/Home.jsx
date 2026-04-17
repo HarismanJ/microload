@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent, useRef } from 'react'
+import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { getCached, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
 import LoadingSpinner from './LoadingSpinner'
@@ -59,7 +59,7 @@ function getCalendarMonthCacheKey(dateInput = new Date()) {
 let ghostChartHasPlayed = false
 let barGlowHasPlayed = false
 
-export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0 }) {
+export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, onWorkoutDeleted }) {
   const [profile, setProfile]         = useState(null)
   const [todayNut, setTodayNut]       = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 })
   const [workoutStreak, setWorkoutStreak] = useState(0)
@@ -111,6 +111,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setSelectedDay({ sessionIds: remainingSessionIds, dateStr })
     setLoading(true)
     load()
+    onWorkoutDeleted?.()
   }
 
   function applyData({ prof, nutLogs, allSessions, weightLogs: logs }) {
@@ -341,7 +342,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId),
     ])
 
-    if (insertError || profileError) {
+    if (insertError || profileError || !inserted) {
       setBwSaving(false)
       setBwError(insertError?.message || profileError?.message || 'Could not save your body weight.')
       return
@@ -349,18 +350,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
     invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(timestamp))
     setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
-    setWeightLogs(prev => [...prev, inserted ? {
+    setWeightLogs(prev => [...prev, {
       id: inserted.id,
       weight: inserted.weight,
       unit: inserted.unit,
       date: inserted.logged_at.slice(0, 10),
       loggedAt: inserted.logged_at,
-    } : {
-      id: timestamp,
-      weight: val,
-      unit,
-      date: timestamp.slice(0, 10),
-      loggedAt: timestamp,
     }])
     setBwInput('')
     setBwSaving(false)
@@ -404,15 +399,16 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const homeChartTickCount = 5
   const homeChartPadding = isPhoneWidth ? 'tight-mobile' : 'tight'
   const macroRingItems = [
-    { label: 'Protein', val: todayNut.protein, goal: todayNut.proteinGoal, color: '#3b9eff' },
-    { label: 'Carbs', val: todayNut.carbs, goal: todayNut.carbsGoal, color: '#a855f7' },
-    { label: 'Fat', val: todayNut.fat, goal: todayNut.fatGoal, color: '#f97316' },
+    { label: 'Protein', val: todayNut.protein, goal: todayNut.proteinGoal, color: 'var(--blue)' },
+    { label: 'Carbs', val: todayNut.carbs, goal: todayNut.carbsGoal, color: 'var(--blue)' },
+    { label: 'Fat', val: todayNut.fat, goal: todayNut.fatGoal, color: 'var(--blue)' },
   ]
-  const periodDays = { '1w': 7, '1m': 30, '1y': 365 }
-  const now = new Date()
-  const filteredWeightLogs = weightPeriod === 'all'
-    ? weightLogs
-    : weightLogs.filter(d => (now - new Date(d.date)) / 86400000 <= periodDays[weightPeriod])
+  const filteredWeightLogs = useMemo(() => {
+    if (weightPeriod === 'all') return weightLogs
+    const now = new Date()
+    const periodDays = { '1w': 7, '1m': 30, '1y': 365 }
+    return weightLogs.filter(d => (now - new Date(d.date)) / 86400000 <= periodDays[weightPeriod])
+  }, [weightLogs, weightPeriod])
   const recentWeightDelta = filteredWeightLogs.length >= 2
     ? convertWeight(filteredWeightLogs.at(-1)?.weight ?? 0, filteredWeightLogs.at(-1)?.unit || activeWeightUnit, activeWeightUnit)
       - convertWeight(filteredWeightLogs[0]?.weight ?? 0, filteredWeightLogs[0]?.unit || activeWeightUnit, activeWeightUnit)

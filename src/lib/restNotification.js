@@ -107,7 +107,8 @@ export async function scheduleRestEndNotification(seconds, exerciseName, options
         : 'Time to hit your next set.'
   )
 
-  saveTimerTarget(id, Date.now() + safeSeconds * 1000, title, body)
+  const targetMs = Date.now() + safeSeconds * 1000
+  saveTimerTarget(id, targetMs, title, body)
 
   if (USE_NATIVE_NOTIFICATIONS) {
     try {
@@ -118,7 +119,7 @@ export async function scheduleRestEndNotification(seconds, exerciseName, options
             title,
             body,
             schedule: {
-              at: new Date(Date.now() + safeSeconds * 1000),
+              at: new Date(targetMs),
               allowWhileIdle: true,
             },
           },
