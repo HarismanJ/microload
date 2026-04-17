@@ -85,6 +85,15 @@ export function invalidateCache(...keys) {
   })
 }
 
+// Non-prefixed localStorage keys that are user-specific and must be cleared on logout.
+const USER_LOCAL_KEYS = [
+  'theme',
+  'hiddenTemplates',
+  'battleFeedHidden',
+  'ranks:display-mode',
+  'restTimerTargets',
+]
+
 export function clearCache() {
   Object.keys(store).forEach(key => delete store[key])
   const storage = getStorage()
@@ -99,6 +108,7 @@ export function clearCache() {
       }
     }
     keysToRemove.forEach(key => storage.removeItem(key))
+    USER_LOCAL_KEYS.forEach(key => storage.removeItem(key))
   } catch {
     // Ignore storage cleanup failures.
   }

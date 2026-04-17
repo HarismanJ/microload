@@ -1,4 +1,4 @@
-import { useState, useEffect, useEffectEvent, useRef } from 'react'
+import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getCached, setCached } from '../../lib/cache'
 import '../../styles/Profile.css'
@@ -138,14 +138,14 @@ export default function WorkoutCalendar({
     if (loading || initialLoadReportedRef.current) return
     initialLoadReportedRef.current = true
     onInitialLoadComplete?.()
-  }, [loading, onInitialLoadComplete, initialLoadReportedRef])
+  }, [loading, onInitialLoadComplete])
 
   function prevMonth() { setMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1)) }
   function nextMonth() { setMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1)) }
 
   const year  = month.getFullYear()
   const m     = month.getMonth()
-  const cells = buildGrid(year, m)
+  const cells = useMemo(() => buildGrid(year, m), [year, m])
   const weekRows = Math.max(1, Math.ceil(cells.length / 7))
   const isHeatmap = compact && variant === 'heatmap'
   const isHybrid = compact && variant === 'hybrid'

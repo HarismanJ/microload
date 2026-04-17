@@ -114,8 +114,9 @@ export default function NutritionFoodPicker({
 
       try {
         const { data: { user } } = await supabase.auth.getUser()
+        if (cancelled) return
         if (!user) {
-          if (!cancelled) setResults([])
+          setResults([])
           return
         }
 

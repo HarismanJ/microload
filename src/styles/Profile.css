@@ -2965,3 +2965,12 @@
     align-items: flex-start;
   }
 }
+
+.profile-made-by {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--muted);
+  opacity: 0.5;
+  padding: 24px 0 12px;
+  letter-spacing: 0.03em;
+}

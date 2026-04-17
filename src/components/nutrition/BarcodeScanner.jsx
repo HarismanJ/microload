@@ -278,11 +278,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
               const acceptedBarcode = barcodes.find(isAcceptedFoodBarcode)
               if (acceptedBarcode && !scannedRef.current) {
                 scannedRef.current = true
-                runningRef.current = false
-                cancelAnimationFrame(animFrameRef.current)
-                animFrameRef.current = null
-                stream.getTracks().forEach(t => t.stop())
-                video.srcObject = null
+                stopCamera()
                 lookup(getScannedValue(acceptedBarcode))
                 return
               }

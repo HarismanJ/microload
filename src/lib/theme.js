@@ -98,10 +98,18 @@ export function applyTheme(themeId) {
 }
 
 export function getSavedTheme() {
-  return localStorage.getItem('theme') || 'obsidian'
+  try {
+    return localStorage.getItem('theme') || 'obsidian'
+  } catch {
+    return 'obsidian'
+  }
 }
 
 export function saveTheme(themeId) {
-  localStorage.setItem('theme', themeId)
+  try {
+    localStorage.setItem('theme', themeId)
+  } catch {
+    // Ignore storage failures — theme still applies in memory for this session
+  }
   applyTheme(themeId)
 }

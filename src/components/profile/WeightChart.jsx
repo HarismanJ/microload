@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, useMemo } from 'react'
 import { convertWeight } from '../../lib/liftMath'
 
 // SVG line chart — shows bodyweight over time
@@ -53,9 +53,10 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
   const [lineDrawn, setLineDrawn] = useState(false)
   const accentColor = 'var(--blue)'
   const gradientId = `weight-grad-${gradientBaseId.replace(/:/g, '')}`
-  const dataSignature = (data || [])
+  const dataSignature = useMemo(() => (data || [])
     .map(point => `${point.id ?? point.loggedAt ?? point.date ?? ''}:${point.weight}:${point.unit || unit}`)
     .join('|')
+  , [data, unit])
 
   useEffect(() => {
     const node = containerRef.current

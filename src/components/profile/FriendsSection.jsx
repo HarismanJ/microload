@@ -26,7 +26,7 @@ function getFriendlyFriendsError(err, fallback) {
   return message || fallback
 }
 
-export default function FriendsSection({ userId, username, profileLoaded = false, onChallenge, onViewProfile }) {
+export default function FriendsSection({ userId, username, profileLoaded = false, onChallenge, onViewProfile, workoutActive = false }) {
   const [overview, setOverview] = useState({ incoming: [], outgoing: [], friends: [], all: [] })
   const [headToHead, setHeadToHead] = useState({})
   const [loading, setLoading] = useState(true)
@@ -172,7 +172,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
       cancelled = true
       clearTimeout(timer)
     }
-  }, [canSearchForFriends, search, userId, relationByUserId])
+  }, [canSearchForFriends, search, userId, overview.all])
 
   async function handleSendRequest(profile) {
     if (!canSearchForFriends) {
@@ -211,7 +211,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
     setError('')
 
     try {
-      await acceptFriendRequest(friendship.id)
+      await acceptFriendRequest(friendship.id, userId)
       await refreshFriends()
       setNotice(`You and ${getDisplayName(friendship.otherProfile)} are now friends.`)
     } catch (err) {
@@ -228,7 +228,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
     setError('')
 
     try {
-      await removeFriendship(friendship.id)
+      await removeFriendship(friendship.id, userId)
       await refreshFriends()
       setNotice(label)
     } catch (err) {
@@ -450,13 +450,15 @@ export default function FriendsSection({ userId, username, profileLoaded = false
                     <button
                       className="friends-primary-btn"
                       onClick={() => handleChallenge(friendship)}
-                      disabled={actionKey === `challenge-${friendship.id}` || !username || !friendship.otherProfile?.username}
+                      disabled={actionKey === `challenge-${friendship.id}` || !username || !friendship.otherProfile?.username || workoutActive}
                     >
                       {actionKey === `challenge-${friendship.id}`
                         ? 'Sending...'
-                        : !username || !friendship.otherProfile?.username
-                          ? 'Need usernames'
-                          : 'Challenge'}
+                        : workoutActive
+                          ? 'Finish workout first'
+                          : !username || !friendship.otherProfile?.username
+                            ? 'Need usernames'
+                            : 'Challenge'}
                     </button>
                     <button
                       className="friends-secondary-btn"

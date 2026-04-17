@@ -21,15 +21,17 @@ function formatWeightLogLabel(timestamp) {
   })
 }
 
-export default function Profile({ onChallenge }) {
-  const { themeId, switchTheme, themes } = useTheme()
+export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive = false }) {
+  const { themeId, switchTheme, previewTheme, themes } = useTheme()
   const profileIdRef = useRef(null)
   const weightSectionRef = useRef(null)
   const [themeToast, setThemeToast] = useState(null)
 
   async function savePreferredTheme() {
     if (profileIdRef.current) {
-      await supabase.from('profiles').update({ theme: themeId }).eq('id', profileIdRef.current)
+      const { error } = await supabase.from('profiles').update({ theme: themeId }).eq('id', profileIdRef.current)
+      if (error) return
+      switchTheme(themeId)
       const name = themes.find(t => t.id === themeId)?.name || themeId
       setThemeToast(name)
     }
@@ -168,19 +170,24 @@ export default function Profile({ onChallenge }) {
     }
 
     if (isUnitPreferenceChanging) {
-      const { data: latestWeightLog } = await supabase
-        .from('body_weight_logs')
-        .select('weight, unit')
-        .eq('user_id', user.id)
-        .order('logged_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      try {
+        const { data: latestWeightLog } = await supabase
+          .from('body_weight_logs')
+          .select('weight, unit')
+          .eq('user_id', user.id)
+          .order('logged_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
 
-      const sourceWeight = latestWeightLog?.weight ?? profile?.bodyweight
-      const sourceUnit = latestWeightLog?.unit || profile?.unit_preference || form.unit_preference
+        const sourceWeight = latestWeightLog?.weight ?? profile?.bodyweight
+        const sourceUnit = latestWeightLog?.unit || profile?.unit_preference || form.unit_preference
 
-      if (sourceWeight !== null && sourceWeight !== undefined) {
-        updates.bodyweight = Math.round(convertWeight(sourceWeight, sourceUnit, form.unit_preference) * 10) / 10
+        if (sourceWeight !== null && sourceWeight !== undefined) {
+          updates.bodyweight = Math.round(convertWeight(sourceWeight, sourceUnit, form.unit_preference) * 10) / 10
+        }
+      } catch {
+        setSaving(false)
+        return
       }
     }
 
@@ -211,6 +218,7 @@ export default function Profile({ onChallenge }) {
   function handleDeletedWorkout({ remainingSessionIds = [], dateStr }) {
     setViewingSession({ sessionIds: remainingSessionIds, dateStr })
     load()
+    onWorkoutDeleted?.()
   }
 
   const initials = profile?.full_name
@@ -275,7 +283,7 @@ export default function Profile({ onChallenge }) {
               <button
                 className={`theme-swatch ${themeId === t.id ? 'active' : ''}`}
                 style={{ background: `linear-gradient(135deg, ${t.vars['--surface2']} 50%, ${t.accent} 50%)` }}
-                onClick={() => switchTheme(t.id)}
+                onClick={() => previewTheme(t.id)}
                 title={t.name}
               >
                 {themeId === t.id && (
@@ -346,6 +354,7 @@ export default function Profile({ onChallenge }) {
         profileLoaded={profile !== null}
         onChallenge={onChallenge}
         onViewProfile={setViewingFriendProfile}
+        workoutActive={workoutActive}
       />
       <div>
         <button className="report-bug-btn" onClick={() => { setShowBugReport(true); setBugMessage(''); setBugError(''); setBugSubmitted(false) }}>
@@ -355,8 +364,8 @@ export default function Profile({ onChallenge }) {
       </div>
 
       {themeToast && (
-        <div className="theme-toast-overlay">
-          <div className="theme-toast-modal">
+        <div className="theme-toast-overlay" onClick={() => setThemeToast(null)}>
+          <div className="theme-toast-modal" onClick={e => e.stopPropagation()}>
             <div className="theme-toast-msg">Preferred colour set to <strong>{themeToast}</strong></div>
             <button className="theme-toast-ok" onClick={() => setThemeToast(null)}>OK</button>
           </div>
@@ -425,6 +434,7 @@ export default function Profile({ onChallenge }) {
           </div>
         </div>
       )}
+      <div className="profile-made-by">microload by Harisman</div>
     </div>
   )
 }
