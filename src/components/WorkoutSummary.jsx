@@ -241,6 +241,18 @@ export default function WorkoutSummary({ summary, onDismiss }) {
               </div>
               <div className="ws-exercises">
                 {exercises.map(ex => {
+                  if (ex.isCardio) {
+                    const totalMin = Math.round(ex.sets.reduce((sum, s) => sum + (s.durationSeconds || 0), 0) / 60)
+                    return (
+                      <div key={ex.name} className="ws-exercise-row">
+                        <div className="ws-exercise-name">{ex.name}</div>
+                        <div className="ws-exercise-meta">
+                          <span>{ex.sets.length} {ex.sets.length !== 1 ? 'entries' : 'entry'}</span>
+                          {totalMin > 0 && <span className="ws-exercise-top">{totalMin} min</span>}
+                        </div>
+                      </div>
+                    )
+                  }
                   const top = ex.sets.reduce((best, s) => s.weight > best ? s.weight : best, 0)
                   return (
                     <div key={ex.name} className="ws-exercise-row">

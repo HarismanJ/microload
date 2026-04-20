@@ -4,6 +4,45 @@ import { STRENGTHLEVEL_EXERCISES } from './strengthLevelCatalog'
 
 const EXERCISES_CACHE_KEY = 'exercises'
 
+// Cardio exercises — time-based, no strength standards, no muscles
+const CARDIO_EXERCISES = [
+  { name: 'Running',           equipment: 'Bodyweight' },
+  { name: 'Jogging',           equipment: 'Bodyweight' },
+  { name: 'Walking',           equipment: 'Bodyweight' },
+  { name: 'Hiking',            equipment: 'Bodyweight' },
+  { name: 'Trail Running',     equipment: 'Bodyweight' },
+  { name: 'Sprinting',         equipment: 'Bodyweight' },
+  { name: 'Cycling',           equipment: 'Bodyweight' },
+  { name: 'Jump Rope',         equipment: 'Bodyweight' },
+  { name: 'Jumping Jacks',     equipment: 'Bodyweight' },
+  { name: 'Burpees',           equipment: 'Bodyweight' },
+  { name: 'Mountain Climbers', equipment: 'Bodyweight' },
+  { name: 'High Knees',        equipment: 'Bodyweight' },
+  { name: 'Swimming',          equipment: 'Bodyweight' },
+  { name: 'HIIT',              equipment: 'Bodyweight' },
+  { name: 'Tabata',            equipment: 'Bodyweight' },
+  { name: 'Circuit Training',  equipment: 'Bodyweight' },
+  { name: 'Shadow Boxing',     equipment: 'Bodyweight' },
+  { name: 'Boxing',            equipment: 'Bodyweight' },
+  { name: 'Kickboxing',        equipment: 'Bodyweight' },
+  { name: 'Dance Cardio',      equipment: 'Bodyweight' },
+  { name: 'Aerobics',          equipment: 'Bodyweight' },
+  { name: 'Zumba',             equipment: 'Bodyweight' },
+  { name: 'Step Aerobics',     equipment: 'Bodyweight' },
+  { name: 'Treadmill',         equipment: 'Machine' },
+  { name: 'Stationary Bike',   equipment: 'Machine' },
+  { name: 'Spin Bike',         equipment: 'Machine' },
+  { name: 'Rowing Machine',    equipment: 'Machine' },
+  { name: 'Elliptical',        equipment: 'Machine' },
+  { name: 'Stair Climber',     equipment: 'Machine' },
+  { name: 'Assault Bike',      equipment: 'Machine' },
+  { name: 'Ski Erg',           equipment: 'Machine' },
+  { name: 'Versa Climber',     equipment: 'Machine' },
+  { name: 'Battle Ropes',      equipment: 'Other' },
+]
+const CARDIO_NAME_SET = new Set(CARDIO_EXERCISES.map(c => c.name))
+const CARDIO_EQUIPMENT_BY_NAME = new Map(CARDIO_EXERCISES.map(c => [c.name, c.equipment]))
+
 // Purge any stale localStorage snapshots from the old fetchExercises implementation
 try {
   const prefix = 'liftlog:startup-snapshot:exercises'
@@ -47,7 +86,20 @@ export async function fetchExercises(userId) {
   const idByName = new Map((idRows ?? []).map(r => [r.name, r.id]))
   const defaultExercises = CATALOG_DEFAULTS.map(ex => ({ ...ex, id: idByName.get(ex.name) }))
 
-  let result = defaultExercises
+  // Extract cardio exercises from the same system rows — metadata comes from CARDIO_EXERCISES
+  const cardioExercises = (idRows ?? [])
+    .filter(r => CARDIO_NAME_SET.has(r.name))
+    .map(r => ({
+      id: r.id,
+      name: r.name,
+      category: 'Cardio',
+      equipment: CARDIO_EQUIPMENT_BY_NAME.get(r.name) ?? 'Bodyweight',
+      user_id: null,
+      primary_muscles: [],
+      secondary_muscles: [],
+    }))
+
+  let result = [...defaultExercises, ...cardioExercises]
 
   if (userId) {
     const { data: custom, error: customError } = await supabase

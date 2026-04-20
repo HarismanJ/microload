@@ -11,15 +11,6 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
-  const [resetCooldown, setResetCooldown] = useState(0)
-  const [resetAttempts, setResetAttempts] = useState(0)
-
-  useEffect(() => {
-    if (resetCooldown <= 0) return
-    const t = setTimeout(() => setResetCooldown(c => c - 1), 1000)
-    return () => clearTimeout(t)
-  }, [resetCooldown])
-
   useEffect(() => {
     if (recoveryMode) {
       setMode('reset')
@@ -27,8 +18,6 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
       setConfirmPassword('')
       setError(null)
       setMessage(null)
-      setResetCooldown(0)
-      setResetAttempts(0)
     }
   }, [recoveryMode])
 
@@ -51,9 +40,6 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: 'microload://reset-password' })
       if (error) { setError(error.message) } else {
         setMessage('Check your email for a password reset link.')
-        const nextAttempts = resetAttempts + 1
-        setResetAttempts(nextAttempts)
-        if (nextAttempts >= 3) setResetCooldown(100)
       }
     } else if (mode === 'reset') {
       if (password !== confirmPassword) {
@@ -244,15 +230,15 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
 
           <button
             type="submit"
-            disabled={loading || resetCooldown > 0}
+            disabled={loading}
             style={{
               background: 'var(--blue)', color: '#fff', border: 'none',
               borderRadius: 10, padding: '13px', fontWeight: 700,
-              fontSize: 15, cursor: (loading || resetCooldown > 0) ? 'not-allowed' : 'pointer',
-              opacity: (loading || resetCooldown > 0) ? 0.7 : 1, marginTop: 4
+              fontSize: 15, cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.7 : 1, marginTop: 4
             }}
           >
-            {loading ? '...' : resetCooldown > 0 ? `Resend in ${resetCooldown}s` : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'reset' ? 'Update Password' : 'Send Reset Link'}
+            {loading ? '...' : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'reset' ? 'Update Password' : 'Send Reset Link'}
           </button>
         </form>
       </div>

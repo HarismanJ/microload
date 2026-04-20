@@ -453,7 +453,22 @@ export default function Ranks({ refreshTick = 0 }) {
           activeLastRankedAt: rankStateByExerciseId.get(ex.id)?.last_ranked_at ?? null,
         }))
 
-      const ranksData = { profile: profileData, lifts: allLifts }
+      const cardioLifts = (exerciseRows ?? [])
+        .filter(ex => ex.category === 'Cardio' && ex.id)
+        .map(ex => ({
+          name: ex.name,
+          category: ex.category,
+          equipment: ex.equipment,
+          exerciseId: ex.id,
+          ormKg: null,
+          primary_muscles: [],
+          secondary_muscles: [],
+          activeCurrentScore: null,
+          activePeakScore: null,
+          activeLastRankedAt: null,
+        }))
+
+      const ranksData = { profile: profileData, lifts: [...allLifts, ...cardioLifts] }
       setCached('ranks', ranksData)
       setStartupSnapshot('ranks', ranksData)
       setProfile(profileData)
@@ -1015,14 +1030,15 @@ export default function Ranks({ refreshTick = 0 }) {
                       Unranked
                     </div>
                   </div>
-                  {!bodyweightKg
-                    ? <div className="lift-no-bw">Add bodyweight in Profile to see targets</div>
-                    : thresholds && <TierSwiper thresholds={thresholds} isBW={lift.equipment === 'Bodyweight'} bodyweightKg={bodyweightKg} currentTierIdx={null} fmt={fmt} useLbs={useLbs} />
-                  }
-                  <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
+                  {lift.category !== 'Cardio' && (
+                    !bodyweightKg
+                      ? <div className="lift-no-bw">Add bodyweight in Profile to see targets</div>
+                      : thresholds && <TierSwiper thresholds={thresholds} isBW={lift.equipment === 'Bodyweight'} bodyweightKg={bodyweightKg} currentTierIdx={null} fmt={fmt} useLbs={useLbs} />
+                  )}
+                  {lift.category !== 'Cardio' && <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
                     {isEditing ? 'Cancel' : isLogged ? 'Update top set' : 'Add top set'}
-                  </button>
-                  {isEditing && (
+                  </button>}
+                  {lift.category !== 'Cardio' && isEditing && (
                     <div className="lift-import-panel">
                       <div className="lift-import-title">Manual rank update</div>
                       <div className="lift-import-sub">

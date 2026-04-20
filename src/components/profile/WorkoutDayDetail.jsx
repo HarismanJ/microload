@@ -153,7 +153,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
           .order('started_at'),
         supabase
           .from('workout_sets')
-          .select('id, session_id, exercise_id, set_number, reps, weight, unit, estimated_1rm, exercises(name, category, equipment)')
+          .select('id, session_id, exercise_id, set_number, reps, weight, unit, estimated_1rm, duration_seconds, exercises(name, category, equipment)')
           .eq('user_id', user.id)
           .in('session_id', activeSessionIds)
           .order('session_id')
@@ -685,9 +685,15 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                         <div key={set.id} className="day-set-item">
                           <div className="day-set-row">
                             <span className="day-set-num">{set.set_number}</span>
-                            <span>{set.weight} {set.unit}</span>
-                            <span>{set.reps}</span>
-                            <span className="day-set-orm">{set.estimated_1rm ? `${set.estimated_1rm.toFixed(1)} ${set.unit}` : '—'}</span>
+                            {set.duration_seconds != null ? (
+                              <span style={{ gridColumn: 'span 3' }}>{Math.round(set.duration_seconds / 60)} min</span>
+                            ) : (
+                              <>
+                                <span>{set.weight} {set.unit}</span>
+                                <span>{set.reps}</span>
+                                <span className="day-set-orm">{set.estimated_1rm ? `${set.estimated_1rm.toFixed(1)} ${set.unit}` : '—'}</span>
+                              </>
+                            )}
                             <div className="day-set-actions">
                               <button
                                 className="day-edit-btn"

@@ -388,6 +388,8 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
         <div className="ex-loading">
           <LoadingSpinner size="md" />
         </div>
+      ) : exercise?.category === 'Cardio' ? (
+        <div className="ex-no-data">Cardio exercise — logged by duration, no strength rank.</div>
       ) : (
         <>
           {/* Dumbbell / single-side hint */}

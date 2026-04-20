@@ -48,6 +48,7 @@ const SOLO_WORKOUT_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000
 const SHARED_WORKOUT_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 const defaultSet = () => ({ reps: '', weight: '', done: false })
+const defaultCardioSet = () => ({ duration: '', done: false })
 
 function getWorkoutDraftStorageKey(userId, roomId = null) {
   return roomId
@@ -659,7 +660,7 @@ export default function Workout({
     if (!exerciseIds.length || !uid) return
     let q = supabase
       .from('workout_sets')
-      .select('exercise_id, weight, reps, unit, set_number, session_id')
+      .select('exercise_id, weight, reps, unit, set_number, session_id, duration_seconds')
       .eq('user_id', uid)
       .in('exercise_id', exerciseIds)
       .order('created_at', { ascending: false })
@@ -1036,6 +1037,18 @@ export default function Workout({
   }
 
   const getFinishableSetMeta = useCallback((exercise, set, index) => {
+    if (exercise.category === 'Cardio') {
+      const duration = Number.parseInt(set.duration, 10)
+      const valid = Number.isInteger(duration) && duration > 0
+      return {
+        exerciseId: exercise.id,
+        setIndex: index,
+        duration: valid ? duration : 0,
+        shouldInclude: valid,
+        incomplete: valid && !set.done,
+      }
+    }
+
     const weight = Number.parseFloat(set.weight)
     const reps = Number.parseInt(set.reps, 10)
     const validReps = Number.isInteger(reps) && reps > 0 && reps <= MAX_REPS
@@ -1105,17 +1118,27 @@ export default function Workout({
       ex.sets.forEach((s, i) => {
         const meta = getFinishableSetMeta(ex, s, i)
         if (!meta.shouldInclude) return
-        setsToInsert.push({
-          user_id: user.id,
-          session_id: sessionId,
-          exercise_id: ex.id,
-          set_number: i + 1,
-          reps: meta.reps,
-          weight: meta.weight,
-          unit: ex.unit,
-          equipment: ex.equipment,
-          estimated_1rm: calculateORM(meta.weight, meta.reps),
-        })
+        if (ex.category === 'Cardio') {
+          setsToInsert.push({
+            user_id: user.id,
+            session_id: sessionId,
+            exercise_id: ex.id,
+            set_number: i + 1,
+            duration_seconds: meta.duration * 60,
+          })
+        } else {
+          setsToInsert.push({
+            user_id: user.id,
+            session_id: sessionId,
+            exercise_id: ex.id,
+            set_number: i + 1,
+            reps: meta.reps,
+            weight: meta.weight,
+            unit: ex.unit,
+            equipment: ex.equipment,
+            estimated_1rm: calculateORM(meta.weight, meta.reps),
+          })
+        }
       })
     })
 
@@ -1224,6 +1247,7 @@ export default function Workout({
         weight: set.weight,
         unit: set.unit,
         estimated_1rm: set.estimated_1rm,
+        duration_seconds: set.duration_seconds,
       })))
     }
 
@@ -1329,18 +1353,27 @@ export default function Workout({
       totalVolume,
       unit,
       exercises: exercisesOverride
-        .map(ex => ({
-          name: ex.name,
-          sets: ex.sets
-            .map((set, index) => {
-              const meta = getFinishableSetMeta(ex, set, index)
-              return meta.shouldInclude
-                ? { weight: meta.weight, reps: meta.reps, unit: ex.unit }
-                : null
-            })
-            .filter(Boolean),
-        }))
-        .filter(ex => ex.sets.length > 0),
+        .map(ex => {
+          if (ex.category === 'Cardio') {
+            const sets = ex.sets
+              .map((set, index) => {
+                const meta = getFinishableSetMeta(ex, set, index)
+                return meta.shouldInclude ? { durationSeconds: meta.duration * 60 } : null
+              })
+              .filter(Boolean)
+            return sets.length > 0 ? { name: ex.name, sets, isCardio: true } : null
+          }
+          return {
+            name: ex.name,
+            sets: ex.sets
+              .map((set, index) => {
+                const meta = getFinishableSetMeta(ex, set, index)
+                return meta.shouldInclude ? { weight: meta.weight, reps: meta.reps, unit: ex.unit } : null
+              })
+              .filter(Boolean),
+          }
+        })
+        .filter(ex => ex && ex.sets.length > 0),
       rankUps,
       newAchievements,
     }
@@ -1520,7 +1553,7 @@ export default function Workout({
     const toAdd = exerciseLibrary
       .filter(e => selected.includes(e.id))
       .filter(e => !workoutExercises.find(p => p.id === e.id))
-      .map(e => ({ ...e, sets: [defaultSet()], unit: defaultUnit, restSeconds: e.default_rest_seconds ?? defaultRest }))
+      .map(e => ({ ...e, sets: [e.category === 'Cardio' ? defaultCardioSet() : defaultSet()], unit: defaultUnit, restSeconds: e.default_rest_seconds ?? defaultRest }))
     setWorkoutExercises(prev => [...prev, ...toAdd])
     closePicker()
     loadPrevSets(toAdd.map(e => e.id), userId, sessionId)
@@ -1870,7 +1903,7 @@ export default function Workout({
       } else {
         const customExercise = {
           ...created,
-          sets: [defaultSet()],
+          sets: [created.category === 'Cardio' ? defaultCardioSet() : defaultSet()],
           unit: defaultUnit,
           restSeconds: created.default_rest_seconds ?? defaultRest,
         }
@@ -2405,20 +2438,22 @@ export default function Workout({
                 <div className="exercise-category">{ex.category}{(ex.equipment === 'Dumbbell' || ex.name === 'Cable Lateral Raise') && <span className="db-per-hint-inline"> · log 1 side</span>}</div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div className="unit-toggle">
-                  <button className={`unit-btn ${ex.unit === 'kg' ? 'active' : ''}`} onClick={() => {
-                    if (ex.unit === 'kg') return
-                    setWorkoutExercises(prev => prev.map(e => e.id === ex.id
-                      ? { ...e, unit: 'kg', sets: e.sets.map(s => ({ ...s, weight: Math.round(s.weight * 0.453592 * 10) / 10 })) }
-                      : e))
-                  }}>kg</button>
-                  <button className={`unit-btn ${ex.unit === 'lbs' ? 'active' : ''}`} onClick={() => {
-                    if (ex.unit === 'lbs') return
-                    setWorkoutExercises(prev => prev.map(e => e.id === ex.id
-                      ? { ...e, unit: 'lbs', sets: e.sets.map(s => ({ ...s, weight: Math.round(s.weight * 2.20462 * 10) / 10 })) }
-                      : e))
-                  }}>lbs</button>
-                </div>
+                {ex.category !== 'Cardio' && (
+                  <div className="unit-toggle">
+                    <button className={`unit-btn ${ex.unit === 'kg' ? 'active' : ''}`} onClick={() => {
+                      if (ex.unit === 'kg') return
+                      setWorkoutExercises(prev => prev.map(e => e.id === ex.id
+                        ? { ...e, unit: 'kg', sets: e.sets.map(s => ({ ...s, weight: Math.round(s.weight * 0.453592 * 10) / 10 })) }
+                        : e))
+                    }}>kg</button>
+                    <button className={`unit-btn ${ex.unit === 'lbs' ? 'active' : ''}`} onClick={() => {
+                      if (ex.unit === 'lbs') return
+                      setWorkoutExercises(prev => prev.map(e => e.id === ex.id
+                        ? { ...e, unit: 'lbs', sets: e.sets.map(s => ({ ...s, weight: Math.round(s.weight * 2.20462 * 10) / 10 })) }
+                        : e))
+                    }}>lbs</button>
+                  </div>
+                )}
                 <div className="set-controls">
                   <button className="set-ctrl-btn" onClick={() => removeSet(ex.id)}>−</button>
                   <span className="set-count">{ex.sets.length} sets</span>
@@ -2466,18 +2501,78 @@ export default function Workout({
               />
             )}
 
-            <div className="set-row header-row">
-              <span className="col-set">Set</span>
-              <span className="col-prev">Previous</span>
-              <span className="col-kg">{ex.unit}{(ex.equipment === 'Dumbbell' || ex.name === 'Cable Lateral Raise') && <span className="db-per-hint">per side</span>}</span>
-              <span className="col-reps">Reps</span>
-              <span className="col-done"></span>
-            </div>
+            {ex.category === 'Cardio' ? (
+              <div className="set-row cardio-row header-row">
+                <span className="col-set">Set</span>
+                <span className="col-prev">Previous</span>
+                <span className="col-kg">Min</span>
+                <span className="col-done"></span>
+              </div>
+            ) : (
+              <div className="set-row header-row">
+                <span className="col-set">Set</span>
+                <span className="col-prev">Previous</span>
+                <span className="col-kg">{ex.unit}{(ex.equipment === 'Dumbbell' || ex.name === 'Cable Lateral Raise') && <span className="db-per-hint">per side</span>}</span>
+                <span className="col-reps">Reps</span>
+                <span className="col-done"></span>
+              </div>
+            )}
 
             {ex.sets.map((s, i) => {
               const isActive = swipeState?.exId === ex.id && swipeState?.idx === i
               const dx = isActive ? swipeState.dx : 0
               const revealing = dx < -20
+              const deleteBg = revealing && (
+                <div className="set-row-delete-bg" style={{ width: Math.abs(dx) }}>
+                  <svg style={{ width: Math.min(20, Math.abs(dx) * 0.25), height: Math.min(20, Math.abs(dx) * 0.25) }} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  </svg>
+                </div>
+              )
+              const swipeProps = {
+                onTouchStart: e => handleTouchStart(ex.id, i, e),
+                onTouchMove: e => handleTouchMove(ex.id, i, e),
+                onTouchEnd: () => handleTouchEnd(ex.id, i),
+                onTouchCancel: () => { cancelAnimationFrame(swipeRafRef.current); swipeRef.current = null; setSwipeState(null) },
+              }
+              const rowStyle = { transform: `translateX(${dx}px)`, transition: isActive ? 'none' : 'transform 0.2s ease' }
+
+              if (ex.category === 'Cardio') {
+                const durationValid = Number.isInteger(Number.parseInt(s.duration, 10)) && Number.parseInt(s.duration, 10) > 0
+                return (
+                  <div key={i} className="set-row-wrapper" {...swipeProps}>
+                    {deleteBg}
+                    <div className={`set-row cardio-row ${s.done ? 'done' : ''}`} style={rowStyle}>
+                      <span className="col-set">{i + 1}</span>
+                      <span className="col-prev">
+                        {(() => {
+                          const p = prevSetsMap[ex.id]?.[i]
+                          if (!p || !p.duration_seconds) return '—'
+                          return `${Math.round(p.duration_seconds / 60)} min`
+                        })()}
+                      </span>
+                      <input
+                        className="col-kg set-input"
+                        type="number"
+                        inputMode="numeric"
+                        value={s.duration}
+                        placeholder="30"
+                        min="1"
+                        max="600"
+                        disabled={s.done}
+                        onChange={e => updateSet(ex.id, i, 'duration', e.target.value)}
+                      />
+                      <button className={`col-done done-btn ${s.done ? 'checked' : ''}`} disabled={!s.done && !durationValid} onClick={() => updateSet(ex.id, i, 'done', !s.done)}>
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                )
+              }
+
               const enteredWeight = Number.parseFloat(s.weight)
               const enteredReps = Number.parseInt(s.reps, 10)
               const weightValid = isWeightWithinInputRange(enteredWeight, {
@@ -2489,23 +2584,11 @@ export default function Workout({
               const minWeight = getWeightInputMin(ex.equipment, ex.unit, userBodyweightKg)
               const maxWeight = getWeightInputMax(ex.equipment, ex.unit)
               return (
-              <div key={i} className="set-row-wrapper"
-                onTouchStart={e => handleTouchStart(ex.id, i, e)}
-                onTouchMove={e => handleTouchMove(ex.id, i, e)}
-                onTouchEnd={() => handleTouchEnd(ex.id, i)}
-                onTouchCancel={() => { cancelAnimationFrame(swipeRafRef.current); swipeRef.current = null; setSwipeState(null) }}
-              >
-                {revealing && (
-                  <div className="set-row-delete-bg" style={{ width: Math.abs(dx) }}>
-                    <svg style={{ width: Math.min(20, Math.abs(dx) * 0.25), height: Math.min(20, Math.abs(dx) * 0.25) }} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                      <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                    </svg>
-                  </div>
-                )}
+              <div key={i} className="set-row-wrapper" {...swipeProps}>
+                {deleteBg}
                 <div
                   className={`set-row ${s.done ? 'done' : ''}`}
-                  style={{ transform: `translateX(${dx}px)`, transition: isActive ? 'none' : 'transform 0.2s ease' }}
+                  style={rowStyle}
                 >
                 <span className="col-set">{i + 1}</span>
                 <span className="col-prev">

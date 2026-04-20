@@ -962,6 +962,10 @@
   transition: background 0.32s;
 }
 
+.set-row.cardio-row {
+  grid-template-columns: 32px 1fr 64px 36px;
+}
+
 .set-row.done { opacity: 0.5; }
 
 .header-row {
