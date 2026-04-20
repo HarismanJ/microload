@@ -34,3 +34,9 @@ supabase/.temp/
 .claude/
 CLAUDE.md
 Codex.md
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
