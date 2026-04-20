@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import { App as CapApp } from '@capacitor/app'
 import { supabase } from './lib/supabase'
 import { clearCache, invalidateCache } from './lib/cache'
 import LoadingSpinner from './components/LoadingSpinner'
@@ -482,8 +483,33 @@ export default function App() {
   }, [battleToast])
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    // Read synchronously before ANYTHING async runs — onAuthStateChange fires
+    // INITIAL_SESSION which triggers clearCache(), which would wipe a localStorage
+    // flag before getSession().then() ever gets to check it.
+    const pendingRecovery = localStorage.getItem('microload:pendingRecovery') === '1'
+
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      // If the user abandoned a password reset mid-flow, sign them out so they
+      // land on the sign-in page rather than being silently logged in.
+      if (session && pendingRecovery) {
+        localStorage.removeItem('microload:pendingRecovery')
+        await supabase.auth.signOut()
+        return // onAuthStateChange SIGNED_OUT will set session to null
+      }
       authUserIdRef.current = session?.user?.id ?? null
+      // Apply the user's saved theme immediately on startup before any page renders
+      if (session?.user?.id) {
+        const { data } = await supabase
+          .from('profiles')
+          .select('theme')
+          .eq('id', session.user.id)
+          .single()
+        if (data?.theme) {
+          localStorage.setItem('theme', data.theme)
+          const { applyTheme } = await import('./lib/theme')
+          applyTheme(data.theme)
+        }
+      }
       setSession(session)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -492,14 +518,64 @@ export default function App() {
         setSession(session)
         return
       }
+      if (event === 'SIGNED_OUT') {
+        localStorage.removeItem('microload:pendingRecovery')
+        setRecoveryMode(false)
+      }
       const nextUserId = session?.user?.id ?? null
-      if (authUserIdRef.current !== nextUserId) {
+      const prevUserId = authUserIdRef.current
+      if (prevUserId !== nextUserId) {
         clearCache()
         authUserIdRef.current = nextUserId
+        // Fire-and-forget theme fetch on sign-in — never blocks setSession
+        if (nextUserId && !prevUserId) {
+          supabase.from('profiles').select('theme').eq('id', nextUserId).single()
+            .then(({ data }) => {
+              if (data?.theme) {
+                localStorage.setItem('theme', data.theme)
+                import('./lib/theme').then(({ applyTheme }) => applyTheme(data.theme))
+              }
+            })
+        }
       }
       setSession(session)
     })
-    return () => subscription.unsubscribe()
+
+    // Handle deep links from password reset emails on native (microload://reset-password?...)
+    let deepLinkListener
+    CapApp.addListener('appUrlOpen', async ({ url }) => {
+      if (!url.startsWith('microload://')) return
+      const parsed = new URL(url)
+
+      // PKCE flow: Supabase sends a `code` query param
+      const code = parsed.searchParams.get('code')
+      const type = parsed.searchParams.get('type')
+      if (code) {
+        await supabase.auth.exchangeCodeForSession(code)
+        // PKCE flow fires SIGNED_IN, not PASSWORD_RECOVERY — detect type from URL
+        if (type === 'recovery') {
+          localStorage.setItem('microload:pendingRecovery', '1')
+          setRecoveryMode(true)
+        }
+        return
+      }
+
+      // Implicit flow: tokens arrive in the hash fragment
+      const params = new URLSearchParams(parsed.hash.slice(1))
+      const accessToken = params.get('access_token')
+      const refreshToken = params.get('refresh_token')
+      const hashType = params.get('type')
+      if (hashType === 'recovery' && accessToken && refreshToken) {
+        localStorage.setItem('microload:pendingRecovery', '1')
+        await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
+        setRecoveryMode(true)
+      }
+    }).then(handle => { deepLinkListener = handle })
+
+    return () => {
+      subscription.unsubscribe()
+      deepLinkListener?.remove()
+    }
   }, [])
 
   useEffect(() => {
@@ -832,7 +908,7 @@ export default function App() {
       <>
         <Suspense fallback={appFallback}>
           <InitialReadyMarker onReady={markInitialScreenReady} />
-          <Auth recoveryMode={recoveryMode} onRecoveryDone={() => setRecoveryMode(false)} />
+          <Auth recoveryMode={recoveryMode} onRecoveryDone={() => { localStorage.removeItem('microload:pendingRecovery'); setRecoveryMode(false) }} />
         </Suspense>
         {introSplash}
       </>

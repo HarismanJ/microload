@@ -12,6 +12,7 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
   const [resetCooldown, setResetCooldown] = useState(0)
+  const [resetAttempts, setResetAttempts] = useState(0)
 
   useEffect(() => {
     if (resetCooldown <= 0) return
@@ -26,6 +27,8 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
       setConfirmPassword('')
       setError(null)
       setMessage(null)
+      setResetCooldown(0)
+      setResetAttempts(0)
     }
   }, [recoveryMode])
 
@@ -45,9 +48,13 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
       if (error) setError(error.message)
       else setMessage('Check your email for a confirmation link.')
     } else if (mode === 'forgot') {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin })
-      if (error) setError(error.message)
-      else { setMessage('Check your email for a password reset link.'); setResetCooldown(300) }
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: 'microload://reset-password' })
+      if (error) { setError(error.message) } else {
+        setMessage('Check your email for a password reset link.')
+        const nextAttempts = resetAttempts + 1
+        setResetAttempts(nextAttempts)
+        if (nextAttempts >= 3) setResetCooldown(100)
+      }
     } else if (mode === 'reset') {
       if (password !== confirmPassword) {
         setError('Passwords do not match.')
