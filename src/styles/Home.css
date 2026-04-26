@@ -54,6 +54,34 @@
   /* full width, no extra style needed */
 }
 
+.home-today-split {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 10px;
+}
+
+.home-burned-widget {
+  align-items: center;
+}
+
+.home-burn-ring-wrap {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 0;
+  padding: 2px 0;
+}
+
+.home-burn-update-btn {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .home-nut-top {
   margin-bottom: 2px;
 }
@@ -85,6 +113,7 @@
 
 .home-today-card-clickable {
   cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 6px 0 rgba(0, 0, 0, 0.8);
   transition: border-color 0.32s ease, transform 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -223,7 +252,8 @@
 
 .home-weight-card-clickable {
   cursor: pointer;
-  transition: border-color 0.32s, background 0.32s;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 6px 0 rgba(0, 0, 0, 0.8);
+  transition: border-color 0.32s ease, transform 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
 
@@ -350,8 +380,18 @@
 
 @keyframes macro-track-glow {
   0%   { box-shadow: none; }
-  35%  { box-shadow: 0 0 0 2px var(--glow-color), 0 0 10px 3px var(--glow-color); }
+  35%  { box-shadow: 0 0 0 1px color-mix(in srgb, var(--glow-color) 55%, transparent), 0 0 5px 1px color-mix(in srgb, var(--glow-color) 35%, transparent); }
   100% { box-shadow: none; }
+}
+
+.home-burn-ring-glow {
+  animation: burn-ring-glow 1.4s ease-out 1 forwards;
+}
+
+@keyframes burn-ring-glow {
+  0%   { filter: none; }
+  35%  { filter: drop-shadow(0 0 5px rgba(249, 115, 22, 0.45)); }
+  100% { filter: none; }
 }
 
 .home-weight-chart-wrap {

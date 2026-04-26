@@ -58,6 +58,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   const [date, setDate] = useState(today)
   const [logs, setLogs] = useState([])
   const [goals, setGoals] = useState(DEFAULT_GOALS)
+  const [exerciseCalories, setExerciseCalories] = useState(0)
   const [loading, setLoading] = useState(true)
   const [addingToMeal, setAddingToMeal] = useState(null)
   const [showDetail, setShowDetail] = useState(false)
@@ -82,14 +83,18 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     if (cached) {
       setLogs(cached.logs)
       setGoals(cached.goals)
+      setExerciseCalories(cached.exerciseCalories || 0)
       setLoading(false)
       return
     }
 
     const { data: { user } } = await supabase.auth.getUser()
-    const [{ data: logData }, { data: prof }] = await Promise.all([
+    const dayStart = new Date(date + 'T00:00:00').toISOString()
+    const dayEnd   = new Date(date + 'T23:59:59.999').toISOString()
+    const [{ data: logData }, { data: prof }, { data: sessionRows }] = await Promise.all([
       supabase.from('nutrition_logs').select('*').eq('user_id', user.id).eq('log_date', date).order('created_at'),
       supabase.from('profiles').select('calories_goal,protein_goal,carbs_goal,fat_goal,fiber_goal,sugar_goal,saturated_fat_goal,sodium_goal,potassium_goal,cholesterol_goal,calcium_goal,iron_goal,magnesium_goal,zinc_goal,vitamin_a_goal,vitamin_c_goal,vitamin_d_goal').eq('id', user.id).single(),
+      supabase.from('workout_sessions').select('calories_burned').eq('user_id', user.id).not('finished_at', 'is', null).gte('finished_at', dayStart).lte('finished_at', dayEnd),
     ])
 
     const resolvedGoals = prof ? {
@@ -112,9 +117,11 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       vitamin_d:     prof.vitamin_d_goal     || DEFAULT_GOALS.vitamin_d,
     } : DEFAULT_GOALS
 
-    setCached(cacheKey, { logs: logData || [], goals: resolvedGoals })
+    const burnedKcal = (sessionRows || []).reduce((sum, s) => sum + (s.calories_burned || 0), 0)
+    setCached(cacheKey, { logs: logData || [], goals: resolvedGoals, exerciseCalories: burnedKcal })
     setLogs(logData || [])
     setGoals(resolvedGoals)
+    setExerciseCalories(burnedKcal)
     setLoading(false)
   }
 
@@ -211,7 +218,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     setEditingGoals(false)
   }
 
-  const remaining = goals.calories - Math.round(totals.calories)
+  const remaining = goals.calories - Math.round(totals.calories) + exerciseCalories
   const R = 52, C = 2 * Math.PI * R
   const dash = (Math.min(1, totals.calories / goals.calories)) * C
   const detailSections = [
@@ -428,6 +435,11 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
           <div className="nut-remaining" style={{ color: remaining < 0 ? '#ef4444' : 'var(--muted)' }}>
             {remaining > 0 ? `${remaining} kcal remaining` : `${Math.abs(remaining)} kcal over goal`}
           </div>
+          {exerciseCalories > 0 && (
+            <div className="nut-burned-row">
+              ~{exerciseCalories} kcal burned today
+            </div>
+          )}
           <div className="nut-expand-hint">
             <span>{showDetail ? 'Hide breakdown' : 'Full breakdown'}</span>
             <svg className={`nut-expand-chevron ${showDetail ? 'open' : ''}`} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">

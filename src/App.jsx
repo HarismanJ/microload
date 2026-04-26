@@ -193,6 +193,7 @@ export default function App() {
   const [quickWeightSaving, setQuickWeightSaving] = useState(false)
   const [quickWeightError, setQuickWeightError] = useState('')
   const [weightRefreshTick, setWeightRefreshTick] = useState(0)
+  const [workoutRefreshTick, setWorkoutRefreshTick] = useState(0)
   const [ranksRefreshTick, setRanksRefreshTick] = useState(0)
   const [homeWorkoutStreak, setHomeWorkoutStreak] = useState(0)
   const [showStreakInfo, setShowStreakInfo] = useState(false)
@@ -234,7 +235,10 @@ export default function App() {
     startY: 0,
   })
   const onWorkoutStatus = useCallback((status) => setWorkoutStatus(status), [])
-  const onWorkoutFinish = useCallback((summary) => setWorkoutSummary(summary), [])
+  const onWorkoutFinish = useCallback((summary) => {
+    setWorkoutSummary(summary)
+    setWorkoutRefreshTick(t => t + 1)
+  }, [])
   const markInitialScreenReady = useCallback(() => {
     if (initialScreenReadyRef.current) return
     initialScreenReadyRef.current = true
@@ -936,7 +940,7 @@ export default function App() {
   const leftTabs = tabs.slice(0, 2)
   const rightTabs = tabs.slice(2)
   const otherScreens = {
-    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} />,
+    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} />,
     ranks: <Ranks refreshTick={ranksRefreshTick} />,
     nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
     profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} workoutActive={workoutStatus.active} />,

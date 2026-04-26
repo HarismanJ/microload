@@ -963,7 +963,7 @@
 }
 
 .set-row.cardio-row {
-  grid-template-columns: 32px 1fr 64px 36px;
+  grid-template-columns: 32px 1fr auto 36px;
 }
 
 .set-row.done { opacity: 0.5; }
@@ -1054,6 +1054,64 @@
 }
 
 .remove-exercise-btn:hover { background: rgba(239,68,68,0.25); }
+
+.exercise-delete-confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  border-radius: 10px;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+}
+
+.exercise-delete-confirm-text {
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.exercise-delete-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.exercise-delete-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.22s ease;
+}
+
+.exercise-delete-cancel:hover { background: var(--surface2); }
+
+.exercise-delete-remove {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 8px;
+  color: #ef4444;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.22s ease;
+}
+
+.exercise-delete-remove:hover { background: rgba(239, 68, 68, 0.22); }
+
+.info-btn-sm {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
 
 .exercise-notes-toggle {
   display: flex;
@@ -1471,6 +1529,35 @@
   box-shadow: 0 12px 22px color-mix(in srgb, var(--blue) 24%, transparent);
 }
 
+.cardio-duration-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease;
+}
+
+.cardio-duration-btn.open {
+  border-color: var(--blue);
+  background: var(--blue-dim);
+}
+
+.cardio-duration-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cardio-duration-panel {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 8px;
+  border-bottom: 1px solid var(--border);
+}
+
 .rest-wheel-panel {
   display: flex;
   justify-content: center;
@@ -1683,9 +1770,10 @@
   flex-direction: column;
   gap: 10px;
   overflow-y: auto;
-  max-height: calc(100dvh - 320px);
+  max-height: calc(100dvh - 460px);
   padding-bottom: 4px;
 }
+
 
 .template-card {
   background: var(--surface);

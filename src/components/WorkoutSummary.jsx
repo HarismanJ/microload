@@ -73,6 +73,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
 
   const {
     durationSeconds,
+    caloriesBurned = 0,
     totalSets,
     totalVolume,
     unit,
@@ -116,6 +117,15 @@ export default function WorkoutSummary({ summary, onDismiss }) {
               <div className="ws-stat-value">{fmtVolume(totalVolume)}</div>
               <div className="ws-stat-label">Volume ({unit})</div>
             </div>
+            {caloriesBurned > 0 && (
+              <>
+                <div className="ws-stat-divider" />
+                <div className="ws-stat">
+                  <div className="ws-stat-value">~{caloriesBurned}</div>
+                  <div className="ws-stat-label">kcal</div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

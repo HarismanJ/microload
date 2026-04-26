@@ -40,6 +40,7 @@ import {
 } from '../lib/battles'
 import { CUSTOM_EQUIPMENT_OPTIONS, SUPPORTED_MUSCLES } from '../lib/exerciseOptions'
 import { clampContinuousTierScore, updateRollingScore } from '../lib/rollingRanks'
+import { estimateCaloriesBurned } from '../lib/calorieMath'
 import '../styles/Workout.css'
 
 const ExerciseDetail = lazy(() => import('./exercise/ExerciseDetail'))
@@ -48,7 +49,7 @@ const SOLO_WORKOUT_DRAFT_MAX_AGE_MS = 12 * 60 * 60 * 1000
 const SHARED_WORKOUT_DRAFT_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 const defaultSet = () => ({ reps: '', weight: '', done: false })
-const defaultCardioSet = () => ({ duration: '', done: false })
+const defaultCardioSet = () => ({ duration: 0, done: false })
 
 function getWorkoutDraftStorageKey(userId, roomId = null) {
   return roomId
@@ -280,12 +281,14 @@ export default function Workout({
   const [sessionId, setSessionId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [detailExerciseId, setDetailExerciseId] = useState(null)
+  const [deleteConfirmExId, setDeleteConfirmExId] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [confirmAction, setConfirmAction] = useState(null) // null | 'cancel' | 'finish' | 'restart' | 'incomplete'
   const [confirmBusy, setConfirmBusy] = useState(false)
   const [defaultRest, setDefaultRest] = useState(90)
   const [restTimer, setRestTimer] = useState(null)
   const [editingRest, setEditingRest] = useState(null)
+  const [editingCardioDuration, setEditingCardioDuration] = useState(null) // { exId, idx }
   const sensors = useSensors(
     useSensor(TouchSensor, { activationConstraint: { delay: 100, tolerance: 6 } }),
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
@@ -1038,12 +1041,12 @@ export default function Workout({
 
   const getFinishableSetMeta = useCallback((exercise, set, index) => {
     if (exercise.category === 'Cardio') {
-      const duration = Number.parseInt(set.duration, 10)
-      const valid = Number.isInteger(duration) && duration > 0
+      const duration = Number(set.duration) || 0
+      const valid = Number.isFinite(duration) && duration > 0
       return {
         exerciseId: exercise.id,
         setIndex: index,
-        duration: valid ? duration : 0,
+        duration,
         shouldInclude: valid,
         incomplete: valid && !set.done,
       }
@@ -1124,7 +1127,7 @@ export default function Workout({
             session_id: sessionId,
             exercise_id: ex.id,
             set_number: i + 1,
-            duration_seconds: meta.duration * 60,
+            duration_seconds: meta.duration,
           })
         } else {
           setsToInsert.push({
@@ -1251,6 +1254,27 @@ export default function Workout({
       })))
     }
 
+    const calExercises = exercisesOverride
+      .map(ex => {
+        const includedSets = ex.sets
+          .map((s, i) => {
+            const meta = getFinishableSetMeta(ex, s, i)
+            if (!meta.shouldInclude) return null
+            return ex.category === 'Cardio' ? { durationSeconds: meta.duration } : {}
+          })
+          .filter(Boolean)
+        if (includedSets.length === 0) return null
+        return {
+          name: ex.name,
+          isCardio: ex.category === 'Cardio',
+          primary_muscles: ex.primary_muscles || [],
+          secondary_muscles: ex.secondary_muscles || [],
+          sets: includedSets,
+        }
+      })
+      .filter(Boolean)
+    const caloriesBurned = estimateCaloriesBurned(calExercises, seconds, bwKg)
+
     if (sessionId) {
       const seen = new Set()
       const prUpserts = exercisesOverride
@@ -1312,7 +1336,7 @@ export default function Workout({
         .filter(Boolean)
 
       const sessionOps = [
-        supabase.from('workout_sessions').update({ finished_at: new Date().toISOString(), exercise_notes: exerciseNotes }).eq('id', sessionId),
+        supabase.from('workout_sessions').update({ finished_at: new Date().toISOString(), exercise_notes: exerciseNotes, calories_burned: caloriesBurned }).eq('id', sessionId),
         supabase.from('profiles').update({ lifetime_volume_kg: newTotalVolumeKg }).eq('id', user.id),
       ]
       if (prUpserts.length > 0) {
@@ -1349,6 +1373,7 @@ export default function Workout({
     }, 0)
     const summary = {
       durationSeconds: seconds,
+      caloriesBurned,
       totalSets: setsToInsert.length,
       totalVolume,
       unit,
@@ -1358,7 +1383,7 @@ export default function Workout({
             const sets = ex.sets
               .map((set, index) => {
                 const meta = getFinishableSetMeta(ex, set, index)
-                return meta.shouldInclude ? { durationSeconds: meta.duration * 60 } : null
+                return meta.shouldInclude ? { durationSeconds: meta.duration } : null
               })
               .filter(Boolean)
             return sets.length > 0 ? { name: ex.name, sets, isCardio: true } : null
@@ -2421,12 +2446,21 @@ export default function Workout({
               <SortableExerciseBlock key={ex.id} id={ex.id}>
                 {({ listeners, attributes }) => (
           <div className="exercise-block" data-tab-swipe-ignore="true">
-            <button className="remove-exercise-btn" onClick={() => removeExercise(ex.id)}>
+            <button className="remove-exercise-btn" onClick={() => setDeleteConfirmExId(ex.id)}>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                 <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
               </svg>
             </button>
+            {deleteConfirmExId === ex.id && (
+              <div className="exercise-delete-confirm">
+                <span className="exercise-delete-confirm-text">Remove exercise?</span>
+                <div className="exercise-delete-confirm-actions">
+                  <button className="exercise-delete-cancel" onClick={() => setDeleteConfirmExId(null)}>Cancel</button>
+                  <button className="exercise-delete-remove" onClick={() => { removeExercise(ex.id); setDeleteConfirmExId(null) }}>Remove</button>
+                </div>
+              </div>
+            )}
             <div className="exercise-block-header">
               <button className="drag-handle" {...listeners} {...attributes}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -2456,7 +2490,7 @@ export default function Workout({
                 )}
                 <div className="set-controls">
                   <button className="set-ctrl-btn" onClick={() => removeSet(ex.id)}>−</button>
-                  <span className="set-count">{ex.sets.length} sets</span>
+                  <span className="set-count">{ex.sets.length} {ex.category === 'Cardio' ? 'entries' : 'sets'}</span>
                   <button className="set-ctrl-btn add" onClick={() => addSet(ex.id)}>+</button>
                 </div>
               </div>
@@ -2467,9 +2501,14 @@ export default function Workout({
               <button className="rest-time-btn" onClick={() => setEditingRest(editingRest === ex.id ? null : ex.id)}>
                 {fmtRest(ex.restSeconds)}
               </button>
-              {editingRest === ex.id && (
-                <button className="rest-done-btn" onClick={() => updateRestTime(ex.id, ex.restSeconds)}>Done</button>
-              )}
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                {editingRest === ex.id && (
+                  <button className="rest-done-btn" style={{ marginLeft: 0 }} onClick={() => updateRestTime(ex.id, ex.restSeconds)}>Done</button>
+                )}
+                {ex.id && (
+                  <button className="info-btn info-btn-sm" onClick={e => { e.stopPropagation(); setDetailExerciseId(ex.id) }}>i</button>
+                )}
+              </div>
             </div>
 
             {editingRest === ex.id && (
@@ -2505,7 +2544,7 @@ export default function Workout({
               <div className="set-row cardio-row header-row">
                 <span className="col-set">Set</span>
                 <span className="col-prev">Previous</span>
-                <span className="col-kg">Min</span>
+                <span className="col-kg">Duration</span>
                 <span className="col-done"></span>
               </div>
             ) : (
@@ -2539,7 +2578,20 @@ export default function Workout({
               const rowStyle = { transform: `translateX(${dx}px)`, transition: isActive ? 'none' : 'transform 0.2s ease' }
 
               if (ex.category === 'Cardio') {
-                const durationValid = Number.isInteger(Number.parseInt(s.duration, 10)) && Number.parseInt(s.duration, 10) > 0
+                const isPickerOpen = editingCardioDuration?.exId === ex.id && editingCardioDuration?.idx === i
+                const durSecs = Number(s.duration) || 0
+                const durationValid = durSecs > 0
+                const durHrs = Math.floor(durSecs / 3600)
+                const durMins = Math.floor((durSecs % 3600) / 60)
+                const durSecRem = durSecs % 60
+                const fmtDur = (total) => {
+                  const h = Math.floor(total / 3600)
+                  const m = Math.floor((total % 3600) / 60)
+                  const sc = total % 60
+                  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}`
+                  return `${m}:${String(sc).padStart(2, '0')}`
+                }
+                const setDur = (total) => updateSet(ex.id, i, 'duration', Math.max(0, total))
                 return (
                   <div key={i} className="set-row-wrapper" {...swipeProps}>
                     {deleteBg}
@@ -2549,26 +2601,66 @@ export default function Workout({
                         {(() => {
                           const p = prevSetsMap[ex.id]?.[i]
                           if (!p || !p.duration_seconds) return '—'
-                          return `${Math.round(p.duration_seconds / 60)} min`
+                          return fmtDur(p.duration_seconds)
                         })()}
                       </span>
-                      <input
-                        className="col-kg set-input"
-                        type="number"
-                        inputMode="numeric"
-                        value={s.duration}
-                        placeholder="30"
-                        min="1"
-                        max="600"
+                      <button
+                        className={`cardio-duration-btn${isPickerOpen ? ' open' : ''}`}
                         disabled={s.done}
-                        onChange={e => updateSet(ex.id, i, 'duration', e.target.value)}
-                      />
-                      <button className={`col-done done-btn ${s.done ? 'checked' : ''}`} disabled={!s.done && !durationValid} onClick={() => updateSet(ex.id, i, 'done', !s.done)}>
+                        onClick={() => setEditingCardioDuration(isPickerOpen ? null : { exId: ex.id, idx: i })}
+                      >
+                        {durationValid ? fmtDur(durSecs) : '0:00'}
+                      </button>
+                      <button className={`col-done done-btn ${s.done ? 'checked' : ''}`} disabled={!s.done && !durationValid} onClick={() => { updateSet(ex.id, i, 'done', !s.done); setEditingCardioDuration(null) }}>
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="20 6 9 17 4 12"/>
                         </svg>
                       </button>
                     </div>
+                    {isPickerOpen && !s.done && (
+                      <div className="cardio-duration-panel">
+                        <div className="rtp">
+                          <div className="rtp-unit">
+                            <button className="rtp-btn" onClick={() => setDur((durHrs + 1) * 3600 + durMins * 60 + durSecRem)}>+</button>
+                            <span className="rtp-val">{durHrs}</span>
+                            <button className="rtp-btn" onClick={() => setDur(Math.max(0, durHrs - 1) * 3600 + durMins * 60 + durSecRem)}>−</button>
+                            <span className="rtp-label">hr</span>
+                          </div>
+                          <span className="rtp-colon">:</span>
+                          <div className="rtp-unit">
+                            <button className="rtp-btn" onClick={() => {
+                              const nm = durMins + 1 >= 60 ? 0 : durMins + 1
+                              const nh = durMins + 1 >= 60 ? durHrs + 1 : durHrs
+                              setDur(nh * 3600 + nm * 60 + durSecRem)
+                            }}>+</button>
+                            <span className="rtp-val">{durMins}</span>
+                            <button className="rtp-btn" onClick={() => {
+                              const nm = durMins - 1 < 0 ? (durHrs > 0 ? 59 : 0) : durMins - 1
+                              const nh = durMins - 1 < 0 ? Math.max(0, durHrs - 1) : durHrs
+                              setDur(nh * 3600 + nm * 60 + durSecRem)
+                            }}>−</button>
+                            <span className="rtp-label">min</span>
+                          </div>
+                          <span className="rtp-colon">:</span>
+                          <div className="rtp-unit">
+                            <button className="rtp-btn" onClick={() => {
+                              const ns = durSecRem + 5 >= 60 ? 0 : durSecRem + 5
+                              const nm = durSecRem + 5 >= 60 ? (durMins + 1 >= 60 ? 0 : durMins + 1) : durMins
+                              const nh = durSecRem + 5 >= 60 && durMins + 1 >= 60 ? durHrs + 1 : durHrs
+                              setDur(nh * 3600 + nm * 60 + ns)
+                            }}>+</button>
+                            <span className="rtp-val">{String(durSecRem).padStart(2, '0')}</span>
+                            <button className="rtp-btn" onClick={() => {
+                              const ns = durSecRem - 5 < 0 ? 55 : durSecRem - 5
+                              const nm = durSecRem - 5 < 0 ? (durMins - 1 < 0 ? (durHrs > 0 ? 59 : 0) : durMins - 1) : durMins
+                              const nh = durSecRem - 5 < 0 && durMins - 1 < 0 ? Math.max(0, durHrs - 1) : durHrs
+                              setDur(nh * 3600 + nm * 60 + ns)
+                            }}>−</button>
+                            <span className="rtp-label">sec</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )
               }

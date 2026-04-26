@@ -35,11 +35,11 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
       }
       const { error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/confirm.html` } })
       if (error) setError(error.message)
-      else setMessage('Check your email for a confirmation link.')
+      else setMessage('Check your email for a confirmation link. Be sure to check your spam folder.')
     } else if (mode === 'forgot') {
       const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: 'microload://reset-password' })
       if (error) { setError(error.message) } else {
-        setMessage('Check your email for a password reset link.')
+        setMessage('Check your email for a password reset link. Be sure to check your spam folder.')
       }
     } else if (mode === 'reset') {
       if (password !== confirmPassword) {

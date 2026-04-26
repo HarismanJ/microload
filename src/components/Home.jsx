@@ -1,4 +1,5 @@
 import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { getCached, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
 import LoadingSpinner from './LoadingSpinner'
@@ -59,7 +60,10 @@ function getCalendarMonthCacheKey(dateInput = new Date()) {
 let ghostChartHasPlayed = false
 let barGlowHasPlayed = false
 
-export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, onWorkoutDeleted }) {
+const BURN_R = 40
+const BURN_C = 2 * Math.PI * BURN_R
+
+export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted }) {
   const [profile, setProfile]         = useState(null)
   const [todayNut, setTodayNut]       = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 })
   const [workoutStreak, setWorkoutStreak] = useState(0)
@@ -78,10 +82,16 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [weightDeleteError, setWeightDeleteError] = useState('')
   const [selectedDay, setSelectedDay] = useState(null) // { sessionIds, dateStr }
   const appWasBackgroundedRef = useRef(false)
+  const burnSheetJustOpenedRef = useRef(false)
   const [calendarInitialReady, setCalendarInitialReady] = useState(false)
   const [isPhoneWidth, setIsPhoneWidth] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ))
+  const [burnedToday, setBurnedToday] = useState(0)
+  const [burnGoal, setBurnGoal] = useState(null)
+  const [burnGoalSheetOpen, setBurnGoalSheetOpen] = useState(false)
+  const [burnGoalInput, setBurnGoalInput] = useState('')
+  const [burnGoalSaving, setBurnGoalSaving] = useState(false)
   const nutEmpty = todayNut.calories === 0 && todayNut.protein === 0 && todayNut.carbs === 0 && todayNut.fat === 0
   const [barsAnimatedIn, setBarsAnimatedIn] = useState(false)
   const [barGlowActive, setBarGlowActive] = useState(false)
@@ -101,6 +111,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
     const shouldLockHomeScroll = isPhoneWidth && !selectedDay && !showWeightDetail
     contentNode.classList.toggle('content-home-locked', shouldLockHomeScroll)
+    if (shouldLockHomeScroll) contentNode.scrollTop = 0
 
     return () => {
       contentNode.classList.remove('content-home-locked')
@@ -117,6 +128,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   function applyData({ prof, nutLogs, allSessions, weightLogs: logs }) {
     setProfile(prof)
     setWeightLogs(logs || [])
+    setBurnGoal(prof?.calories_burned_goal || null)
+    const todayForBurn = todayStr()
+    const todayBurned = (allSessions || [])
+      .filter(s => s.finished_at && localDate(new Date(s.finished_at)) === todayForBurn)
+      .reduce((sum, s) => sum + (s.calories_burned || 0), 0)
+    setBurnedToday(todayBurned)
 
     const calGoal  = prof?.calories_goal || 2000
     const protGoal = prof?.protein_goal  || 150
@@ -146,12 +163,17 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       const daysSinceLatestWorkout = Math.floor((today - sortedWorkoutDays[0]) / 86400000)
 
       if (daysSinceLatestWorkout <= 3) {
-        streak = 1
+        // Find the oldest workout still within the continuous streak window
+        let oldestInWindow = sortedWorkoutDays[0]
         for (let index = 1; index < sortedWorkoutDays.length; index += 1) {
           const gapDays = Math.floor((sortedWorkoutDays[index - 1] - sortedWorkoutDays[index]) / 86400000) - 1
           if (gapDays > 3) break
-          streak += 1
+          oldestInWindow = sortedWorkoutDays[index]
         }
+        // Streak = calendar days from first workout in window to today (inclusive)
+        const oldestMidnight = new Date(oldestInWindow)
+        oldestMidnight.setHours(0, 0, 0, 0)
+        streak = Math.floor((today - oldestMidnight) / 86400000) + 1
       }
     }
 
@@ -161,7 +183,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   async function load() {
     const today = todayStr()
     const cacheKey = 'home'
-    const cacheVersion = 5
+    const cacheVersion = 6
 
     const cached = getCached(cacheKey)
     if (cached?.version === cacheVersion) {
@@ -189,13 +211,13 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       { data: weightLogs },
     ] = await Promise.all([
       supabase.from('profiles')
-        .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight')
+        .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight, calories_burned_goal, gender')
         .eq('id', userId).single(),
       supabase.from('nutrition_logs')
         .select('calories, protein, carbs, fat')
         .eq('user_id', userId).eq('log_date', today),
       supabase.from('workout_sessions')
-        .select('started_at')
+        .select('started_at, finished_at, calories_burned')
         .eq('user_id', userId)
         .not('finished_at', 'is', null)
         .gte('started_at', oneYearAgo.toISOString()),
@@ -237,6 +259,11 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     if (weightRefreshTick === 0) return
     loadLatest()
   }, [weightRefreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (workoutRefreshTick === 0) return
+    loadLatest()
+  }, [workoutRefreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     onWorkoutStreakChange?.(workoutStreak)
@@ -361,6 +388,18 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setBwSaving(false)
   }
 
+  async function saveBurnGoal() {
+    const val = parseInt(burnGoalInput, 10)
+    if (!Number.isFinite(val) || val <= 0 || burnGoalSaving) return
+    setBurnGoalSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('profiles').update({ calories_burned_goal: val }).eq('id', user.id)
+    setBurnGoal(val)
+    setBurnGoalSheetOpen(false)
+    setBurnGoalSaving(false)
+    invalidateCache('home', 'profile')
+  }
+
   async function deleteWeightLog(logId) {
     if (!logId || weightDeletingId) return
 
@@ -393,16 +432,16 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }
 
   const calPct = Math.min(1, todayNut.calories / todayNut.goal)
+  const effectiveBurnGoal = burnGoal ?? 0
+  const burnPct = effectiveBurnGoal > 0 ? Math.min(1, burnedToday / effectiveBurnGoal) : 0
+  const burnComplete = burnedToday >= effectiveBurnGoal
+  const burnDash = burnPct * BURN_C
   const calBarWidth = `${barsAnimatedIn ? calPct * 100 : 0}%`
   const activeWeightUnit = weightSheetUnit || profile?.unit_preference || 'kg'
   const homeChartHeight = isPhoneWidth ? 162 : 388
   const homeChartTickCount = 5
   const homeChartPadding = isPhoneWidth ? 'tight-mobile' : 'tight'
-  const macroRingItems = [
-    { label: 'Protein', val: todayNut.protein, goal: todayNut.proteinGoal, color: 'var(--blue)' },
-    { label: 'Carbs', val: todayNut.carbs, goal: todayNut.carbsGoal, color: 'var(--blue)' },
-    { label: 'Fat', val: todayNut.fat, goal: todayNut.fatGoal, color: 'var(--blue)' },
-  ]
+
   const filteredWeightLogs = useMemo(() => {
     if (weightPeriod === 'all') return weightLogs
     const now = new Date()
@@ -475,47 +514,99 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }
 
   return (
+    <>
     <div className={`home-screen${animReady ? ' home-screen--ready' : ''}`}>
 
       {/* ── Today snapshot ── */}
       <div className="home-today-col">
-        <div className="home-today-card home-today-card-clickable home-today-card-full" onClick={() => onNavigate?.('nutrition')}>
-          <div className="home-today-card-header">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <ellipse cx="12" cy="12" rx="10" ry="4"/>
-              <path d="M2 12c0 4.42 4.48 8 10 8s10-3.58 10-8"/>
-              <path d="M2 12c0-1.5 1.5-3 4-4"/>
-            </svg>
-            <span>Nutrition</span>
-          </div>
-          <div className="home-nut-top">
-            <div>
-              <div className="home-today-val">{Math.round(todayNut.calories)}</div>
-              <div className="home-today-sub">of {todayNut.goal} kcal</div>
+        <div className="home-today-split">
+
+          {/* Nutrition (left) */}
+          <div className="home-today-card home-today-card-clickable" onClick={() => onNavigate?.('nutrition')}>
+            <div className="home-today-card-header">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <ellipse cx="12" cy="12" rx="10" ry="4"/>
+                <path d="M2 12c0 4.42 4.48 8 10 8s10-3.58 10-8"/>
+                <path d="M2 12c0-1.5 1.5-3 4-4"/>
+              </svg>
+              <span>Nutrition</span>
+            </div>
+            <div className="home-nut-top">
+              <div>
+                <div className="home-today-val">{Math.round(todayNut.calories)}</div>
+                <div className="home-today-sub">of {todayNut.goal} kcal</div>
+              </div>
+            </div>
+            <div className={`home-today-bar home-today-bar-compact${barGlowActive ? ' home-macro-track-glow' : ''}`} style={barGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}>
+              <div className="home-today-bar-fill" style={{ width: calBarWidth, background: calPct >= 1 ? '#22c55e' : 'var(--blue)' }} />
+            </div>
+            <div className="home-macro-bars home-macro-bars-compact">
+              {[
+                { label: 'Protein', val: todayNut.protein, goal: todayNut.proteinGoal },
+                { label: 'Carbs', val: todayNut.carbs,   goal: todayNut.carbsGoal   },
+                { label: 'Fat', val: todayNut.fat,      goal: todayNut.fatGoal     },
+              ].map((m) => (
+                <div key={m.label} className="home-macro-row">
+                  <div className="home-macro-meta">
+                    <span className="home-macro-label">{m.label}</span>
+                    <span className="home-macro-right">
+                      <span className="home-macro-val">{Math.round(m.val)}g</span>
+                      <span className="home-macro-goal"> / {m.goal}g</span>
+                    </span>
+                  </div>
+                  <div
+                    className={`home-macro-track${barGlowActive ? ' home-macro-track-glow' : ''}`}
+                    style={barGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}
+                  >
+                    <div className="home-macro-fill" style={{ width: `${barsAnimatedIn ? Math.min(100, (m.val / m.goal) * 100) : 0}%`, background: 'var(--blue)' }} />
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-          <div className={`home-today-bar home-today-bar-compact${barGlowActive ? ' home-macro-track-glow' : ''}`} style={barGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}>
-            <div className="home-today-bar-fill" style={{ width: calBarWidth, background: calPct >= 1 ? '#22c55e' : 'var(--blue)' }} />
+
+          {/* Burned (right) */}
+          <div
+            className="home-today-card home-today-card-clickable home-burned-widget"
+            onClick={() => {
+              setBurnGoalInput(burnGoal ? String(burnGoal) : '')
+              burnSheetJustOpenedRef.current = true
+              setBurnGoalSheetOpen(true)
+              setTimeout(() => { burnSheetJustOpenedRef.current = false }, 300)
+            }}
+          >
+            <div className="home-today-card-header">
+              <span>Calories Burned</span>
+            </div>
+            <div className="home-burn-ring-wrap">
+              <svg width="100" height="100" viewBox="0 0 100 100" aria-hidden="true" className={barGlowActive && burnedToday === 0 ? 'home-burn-ring-glow' : undefined}>
+                <defs>
+                  <linearGradient id="blg" x1="0" y1="0" x2="1" y2="1">
+                    {!burnComplete && (
+                      <animateTransform attributeName="gradientTransform" type="rotate" from="0 0.5 0.5" to="360 0.5 0.5" dur="4s" repeatCount="indefinite" />
+                    )}
+                    <stop offset="0%"   stopColor={burnComplete ? '#4ade80' : '#fbbf24'} />
+                    <stop offset="40%"  stopColor={burnComplete ? '#22c55e' : '#f97316'} />
+                    <stop offset="80%"  stopColor={burnComplete ? '#16a34a' : '#dc2626'} />
+                    <stop offset="100%" stopColor={burnComplete ? '#4ade80' : '#fbbf24'} />
+                  </linearGradient>
+                </defs>
+                <circle cx="50" cy="50" r={BURN_R} fill="none" stroke="var(--surface2)" strokeWidth="8" />
+                <circle cx="50" cy="50" r={BURN_R} fill="none"
+                  stroke="url(#blg)"
+                  strokeWidth="8"
+                  strokeDasharray={`${barsAnimatedIn ? burnDash : 0} ${BURN_C}`}
+                  strokeLinecap="round"
+                  transform="rotate(-90 50 50)"
+                  style={{ transition: 'stroke-dasharray 0.88s cubic-bezier(0.22, 1, 0.36, 1) 80ms' }}
+                />
+                <text x="50" y="47" textAnchor="middle" dominantBaseline="middle" fill="var(--text)" fontSize="18" fontWeight="800" fontFamily="inherit">{burnedToday}</text>
+                <text x="50" y="62" textAnchor="middle" fill="var(--muted)" fontSize="9" fontFamily="inherit">kcal</text>
+              </svg>
+            </div>
+            <div className="home-burn-update-btn">Update Goal</div>
           </div>
-          <div className="home-macro-bars home-macro-bars-compact">
-            {macroRingItems.map((m) => (
-              <div key={m.label} className="home-macro-row">
-                <div className="home-macro-meta">
-                  <span className="home-macro-label" style={{ color: m.color }}>{m.label}</span>
-                  <span className="home-macro-right">
-                    <span className="home-macro-val" style={{ color: m.color }}>{Math.round(m.val)}g</span>
-                    <span className="home-macro-goal"> / {m.goal}g</span>
-                  </span>
-                </div>
-                <div
-                  className={`home-macro-track${barGlowActive ? ' home-macro-track-glow' : ''}`}
-                  style={barGlowActive ? { '--glow-color': m.color } : undefined}
-                >
-                  <div className="home-macro-fill" style={{ width: `${barsAnimatedIn ? Math.min(100, (m.val / m.goal) * 100) : 0}%`, background: m.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
+
         </div>
       </div>
 
@@ -591,5 +682,34 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       </div>
 
     </div>
+    {burnGoalSheetOpen && createPortal(
+      <div
+        className="home-weight-modal-overlay"
+        onClick={() => { if (!burnSheetJustOpenedRef.current) setBurnGoalSheetOpen(false) }}
+      >
+        <div className="home-weight-modal" onClick={e => e.stopPropagation()}>
+          <div className="home-weight-sheet-handle" />
+          <div className="home-weight-modal-title">Daily Burn Goal</div>
+          <div className="home-weight-panel-log-row">
+            <input
+              className="home-weight-panel-input"
+              type="number"
+              min="1"
+              placeholder="e.g. 500"
+              value={burnGoalInput}
+              onChange={e => setBurnGoalInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && saveBurnGoal()}
+              autoFocus
+            />
+            <span className="home-weight-panel-unit">kcal</span>
+            <button className="home-weight-panel-save" onClick={saveBurnGoal} disabled={burnGoalSaving}>
+              {burnGoalSaving ? '…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   )
 }

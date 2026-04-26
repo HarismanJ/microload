@@ -147,7 +147,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       promises.push(
         supabase
           .from('workout_sessions')
-          .select('id, started_at, finished_at, notes, exercise_notes')
+          .select('id, started_at, finished_at, notes, exercise_notes, calories_burned')
           .eq('user_id', user.id)
           .in('id', activeSessionIds)
           .order('started_at'),
@@ -561,6 +561,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     ), 0)
   ), 0)
 
+  const totalCaloriesBurned = workoutSessions.reduce((sum, sess) => sum + (sess.calories_burned || 0), 0)
   const totalCals = sumNut(nutLogs, 'calories')
   const totalProtein = sumNut(nutLogs, 'protein')
   const totalCarbs = sumNut(nutLogs, 'carbs')
@@ -625,6 +626,12 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                   </div>
                   <div className="day-summary-label">Volume</div>
                 </div>
+                {totalCaloriesBurned > 0 && (
+                  <div className="day-summary-stat">
+                    <div className="day-summary-value">~{totalCaloriesBurned}</div>
+                    <div className="day-summary-label">kcal</div>
+                  </div>
+                )}
               </div>
 
               {workoutSessions.map((sess, idx) => (

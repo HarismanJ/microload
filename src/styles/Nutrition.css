@@ -201,6 +201,12 @@
   white-space: nowrap;
 }
 
+.nut-burned-row {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
 /* ── Meal sections ───────────────────────────────────────────── */
 .nut-meal-section {
   background: var(--surface);

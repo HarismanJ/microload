@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, lazy, Suspense, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import Model from 'react-body-highlighter'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
@@ -347,6 +348,10 @@ export default function Ranks({ refreshTick = 0 }) {
   const [topSetSaving, setTopSetSaving] = useState(false)
   const [topSetError, setTopSetError] = useState('')
   const [topSetNotice, setTopSetNotice] = useState('')
+  const [ormCalcOpen, setOrmCalcOpen] = useState(false)
+  const [ormWeight, setOrmWeight] = useState('')
+  const [ormReps, setOrmReps] = useState('')
+  const [ormUnit, setOrmUnit] = useState('kg')
 
   useEffect(() => {
     try {
@@ -794,10 +799,32 @@ export default function Ranks({ refreshTick = 0 }) {
     )
   }
 
+  const ormCalcW = parseFloat(ormWeight)
+  const ormCalcR = parseInt(ormReps)
+  const ormResult = Number.isFinite(ormCalcW) && ormCalcW > 0 && Number.isFinite(ormCalcR) && ormCalcR >= 1 && ormCalcR <= 36
+    ? (() => {
+        const kg = ormUnit === 'lbs' ? ormCalcW * 0.453592 : ormCalcW
+        const resultKg = calculateORM(kg, ormCalcR)
+        return ormUnit === 'lbs' ? Math.round(resultKg * 2.20462 * 10) / 10 : resultKg
+      })()
+    : null
+
   return (
+    <>
     <div className="ranks-screen">
       <div className="ranks-header">
-        <div className="ranks-title">Strength Ranks</div>
+        <div className="ranks-title-row">
+          <div className="ranks-title">Strength Ranks</div>
+          <button className="orm-calc-btn" onClick={() => setOrmCalcOpen(true)}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="2" width="16" height="20" rx="2"/>
+              <line x1="8" y1="6" x2="16" y2="6"/>
+              <line x1="8" y1="10" x2="16" y2="10"/>
+              <line x1="8" y1="14" x2="12" y2="14"/>
+            </svg>
+            1RM Calculator
+          </button>
+        </div>
         <div className="ranks-subtitle">
           {isActiveMode
             ? 'Current ranks track recent form with rolling updates and a 21-day inactivity grace period.'
@@ -1248,5 +1275,63 @@ export default function Ranks({ refreshTick = 0 }) {
         </div>
       )}
     </div>
+
+    {ormCalcOpen && createPortal(
+      <div className="confirm-overlay" onClick={() => setOrmCalcOpen(false)}>
+        <div className="confirm-sheet orm-calc-sheet" onClick={e => e.stopPropagation()}>
+          <div className="orm-calc-header">
+            <div className="orm-calc-title">1RM Calculator</div>
+            <div className="unit-toggle">
+              <button className={`unit-btn ${ormUnit === 'kg' ? 'active' : ''}`} onClick={() => setOrmUnit('kg')}>kg</button>
+              <button className={`unit-btn ${ormUnit === 'lbs' ? 'active' : ''}`} onClick={() => setOrmUnit('lbs')}>lbs</button>
+            </div>
+          </div>
+          <div className="orm-calc-sub">Estimate your one-rep max from any working set</div>
+          <div className="lift-import-grid">
+            <label className="lift-import-field">
+              <span>Weight ({ormUnit})</span>
+              <div className="lift-import-input-wrap">
+                <input
+                  className="lift-import-input"
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  placeholder="0"
+                  value={ormWeight}
+                  onChange={e => setOrmWeight(e.target.value)}
+                />
+                <span>{ormUnit}</span>
+              </div>
+            </label>
+            <label className="lift-import-field">
+              <span>Reps</span>
+              <input
+                className="lift-import-input"
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max="36"
+                step="1"
+                placeholder="0"
+                value={ormReps}
+                onChange={e => setOrmReps(e.target.value)}
+              />
+            </label>
+          </div>
+          {ormResult !== null ? (
+            <div className="orm-calc-result">
+              <span className="orm-calc-result-label">Estimated 1RM</span>
+              <span className="orm-calc-result-value">{ormResult} {ormUnit}</span>
+            </div>
+          ) : (
+            <div className="orm-calc-placeholder">Enter weight and reps to see your estimate</div>
+          )}
+          <button className="confirm-keep" onClick={() => setOrmCalcOpen(false)}>Done</button>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   )
 }
