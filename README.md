@@ -1,6 +1,6 @@
 # microload
 
-A mobile-first fitness tracking app for iOS and Android, built by Harisman Manjeyakanthan. Covers workout logging, strength ranking, nutrition tracking, and more — designed and tested on a real device throughout.
+A mobile-first fitness tracking app for iOS and Android, built by Harisman Jeyakanthan. Covers workout logging, strength ranking, nutrition tracking, and more — designed and tested on a real device throughout.
 
 Built with assistance from Claude (Anthropic).
 
