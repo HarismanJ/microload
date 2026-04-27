@@ -486,14 +486,20 @@ export default function App() {
     // INITIAL_SESSION which triggers clearCache(), which would wipe a localStorage
     // flag before getSession().then() ever gets to check it.
     const pendingRecovery = localStorage.getItem('microload:pendingRecovery') === '1'
+    // Detect a fresh web recovery redirect (reset-password.html forwards these params).
+    // Used to distinguish a fresh flow (show reset form) from an abandoned one (sign out).
+    const urlParams = new URLSearchParams(window.location.search)
+    const hashParams = new URLSearchParams(window.location.hash.slice(1))
+    const isRecoveryUrl = urlParams.get('type') === 'recovery' || hashParams.get('type') === 'recovery'
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      // If pendingRecovery is set (native abandoned flow, or web fresh flow that
-      // raced ahead of onAuthStateChange), show the reset form rather than the app.
-      if (session && pendingRecovery) {
+      // Abandoned recovery: the user opened the reset link before but closed the reset
+      // form without completing it. Sign them out so they land on the sign-in page,
+      // same as the native flow. Fresh recoveries have isRecoveryUrl=true and are
+      // handled by onAuthStateChange instead.
+      if (session && pendingRecovery && !isRecoveryUrl) {
         localStorage.removeItem('microload:pendingRecovery')
-        setRecoveryMode(true)
-        setSession(session)
+        await supabase.auth.signOut()
         return
       }
       authUserIdRef.current = session?.user?.id ?? null
@@ -524,7 +530,10 @@ export default function App() {
       // listener was registered, new subscribers only get INITIAL_SESSION (not the
       // original SIGNED_IN/PASSWORD_RECOVERY), so we catch it here with the flag.
       if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session && localStorage.getItem('microload:pendingRecovery') === '1') {
-        localStorage.removeItem('microload:pendingRecovery')
+        // Don't remove pendingRecovery here — it must persist so that if the user
+        // closes the reset form without completing it, the next load's getSession
+        // check sees the flag and signs them out (abandoned recovery).
+        // It is removed by onRecoveryDone on success, or SIGNED_OUT on sign-out.
         setRecoveryMode(true)
         setSession(session)
         return
