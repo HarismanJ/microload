@@ -520,7 +520,10 @@ export default function App() {
       }
       // PKCE recovery flow fires SIGNED_IN, not PASSWORD_RECOVERY — detect via flag
       // set by reset-password.html before it forwards to the main app.
-      if (event === 'SIGNED_IN' && localStorage.getItem('microload:pendingRecovery') === '1') {
+      // Also cover INITIAL_SESSION: if Supabase processed the recovery URL before this
+      // listener was registered, new subscribers only get INITIAL_SESSION (not the
+      // original SIGNED_IN/PASSWORD_RECOVERY), so we catch it here with the flag.
+      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session && localStorage.getItem('microload:pendingRecovery') === '1') {
         localStorage.removeItem('microload:pendingRecovery')
         setRecoveryMode(true)
         setSession(session)
