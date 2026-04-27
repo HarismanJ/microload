@@ -585,27 +585,41 @@ export default function Workout({
 
   const performStartWorkout = async ({ isBattleStart = false } = {}) => {
     if (battleStarting || activeWorkout || sessionId) return false
+    if (!userId) return false
 
     setBattleStarting(true)
     setBattleSyncError('')
 
-    const { data: { user } } = await supabase.auth.getUser()
+    // For non-battle starts, optimistically transition to the active workout view
+    // immediately so the UI feels instant. The DB insert completes in the background.
+    // Battle starts are excluded because they show a lobby loader and need the
+    // session to exist before announcing workout_started to the opponent.
+    const optimistic = !isBattleStart
+    if (optimistic) {
+      workoutStartRef.current = Date.now()
+      setActiveWorkout(true)
+    }
+
     try {
-      const [{ data: sess, error: sessionError }, { data: prof, error: profileError }] = await Promise.all([
-        supabase.from('workout_sessions').insert({ user_id: user.id }).select().single(),
-        supabase.from('profiles').select('unit_preference').eq('id', user.id).single(),
-      ])
+      // userId is already in state (set during init before loading clears).
+      // defaultUnit is already in state from the same profile query in init.
+      // No need to call getUser() or re-fetch the profile here.
+      const { data: sess, error: sessionError } = await supabase
+        .from('workout_sessions')
+        .insert({ user_id: userId })
+        .select()
+        .single()
 
       if (sessionError) throw sessionError
-      if (profileError) throw profileError
       if (!sess) throw new Error('Could not create your workout session.')
 
-      workoutStartRef.current = Date.now()
+      if (!optimistic) {
+        workoutStartRef.current = Date.now()
+        setActiveWorkout(true)
+      }
+
       setSessionId(sess.id)
-      const unit = prof?.unit_preference || 'kg'
-      setDefaultUnit(unit)
-      setActiveWorkout(true)
-      writeStoredWorkoutDraft(user.id, {
+      writeStoredWorkoutDraft(userId, {
         version: WORKOUT_DRAFT_VERSION,
         savedAt: Date.now(),
         sessionId: sess.id,
@@ -614,7 +628,7 @@ export default function Workout({
         exerciseNotes: {},
         notesOpen: {},
         restTimer: null,
-        defaultUnit: unit,
+        defaultUnit,
         defaultRest,
       }, battleModeActive ? battleRoom?.id : null)
 
@@ -628,6 +642,10 @@ export default function Workout({
 
       return true
     } catch (err) {
+      if (optimistic) {
+        setActiveWorkout(false)
+        workoutStartRef.current = null
+      }
       setBattleSyncError(err.message || 'Could not start your workout.')
       return false
     } finally {

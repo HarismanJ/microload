@@ -488,12 +488,13 @@ export default function App() {
     const pendingRecovery = localStorage.getItem('microload:pendingRecovery') === '1'
 
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      // If the user abandoned a password reset mid-flow, sign them out so they
-      // land on the sign-in page rather than being silently logged in.
+      // If pendingRecovery is set (native abandoned flow, or web fresh flow that
+      // raced ahead of onAuthStateChange), show the reset form rather than the app.
       if (session && pendingRecovery) {
         localStorage.removeItem('microload:pendingRecovery')
-        await supabase.auth.signOut()
-        return // onAuthStateChange SIGNED_OUT will set session to null
+        setRecoveryMode(true)
+        setSession(session)
+        return
       }
       authUserIdRef.current = session?.user?.id ?? null
       // Apply theme from localStorage instantly — no await, no blocking
@@ -513,6 +514,14 @@ export default function App() {
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'PASSWORD_RECOVERY') {
+        setRecoveryMode(true)
+        setSession(session)
+        return
+      }
+      // PKCE recovery flow fires SIGNED_IN, not PASSWORD_RECOVERY — detect via flag
+      // set by reset-password.html before it forwards to the main app.
+      if (event === 'SIGNED_IN' && localStorage.getItem('microload:pendingRecovery') === '1') {
+        localStorage.removeItem('microload:pendingRecovery')
         setRecoveryMode(true)
         setSession(session)
         return

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { supabase } from '../lib/supabase'
 
 export default function Auth({ recoveryMode = false, onRecoveryDone }) {
@@ -37,7 +38,10 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
       if (error) setError(error.message)
       else setMessage('Check your email for a confirmation link. Be sure to check your spam folder.')
     } else if (mode === 'forgot') {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: 'microload://reset-password' })
+      const redirectTo = Capacitor.isNativePlatform()
+        ? 'microload://reset-password'
+        : `${window.location.origin}/reset-password.html`
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
       if (error) { setError(error.message) } else {
         setMessage('Check your email for a password reset link. Be sure to check your spam folder.')
       }
