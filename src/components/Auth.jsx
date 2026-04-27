@@ -118,7 +118,13 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
 
         {mode === 'reset' && (
           <div style={{ marginBottom: 20 }}>
-            <p style={{ color: 'var(--text)', fontSize: 15, fontWeight: 600 }}>Set New Password</p>
+            <button
+              onClick={() => supabase.auth.signOut()}
+              style={{ background: 'none', border: 'none', color: 'var(--blue)', fontSize: 14, cursor: 'pointer', padding: 0 }}
+            >
+              ← Back to Sign In
+            </button>
+            <p style={{ color: 'var(--text)', fontSize: 15, fontWeight: 600, marginTop: 12 }}>Set New Password</p>
             <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 4 }}>Enter and confirm your new password.</p>
           </div>
         )}
