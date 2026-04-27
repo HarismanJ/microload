@@ -245,6 +245,10 @@ function mapUsdaFood(food: Record<string, unknown>) {
   }
 }
 
+function normalizeBarcode(code: unknown) {
+  return String(code || '').replace(/^0+/, '') || '0'
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -255,7 +259,38 @@ Deno.serve(async (request) => {
   }
 
   try {
-    const { query, pageSize = 24 } = await request.json()
+    const { query, barcode, pageSize = 24 } = await request.json()
+
+    // ── Barcode lookup mode ──────────────────────────────────────────────────
+    if (barcode) {
+      const normalizedInput = normalizeBarcode(barcode)
+      const params = new URLSearchParams({
+        api_key: USDA_API_KEY,
+        query: String(barcode),
+        dataType: 'Branded',
+        pageSize: '5',
+      })
+
+      const response = await fetch(`${USDA_SEARCH_URL}?${params.toString()}`)
+      if (!response.ok) {
+        return jsonResponse({ food: null })
+      }
+
+      const payload = await response.json()
+      const foods = Array.isArray(payload?.foods) ? payload.foods : []
+
+      const match = foods.find((f: Record<string, unknown>) =>
+        f.gtinUpc && normalizeBarcode(f.gtinUpc) === normalizedInput
+      )
+
+      if (!match) {
+        return jsonResponse({ food: null })
+      }
+
+      return jsonResponse({ food: mapUsdaFood(match) })
+    }
+
+    // ── Text search mode ─────────────────────────────────────────────────────
     const trimmedQuery = String(query || '').trim()
     const requestedPageSize = Math.max(1, Math.min(50, Number(pageSize) || 24))
 

@@ -9,6 +9,7 @@ import {
   normalizeSearchValue,
 } from '../../lib/foodSearch'
 import CreateFood from './CreateFood'
+import LoadingSpinner from '../LoadingSpinner'
 
 const BarcodeScanner = lazy(() => import('./BarcodeScanner'))
 const USDA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
@@ -27,8 +28,9 @@ export default function NutritionFoodPicker({
   const [selected, setSelected] = useState(null)
   const [amountMode, setAmountMode] = useState('grams')
   const [grams, setGrams] = useState('')
-  const [servings, setServings] = useState(1)
+  const [servings, setServings] = useState('1')
   const [searching, setSearching] = useState(false)
+  const [loadingRecent, setLoadingRecent] = useState(true)
   const [creating, setCreating] = useState(false)
   const [scanning, setScanning] = useState(false)
   const searchTimer = useRef()
@@ -56,12 +58,14 @@ export default function NutritionFoodPicker({
     return foods
   }
 
-  async function loadRecent() {
+  async function loadRecent(isCancelled) {
     const { data: { user } } = await supabase.auth.getUser()
+    if (isCancelled()) return
     const cacheKey = `recent_foods:${user.id}`
     const cached = getCached(cacheKey)
     if (cached) {
       setRecent(cached)
+      setLoadingRecent(false)
       return
     }
 
@@ -72,6 +76,7 @@ export default function NutritionFoodPicker({
       .not('food_id', 'is', null)
       .order('created_at', { ascending: false })
       .limit(30)
+    if (isCancelled()) return
     const seen = new Set()
     const unique = (data || []).filter(r => {
       if (!r.foods || seen.has(r.food_id)) return false
@@ -81,11 +86,14 @@ export default function NutritionFoodPicker({
     const recent = unique.slice(0, 10)
     setCached(cacheKey, recent, 5 * 60 * 1000)
     setRecent(recent)
+    setLoadingRecent(false)
   }
 
   useEffect(() => {
-    const timer = setTimeout(() => { loadRecent() }, 0)
-    return () => clearTimeout(timer)
+    let cancelled = false
+    const isCancelled = () => cancelled
+    const timer = setTimeout(() => { loadRecent(isCancelled) }, 0)
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [])
 
   // Scroll to top whenever the active view changes
@@ -155,7 +163,7 @@ export default function NutritionFoodPicker({
 
   function selectFood(food) {
     setSelected(food)
-    setServings(1)
+    setServings('1')
     const servingSize = Number(food?.serving_size) || 0
     setGrams(servingSize > 0 ? String(servingSize) : '100')
     setAmountMode((food?.serving_unit || '').toLowerCase() === 'g' ? 'grams' : 'servings')
@@ -169,7 +177,8 @@ export default function NutritionFoodPicker({
       if (!Number.isFinite(gramValue) || gramValue <= 0 || servingSize <= 0) return 0
       return gramValue / servingSize
     }
-    return servings > 0 ? servings : 0
+    const servingsVal = Number.parseFloat(servings)
+    return Number.isFinite(servingsVal) && servingsVal > 0 ? servingsVal : 0
   }
 
   async function ensureFoodRecord(food) {
@@ -341,22 +350,32 @@ export default function NutritionFoodPicker({
             </div>
           ) : (
             <div className="nut-serving-row">
-              <button className="rtp-btn" onClick={() => setServings(s => Math.max(0.25, +(s - 0.25).toFixed(2)))}>−</button>
+              <button className="rtp-btn" onClick={() => setServings(s => {
+                const n = Number.parseFloat(s)
+                return String(Number.isFinite(n) ? Math.max(0.25, +Math.max(0.25, n - 0.25).toFixed(2)) : 0.25)
+              })}>−</button>
               <input
                 className="nut-serving-input"
                 type="number"
                 value={servings}
                 min="0.25"
                 step="0.25"
-                onChange={e => setServings(Math.max(0.25, +e.target.value))}
+                onChange={e => setServings(e.target.value)}
+                onBlur={e => {
+                  const n = Number.parseFloat(e.target.value)
+                  setServings(Number.isFinite(n) && n > 0 ? String(+Math.max(0.25, n).toFixed(2)) : '0.25')
+                }}
               />
-              <button className="rtp-btn" onClick={() => setServings(s => +(s + 0.25).toFixed(2))}>+</button>
+              <button className="rtp-btn" onClick={() => setServings(s => {
+                const n = Number.parseFloat(s)
+                return String(Number.isFinite(n) ? +(n + 0.25).toFixed(2) : 1)
+              })}>+</button>
             </div>
           )}
           <div className="nut-serving-note">
             {amountMode === 'grams'
               ? `${grams || '0'}g selected`
-              : `${servings} serving${servings === 1 ? '' : 's'} selected`}
+              : `${servings} serving${Number.parseFloat(servings) === 1 ? '' : 's'} selected`}
           </div>
         </div>
 
@@ -438,8 +457,8 @@ export default function NutritionFoodPicker({
       {showRecent && <div className="nut-list-label">Recent</div>}
 
       <div className="nut-search-list">
-        {searching && <div className="nut-empty">Searching...</div>}
-        {!searching && list.length === 0 && (
+        {(searching || (showRecent && loadingRecent)) && <LoadingSpinner fullPage />}
+        {!searching && !loadingRecent && list.length === 0 && (
           <div className="nut-empty">
             {search.trim() ? 'No foods found — try creating one' : 'No recent foods'}
           </div>

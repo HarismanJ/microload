@@ -2683,16 +2683,25 @@ export default function Workout({
                   style={rowStyle}
                 >
                 <span className="col-set">{i + 1}</span>
-                <span className="col-prev">
-                  {(() => {
-                    const p = prevSetsMap[ex.id]?.[i]
-                    if (!p) return '—'
-                    const w = p.unit === ex.unit ? p.weight
-                      : p.unit === 'lbs' ? Math.round(p.weight * 0.453592 * 10) / 10
-                      : Math.round(p.weight * 2.20462 * 10) / 10
-                    return `${w} × ${p.reps}`
-                  })()}
-                </span>
+                {(() => {
+                  const p = prevSetsMap[ex.id]?.[i]
+                  if (!p) return <span className="col-prev">—</span>
+                  const w = p.unit === ex.unit ? p.weight
+                    : p.unit === 'lbs' ? Math.round(p.weight * 0.453592 * 10) / 10
+                    : Math.round(p.weight * 2.20462 * 10) / 10
+                  return (
+                    <button
+                      className="col-prev col-prev-btn"
+                      disabled={s.done}
+                      onClick={() => {
+                        updateSet(ex.id, i, 'weight', String(w))
+                        updateSet(ex.id, i, 'reps', String(p.reps))
+                      }}
+                    >
+                      {w} × {p.reps}
+                    </button>
+                  )
+                })()}
                 <input
                   className="col-kg set-input"
                   type="number"

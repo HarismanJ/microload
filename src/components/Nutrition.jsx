@@ -68,6 +68,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   const [feedFilter, setFeedFilter] = useState('all')
   const [feedSortDirection, setFeedSortDirection] = useState('desc')
   const [deleteTargetId, setDeleteTargetId] = useState(null)
+  const [viewingLog, setViewingLog] = useState(null)
 
   useEffect(() => { load() }, [date])
 
@@ -151,7 +152,8 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   }
 
   async function removeLog(id) {
-    await supabase.from('nutrition_logs').delete().eq('id', id)
+    const { error } = await supabase.from('nutrition_logs').delete().eq('id', id)
+    if (error) { console.error('removeLog failed:', error.message); return }
     setLogs(prev => prev.filter(l => l.id !== id))
     invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`)
   }
@@ -282,6 +284,68 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   }, [logs, feedFilter, feedSortDirection])
 
   const feedListKey = `${date}-${feedFilter}-${feedSortDirection}-${logs.length}`
+
+  if (viewingLog) {
+    const log = viewingLog
+    const micros = [
+      { label: 'Fiber',         val: +(log.fiber || 0).toFixed(1),         unit: 'g'   },
+      { label: 'Sugar',         val: +(log.sugar || 0).toFixed(1),         unit: 'g'   },
+      { label: 'Saturated Fat', val: +(log.saturated_fat || 0).toFixed(1), unit: 'g'   },
+      { label: 'Sodium',        val: Math.round(log.sodium || 0),          unit: 'mg'  },
+      { label: 'Potassium',     val: Math.round(log.potassium || 0),       unit: 'mg'  },
+      { label: 'Cholesterol',   val: Math.round(log.cholesterol || 0),     unit: 'mg'  },
+      { label: 'Calcium',       val: Math.round(log.calcium || 0),         unit: 'mg'  },
+      { label: 'Iron',          val: +(log.iron || 0).toFixed(2),          unit: 'mg'  },
+      { label: 'Magnesium',     val: Math.round(log.magnesium || 0),       unit: 'mg'  },
+      { label: 'Zinc',          val: +(log.zinc || 0).toFixed(1),          unit: 'mg'  },
+      { label: 'Vitamin A',     val: Math.round(log.vitamin_a || 0),       unit: 'mcg' },
+      { label: 'Vitamin C',     val: +(log.vitamin_c || 0).toFixed(1),     unit: 'mg'  },
+      { label: 'Vitamin D',     val: +(log.vitamin_d || 0).toFixed(1),     unit: 'mcg' },
+    ].filter(m => m.val > 0)
+
+    return (
+      <div className="nut-picker-screen">
+        <div className="nut-picker-header">
+          <button className="back-btn" onClick={() => setViewingLog(null)}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+          <div>
+            <div className="picker-title">{log.food_name}</div>
+            <div className="nut-detail-brand">
+              {log.servings !== 1 ? `${log.servings}× servings` : '1 serving'} · {formatFoodLogTime(log.created_at)}
+            </div>
+          </div>
+        </div>
+
+        <div className="nut-preview-card">
+          <div className="nut-preview-cal">{Math.round(log.calories)} <span>kcal</span></div>
+          <div className="nut-preview-macros">
+            <div className="nut-preview-macro" style={{ '--mc': '#a855f7' }}>
+              <span>{(log.protein || 0).toFixed(1)}g</span><span>Protein</span>
+            </div>
+            <div className="nut-preview-macro" style={{ '--mc': '#f97316' }}>
+              <span>{(log.carbs || 0).toFixed(1)}g</span><span>Carbs</span>
+            </div>
+            <div className="nut-preview-macro" style={{ '--mc': '#eab308' }}>
+              <span>{(log.fat || 0).toFixed(1)}g</span><span>Fat</span>
+            </div>
+          </div>
+        </div>
+
+        {micros.length > 0 && (
+          <div className="nut-micros-card">
+            <div className="nut-micros-title">More Nutrition</div>
+            {micros.map(mi => (
+              <div key={mi.label} className="nut-micro-row">
+                <span>{mi.label}</span>
+                <span>{mi.val}{mi.unit}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   if (addingToMeal) {
     return (
@@ -548,7 +612,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                   <span className="nut-feed-dot" />
                   {index < feedLogs.length - 1 && <span className="nut-feed-line" />}
                 </div>
-                <div className="nut-feed-card">
+                <div className="nut-feed-card" onClick={() => { setDeleteTargetId(null); setViewingLog(log) }} style={{ cursor: 'pointer' }}>
                   <div className="nut-feed-card-top">
                     <div className="nut-feed-copy">
                       <div className="nut-feed-food">{log.food_name}</div>
@@ -566,13 +630,13 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                       <span className="nut-feed-pill nut-feed-pill-fat">F {Math.round(log.fat || 0)}g</span>
                     </div>
                     {deleteTargetId === log.id ? (
-                      <div className="nut-feed-delete-confirm">
+                      <div className="nut-feed-delete-confirm" onClick={e => e.stopPropagation()}>
                         <span className="nut-feed-delete-confirm-text">Remove this entry?</span>
                         <button className="nut-feed-delete-cancel-btn" onClick={() => setDeleteTargetId(null)}>Cancel</button>
                         <button className="nut-feed-remove-btn nut-feed-remove-btn-confirm" onClick={() => { removeLog(log.id); setDeleteTargetId(null) }}>Delete</button>
                       </div>
                     ) : (
-                      <button className="nut-feed-remove-btn" onClick={() => setDeleteTargetId(log.id)}>
+                      <button className="nut-feed-remove-btn" onClick={e => { e.stopPropagation(); setDeleteTargetId(log.id) }}>
                         Delete
                       </button>
                     )}

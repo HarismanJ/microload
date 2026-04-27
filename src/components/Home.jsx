@@ -1,7 +1,7 @@
 import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
-import { getCached, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
+import { getCached, getCalendarMonthCacheKey, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
 import LoadingSpinner from './LoadingSpinner'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import BodyWeightDetail from './profile/BodyWeightDetail'
@@ -50,11 +50,6 @@ function loadStoredBodyWeightChartUnit() {
   } catch {
     return null
   }
-}
-
-function getCalendarMonthCacheKey(dateInput = new Date()) {
-  const date = dateInput instanceof Date ? dateInput : new Date(dateInput)
-  return `cal_${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 let ghostChartHasPlayed = false
@@ -270,9 +265,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [onWorkoutStreakChange, workoutStreak])
 
   useEffect(() => {
-    if (loading || !calendarInitialReady) return
+    if (loading) return
     onInitialReady?.()
-  }, [calendarInitialReady, loading, onInitialReady])
+  }, [loading, onInitialReady])
 
   useEffect(() => {
     if (!splashDone) return

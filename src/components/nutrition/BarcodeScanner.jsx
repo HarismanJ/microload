@@ -4,6 +4,7 @@ import { BarcodeFormat, BarcodeScanner as NativeBarcodeScanner } from '@capacito
 import { Html5Qrcode } from 'html5-qrcode'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
+import { lookupUsdaBarcode } from '../../lib/usdaFoods'
 import LoadingSpinner from '../LoadingSpinner'
 
 const FIELDS = [
@@ -58,6 +59,13 @@ function isAcceptedFoodBarcode(barcode) {
     BarcodeFormat.UpcE,
     ...ACCEPTED_WEB_FORMATS,
   ].includes(format)
+}
+
+const EMPTY_FORM = {
+  name: '', brand: '', serving_size: '100', serving_unit: 'g',
+  calories: '', protein: '', carbs: '', fat: '', fiber: '', sugar: '',
+  saturated_fat: '', sodium: '', potassium: '', cholesterol: '',
+  vitamin_a: '', vitamin_c: '', calcium: '', iron: '',
 }
 
 function parseOFF(product) {
@@ -395,24 +403,60 @@ export default function BarcodeScanner({ onSave, onBack }) {
 
   async function lookup(barcode) {
     setPhase('loading')
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 8000)
+      // 1. Try USDA — exact gtinUpc match only
+      try {
+        const food = await lookupUsdaBarcode(barcode, { signal: controller.signal })
+        if (food) {
+          clearTimeout(timeout)
+          const f = food
+          setForm({
+            name:          String(f.name || ''),
+            brand:         String(f.brand || ''),
+            serving_size:  String(f.serving_size || 100),
+            serving_unit:  String(f.serving_unit || 'g'),
+            calories:      String(Math.round(f.calories || 0)),
+            protein:       String(+(f.protein || 0).toFixed(1)),
+            carbs:         String(+(f.carbs || 0).toFixed(1)),
+            fat:           String(+(f.fat || 0).toFixed(1)),
+            fiber:         String(+(f.fiber || 0).toFixed(1)),
+            sugar:         String(+(f.sugar || 0).toFixed(1)),
+            saturated_fat: String(+(f.saturated_fat || 0).toFixed(1)),
+            sodium:        String(Math.round(f.sodium || 0)),
+            potassium:     String(Math.round(f.potassium || 0)),
+            cholesterol:   String(Math.round(f.cholesterol || 0)),
+            vitamin_a:     String(+(f.vitamin_a || 0).toFixed(1)),
+            vitamin_c:     String(+(f.vitamin_c || 0).toFixed(1)),
+            calcium:       String(Math.round(f.calcium || 0)),
+            iron:          String(+(f.iron || 0).toFixed(2)),
+          })
+          setPhase('confirm')
+          return
+        }
+      } catch {
+        // Edge function error — fall through to Open Food Facts
+      }
+
+      // 2. Fall back to Open Food Facts
       const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, { signal: controller.signal })
       clearTimeout(timeout)
       const json = await res.json()
       if (json.status !== 1 || !json.product) {
         setErrorMsg('Product not found. You can enter details manually.')
-        setForm({ name: '', brand: '', serving_size: '100', serving_unit: 'g', calories: '', protein: '', carbs: '', fat: '', fiber: '', sugar: '', saturated_fat: '', sodium: '', potassium: '', cholesterol: '', vitamin_a: '', vitamin_c: '', calcium: '', iron: '' })
+        setForm(EMPTY_FORM)
         setPhase('confirm')
         return
       }
       setForm(parseOFF(json.product))
       setPhase('confirm')
     } catch (e) {
+      clearTimeout(timeout)
       if (e.name === 'AbortError') {
         setErrorMsg('Lookup timed out. You can enter details manually.')
-        setForm({ name: '', brand: '', serving_size: '100', serving_unit: 'g', calories: '', protein: '', carbs: '', fat: '', fiber: '', sugar: '', saturated_fat: '', sodium: '', potassium: '', cholesterol: '', vitamin_a: '', vitamin_c: '', calcium: '', iron: '' })
+        setForm(EMPTY_FORM)
         setPhase('confirm')
       } else {
         setErrorMsg('Network error. Check your connection.')

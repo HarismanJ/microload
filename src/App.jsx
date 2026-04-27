@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { App as CapApp } from '@capacitor/app'
 import { supabase } from './lib/supabase'
-import { clearCache, invalidateCache } from './lib/cache'
+import { clearCache, getCalendarMonthCacheKey, invalidateCache } from './lib/cache'
 import LoadingSpinner from './components/LoadingSpinner'
 import RestTimePicker from './components/RestWheelPicker'
 import {
@@ -41,11 +41,6 @@ function fmtRest(s) {
 
 function displayName(profile) {
   return profile?.full_name || profile?.username || 'Someone'
-}
-
-function getCalendarMonthCacheKey(dateInput = new Date()) {
-  const date = dateInput instanceof Date ? dateInput : new Date(dateInput)
-  return `cal_${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
 const TAB_ORDER = ['home', 'workout', 'ranks', 'nutrition']
@@ -501,18 +496,18 @@ export default function App() {
         return // onAuthStateChange SIGNED_OUT will set session to null
       }
       authUserIdRef.current = session?.user?.id ?? null
-      // Apply the user's saved theme immediately on startup before any page renders
+      // Apply theme from localStorage instantly — no await, no blocking
+      const { applyTheme } = await import('./lib/theme')
+      applyTheme(localStorage.getItem('theme') || 'obsidian')
+      // Fire-and-forget DB fetch to correct theme if localStorage was empty (e.g. after sign-out)
       if (session?.user?.id) {
-        const { data } = await supabase
-          .from('profiles')
-          .select('theme')
-          .eq('id', session.user.id)
-          .single()
-        if (data?.theme) {
-          localStorage.setItem('theme', data.theme)
-          const { applyTheme } = await import('./lib/theme')
-          applyTheme(data.theme)
-        }
+        supabase.from('profiles').select('theme').eq('id', session.user.id).single()
+          .then(({ data }) => {
+            if (data?.theme) {
+              localStorage.setItem('theme', data.theme)
+              applyTheme(data.theme)
+            }
+          })
       }
       setSession(session)
     })

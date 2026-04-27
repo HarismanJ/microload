@@ -78,6 +78,11 @@ export function setStartupSnapshot(key, data, ttlMs = 30 * 60 * 1000) {
   }
 }
 
+export function getCalendarMonthCacheKey(dateInput = new Date()) {
+  const date = dateInput instanceof Date ? dateInput : new Date(dateInput)
+  return `cal_${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
 export function invalidateCache(...keys) {
   keys.forEach(k => {
     delete store[k]
