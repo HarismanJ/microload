@@ -1,27 +1,20 @@
-import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
+import { useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useMemo } from 'react'
+import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { getCached, getCalendarMonthCacheKey, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
+import { DEFAULT_HOME_WEIGHT_PERIOD, filterByChartPeriod } from '../lib/chartPeriods'
+import { WEIGHT_TREND_PRESETS, getPresetRate } from '../lib/weightTrend'
 import LoadingSpinner from './LoadingSpinner'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import BodyWeightDetail from './profile/BodyWeightDetail'
 import WorkoutCalendar from './profile/WorkoutCalendar'
 import WeightChart from './profile/WeightChart'
 import { convertWeight } from '../lib/liftMath'
+import { VALIDATION_LIMITS, validateBodyweight, validateNumber } from '../lib/inputValidation'
 import '../styles/Home.css'
 
 const BODY_WEIGHT_CHART_UNIT_KEY = 'bodyWeightChartUnitOverride'
-const BODY_WEIGHT_CHART_PERIOD_KEY = 'bodyWeightChartPeriod'
-
-function loadStoredBodyWeightChartPeriod() {
-  if (typeof window === 'undefined') return 'all'
-  try {
-    const stored = window.localStorage.getItem(BODY_WEIGHT_CHART_PERIOD_KEY)
-    return ['1w', '1m', '1y', 'all'].includes(stored) ? stored : 'all'
-  } catch {
-    return 'all'
-  }
-}
 const HOME_STARTUP_SNAPSHOT_TTL_MS = 15 * 60 * 1000
 
 function localDate(d = new Date()) {
@@ -52,11 +45,14 @@ function loadStoredBodyWeightChartUnit() {
   }
 }
 
-let ghostChartHasPlayed = false
-let barGlowHasPlayed = false
 
 const BURN_R = 40
 const BURN_C = 2 * Math.PI * BURN_R
+
+let ghostChartHasPlayed = false
+let nutGlowHasPlayed = false
+let burnGlowHasPlayed = false
+let lastHomeUserId = null
 
 export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted }) {
   const [profile, setProfile]         = useState(null)
@@ -66,19 +62,42 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [ghostChartPhase, setGhostChartPhase] = useState('idle') // 'idle' | 'drawing' | 'erasing' | 'done'
   const [appReturnTick, setAppReturnTick] = useState(0)
   const [loading, setLoading]         = useState(true)
+  const [loadError, setLoadError]     = useState(false)
   const [showWeightDetail, setShowWeightDetail] = useState(false)
   const [weightSheetUnit, setWeightSheetUnit] = useState(() => loadStoredBodyWeightChartUnit())
   const [bwInput, setBwInput] = useState('')
   const [bwSaving, setBwSaving] = useState(false)
   const [bwError, setBwError] = useState('')
-  const [weightPeriod, setWeightPeriod] = useState(() => loadStoredBodyWeightChartPeriod())
+  const [weightPeriod, setWeightPeriod] = useState(DEFAULT_HOME_WEIGHT_PERIOD)
+  const [showTrendLine, setShowTrendLine] = useState(() => {
+    try { return localStorage.getItem('bw_trend_line') === 'true' } catch { return false }
+  })
+  const [goalWeightKg, setGoalWeightKg] = useState(null)
+  const [goalInput, setGoalInput] = useState('')
+  const [goalSaving, setGoalSaving] = useState(false)
+  const [showGoalLine, setShowGoalLine] = useState(() => {
+    try {
+      const stored = localStorage.getItem('bw_goal_line')
+      return stored !== null ? stored === 'true' : false
+    } catch { return false }
+  })
+  const [trendModeConfig, setTrendModeConfig] = useState(null)
+  const [trendModeInput, setTrendModeInput] = useState('')
+  const [trendRateInput, setTrendRateInput] = useState('')
+  const [trendModeSaving, setTrendModeSaving] = useState(false)
+  const [showTrendMode, setShowTrendMode] = useState(() => {
+    try { return localStorage.getItem('bw_pace_line') === 'true' } catch { return false }
+  })
+  const [trendDatePickerOpen, setTrendDatePickerOpen] = useState(false)
+  const [trendDatePickerValue, setTrendDatePickerValue] = useState('')
+  const [pendingTrendRate, setPendingTrendRate] = useState(null)
   const [weightDeleteTargetId, setWeightDeleteTargetId] = useState(null)
   const [weightDeletingId, setWeightDeletingId] = useState(null)
   const [weightDeleteError, setWeightDeleteError] = useState('')
   const [selectedDay, setSelectedDay] = useState(null) // { sessionIds, dateStr }
   const appWasBackgroundedRef = useRef(false)
   const burnSheetJustOpenedRef = useRef(false)
-  const [calendarInitialReady, setCalendarInitialReady] = useState(false)
+  const [, setCalendarInitialReady] = useState(false)
   const [isPhoneWidth, setIsPhoneWidth] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ))
@@ -86,13 +105,26 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [burnGoal, setBurnGoal] = useState(null)
   const [burnGoalSheetOpen, setBurnGoalSheetOpen] = useState(false)
   const [burnGoalInput, setBurnGoalInput] = useState('')
+  const [burnGoalError, setBurnGoalError] = useState('')
   const [burnGoalSaving, setBurnGoalSaving] = useState(false)
+  const burnGoalModalRef = useRef(null)
+  useFocusTrap(burnGoalModalRef, { active: burnGoalSheetOpen, onEscape: () => setBurnGoalSheetOpen(false) })
   const nutEmpty = todayNut.calories === 0 && todayNut.protein === 0 && todayNut.carbs === 0 && todayNut.fat === 0
   const [barsAnimatedIn, setBarsAnimatedIn] = useState(false)
-  const [barGlowActive, setBarGlowActive] = useState(false)
+  const [nutGlowActive, setNutGlowActive] = useState(false)
+  const [burnGlowActive, setBurnGlowActive] = useState(false)
   const [animReady, setAnimReady] = useState(false)
   const firstEntryWidgetHold = splashDone && !introMotionReady
   const widgetAnimationReady = animReady && !firstEntryWidgetHold
+
+  useLayoutEffect(() => {
+    if (lastHomeUserId !== userId) {
+      lastHomeUserId = userId
+      ghostChartHasPlayed = false
+      nutGlowHasPlayed = false
+      burnGlowHasPlayed = false
+    }
+  }, [userId])
 
   useEffect(() => {
     const onResize = () => setIsPhoneWidth(window.innerWidth <= 640)
@@ -124,6 +156,39 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setProfile(prof)
     setWeightLogs(logs || [])
     setBurnGoal(prof?.calories_burned_goal || null)
+
+    const goalKg = prof?.weight_goal_kg ?? null
+    setGoalWeightKg(goalKg)
+    if (goalKg !== null) {
+      const unit = prof?.unit_preference || 'kg'
+      const goalInUnit = unit === 'lbs'
+        ? Math.round(goalKg * 2.20462 * 10) / 10
+        : Math.round(goalKg * 10) / 10
+      setGoalInput(String(goalInUnit))
+      try {
+        if (localStorage.getItem('bw_goal_line') === null) setShowGoalLine(true)
+      } catch {
+        // localStorage is best-effort for this display preference.
+      }
+    }
+    const trendMode = prof?.weight_trend_mode ?? null
+    const trendRate = prof?.weight_trend_rate_kg_per_week ?? null
+    const trendAnchorDate = prof?.weight_trend_anchor_date ?? null
+    const trendAnchorWeightKg = prof?.weight_trend_anchor_weight_kg ?? null
+    if (trendMode && trendRate !== null && trendAnchorDate && trendAnchorWeightKg !== null) {
+      setTrendModeConfig({ rateKgPerWeek: trendRate, anchorDate: trendAnchorDate, anchorWeightKg: trendAnchorWeightKg })
+      setTrendModeInput(trendMode)
+      if (trendMode === 'custom') {
+        const displayUnit = prof?.unit_preference || 'kg'
+        setTrendRateInput(String(displayUnit === 'lbs'
+          ? Math.round(trendRate * 2.20462 * 100) / 100
+          : Math.round(trendRate * 100) / 100))
+      }
+    } else {
+      setTrendModeConfig(null)
+      setTrendModeInput('')
+      setTrendRateInput('')
+    }
     const todayForBurn = todayStr()
     const todayBurned = (allSessions || [])
       .filter(s => s.finished_at && localDate(new Date(s.finished_at)) === todayForBurn)
@@ -178,68 +243,82 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   async function load() {
     const today = todayStr()
     const cacheKey = 'home'
-    const cacheVersion = 6
+    const cacheVersion = 7
+    setLoadError(false)
 
-    const cached = getCached(cacheKey)
-    if (cached?.version === cacheVersion) {
-      applyData(cached)
-      setLoading(false)
-      return
-    }
-
-    if (useStartupSnapshot) {
-      const storedSnapshot = getStartupSnapshot(cacheKey)
-      if (storedSnapshot?.version === cacheVersion) {
-        setCached(cacheKey, storedSnapshot)
-        applyData(storedSnapshot)
+    try {
+      const cached = getCached(cacheKey)
+      if (cached?.version === cacheVersion && cached?.userId === userId) {
+        applyData(cached)
         setLoading(false)
+        return
       }
+
+      if (useStartupSnapshot) {
+        const storedSnapshot = getStartupSnapshot(cacheKey, userId)
+        if (storedSnapshot?.version === cacheVersion && storedSnapshot?.userId === userId) {
+          setCached(cacheKey, storedSnapshot)
+          applyData(storedSnapshot)
+          setLoading(false)
+        }
+      }
+
+      const oneYearAgo = new Date()
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
+
+      const [
+        profileResponse,
+        nutritionResponse,
+        sessionsResponse,
+        weightResponse,
+      ] = await Promise.all([
+        supabase.from('profiles')
+          .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight, calories_burned_goal, gender, weight_goal_kg, weight_trend_mode, weight_trend_rate_kg_per_week, weight_trend_anchor_date, weight_trend_anchor_weight_kg')
+          .eq('id', userId).single(),
+        supabase.from('nutrition_logs')
+          .select('calories, protein, carbs, fat')
+          .eq('user_id', userId).eq('log_date', today),
+        supabase.from('workout_sessions')
+          .select('started_at, finished_at, calories_burned')
+          .eq('user_id', userId)
+          .not('finished_at', 'is', null)
+          .gte('started_at', oneYearAgo.toISOString()),
+        supabase.from('body_weight_logs')
+          .select('id, weight, unit, logged_at')
+          .eq('user_id', userId)
+          .order('logged_at', { ascending: true }),
+      ])
+
+      const loadError = profileResponse.error
+        || nutritionResponse.error
+        || sessionsResponse.error
+        || weightResponse.error
+      if (loadError) throw loadError
+
+      const result = {
+        version: cacheVersion,
+        userId,
+        prof: profileResponse.data,
+        nutLogs: nutritionResponse.data,
+        allSessions: sessionsResponse.data,
+        weightLogs: weightResponse.data?.map(log => ({
+          id: log.id,
+          weight: log.weight,
+          unit: log.unit,
+          date: log.logged_at.slice(0, 10),
+          loggedAt: log.logged_at,
+        })) || [],
+        today,
+      }
+      setCached('home', result)
+      setStartupSnapshot(cacheKey, result, HOME_STARTUP_SNAPSHOT_TTL_MS, userId)
+      applyData(result)
+    } catch (error) {
+      console.error('Home load failed:', error)
+      setLoadError(true)
+    } finally {
+      setLoading(false)
     }
-
-    const oneYearAgo = new Date()
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
-
-    const [
-      { data: prof },
-      { data: nutLogs },
-      { data: allSessions },
-      { data: weightLogs },
-    ] = await Promise.all([
-      supabase.from('profiles')
-        .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight, calories_burned_goal, gender')
-        .eq('id', userId).single(),
-      supabase.from('nutrition_logs')
-        .select('calories, protein, carbs, fat')
-        .eq('user_id', userId).eq('log_date', today),
-      supabase.from('workout_sessions')
-        .select('started_at, finished_at, calories_burned')
-        .eq('user_id', userId)
-        .not('finished_at', 'is', null)
-        .gte('started_at', oneYearAgo.toISOString()),
-      supabase.from('body_weight_logs')
-        .select('id, weight, unit, logged_at')
-        .eq('user_id', userId)
-        .order('logged_at', { ascending: true }),
-    ])
-
-    const result = {
-      version: cacheVersion,
-      prof,
-      nutLogs,
-      allSessions,
-      weightLogs: weightLogs?.map(log => ({
-        id: log.id,
-        weight: log.weight,
-        unit: log.unit,
-        date: log.logged_at.slice(0, 10),
-        loggedAt: log.logged_at,
-      })) || [],
-      today,
-    }
-    setCached('home', result)
-    setStartupSnapshot(cacheKey, result, HOME_STARTUP_SNAPSHOT_TTL_MS)
-    applyData(result)
-    setLoading(false)
   }
 
   const loadLatest = useEffectEvent(() => { load() })
@@ -253,12 +332,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   useEffect(() => {
     if (weightRefreshTick === 0) return
     loadLatest()
-  }, [weightRefreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [weightRefreshTick])
 
   useEffect(() => {
     if (workoutRefreshTick === 0) return
     loadLatest()
-  }, [workoutRefreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [workoutRefreshTick])
 
   useEffect(() => {
     onWorkoutStreakChange?.(workoutStreak)
@@ -296,7 +375,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       if (document.visibilityState === 'visible' && appWasBackgroundedRef.current) {
         appWasBackgroundedRef.current = false
         ghostChartHasPlayed = false
-        barGlowHasPlayed = false
+        nutGlowHasPlayed = false
+        burnGlowHasPlayed = false
         setAppReturnTick(t => t + 1)
       }
     }
@@ -314,12 +394,20 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [loading, widgetAnimationReady, weightLogs.length, appReturnTick])
 
   useEffect(() => {
-    if (loading || !widgetAnimationReady || !nutEmpty || barGlowHasPlayed) return
-    barGlowHasPlayed = true
-    setBarGlowActive(true)
-    const t = setTimeout(() => setBarGlowActive(false), 1500)
+    if (loading || !widgetAnimationReady || !nutEmpty || nutGlowHasPlayed) return
+    nutGlowHasPlayed = true
+    setNutGlowActive(true)
+    const t = setTimeout(() => setNutGlowActive(false), 1500)
     return () => clearTimeout(t)
   }, [loading, widgetAnimationReady, nutEmpty, appReturnTick])
+
+  useEffect(() => {
+    if (loading || !widgetAnimationReady || burnedToday !== 0 || burnGlowHasPlayed) return
+    burnGlowHasPlayed = true
+    setBurnGlowActive(true)
+    const t = setTimeout(() => setBurnGlowActive(false), 1500)
+    return () => clearTimeout(t)
+  }, [loading, widgetAnimationReady, burnedToday, appReturnTick])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -334,20 +422,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     }
   }, [weightSheetUnit])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      window.localStorage.setItem(BODY_WEIGHT_CHART_PERIOD_KEY, weightPeriod)
-    } catch {
-      // ignore
-    }
-  }, [weightPeriod])
-
   async function logWeightFromHome() {
     const val = parseFloat(bwInput)
     const unit = weightSheetUnit || profile?.unit_preference || 'kg'
-    if (!val || val <= 0 || bwSaving) return
-    if (convertWeight(val, unit, 'kg') > 600) { setBwError('Weight cannot exceed 600 kg.'); return }
+    if (bwSaving) return
+    const weightError = validateBodyweight(bwInput, unit)
+    if (weightError) { setBwError(weightError); return }
 
     setBwSaving(true)
     setBwError('')
@@ -355,44 +435,191 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     const timestamp = new Date().toISOString()
     const nextBodyweight = Math.round(convertWeight(val, unit, profileUnit) * 10) / 10
 
-    const [{ data: inserted, error: insertError }, { error: profileError }] = await Promise.all([
-      supabase
-        .from('body_weight_logs')
-        .insert({ user_id: userId, weight: val, unit, logged_at: timestamp })
-        .select('id, weight, unit, logged_at')
-        .single(),
-      supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId),
-    ])
+    try {
+      const [{ data: inserted, error: insertError }, { error: profileError }] = await Promise.all([
+        supabase
+          .from('body_weight_logs')
+          .insert({ user_id: userId, weight: val, unit, logged_at: timestamp })
+          .select('id, weight, unit, logged_at')
+          .single(),
+        supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId),
+      ])
 
-    if (insertError || profileError || !inserted) {
+      if (insertError || profileError || !inserted) throw (insertError || profileError || new Error('Could not save your body weight.'))
+
+      invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(timestamp))
+      setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
+      setWeightLogs(prev => [...prev, {
+        id: inserted.id,
+        weight: inserted.weight,
+        unit: inserted.unit,
+        date: inserted.logged_at.slice(0, 10),
+        loggedAt: inserted.logged_at,
+      }])
+      setBwInput('')
+    } catch (error) {
+      setBwError(error?.message || 'Could not save your body weight.')
+    } finally {
       setBwSaving(false)
-      setBwError(insertError?.message || profileError?.message || 'Could not save your body weight.')
-      return
     }
-
-    invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(timestamp))
-    setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
-    setWeightLogs(prev => [...prev, {
-      id: inserted.id,
-      weight: inserted.weight,
-      unit: inserted.unit,
-      date: inserted.logged_at.slice(0, 10),
-      loggedAt: inserted.logged_at,
-    }])
-    setBwInput('')
-    setBwSaving(false)
   }
 
   async function saveBurnGoal() {
     const val = parseInt(burnGoalInput, 10)
-    if (!Number.isFinite(val) || val <= 0 || burnGoalSaving) return
+    if (!userId || burnGoalSaving) return
+    const goalError = validateNumber(burnGoalInput, {
+      label: 'Calories-burned goal',
+      min: VALIDATION_LIMITS.caloriesBurnedGoalMin,
+      max: VALIDATION_LIMITS.caloriesBurnedGoalMax,
+      integer: true,
+      required: true,
+    })
+    if (goalError) {
+      setBurnGoalError(goalError)
+      return
+    }
     setBurnGoalSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('profiles').update({ calories_burned_goal: val }).eq('id', user.id)
-    setBurnGoal(val)
-    setBurnGoalSheetOpen(false)
-    setBurnGoalSaving(false)
-    invalidateCache('home', 'profile')
+    setBurnGoalError('')
+    try {
+      const { error } = await supabase.from('profiles').update({ calories_burned_goal: val }).eq('id', userId)
+      if (error) throw error
+      setBurnGoal(val)
+      setBurnGoalSheetOpen(false)
+      invalidateCache('home', 'profile')
+    } catch (error) {
+      setBurnGoalError(error?.message || 'Could not save your calories-burned goal.')
+    } finally {
+      setBurnGoalSaving(false)
+    }
+  }
+
+  async function saveGoalWeight() {
+    if (goalSaving) return
+    const trimmed = goalInput.trim()
+    const parsed = trimmed === '' ? null : parseFloat(trimmed)
+    const unit = weightSheetUnit || profile?.unit_preference || 'kg'
+    if (parsed !== null) {
+      const goalError = validateBodyweight(goalInput, unit, { label: 'Goal weight' })
+      if (goalError) { setBwError(goalError); return }
+    }
+    setGoalSaving(true)
+    setBwError('')
+    const goalKg = parsed === null ? null
+      : (unit === 'lbs' ? parsed / 2.20462 : parsed)
+    try {
+      const { error } = await supabase.from('profiles').update({ weight_goal_kg: goalKg }).eq('id', userId)
+      if (error) throw error
+      setGoalWeightKg(goalKg)
+      if (goalKg === null) {
+        setGoalInput('')
+        setShowGoalLine(false)
+        try {
+          localStorage.removeItem('bw_goal_line')
+        } catch {
+          // localStorage is best-effort for this display preference.
+        }
+      } else {
+        try {
+          if (localStorage.getItem('bw_goal_line') === null) {
+            setShowGoalLine(true)
+            localStorage.setItem('bw_goal_line', 'true')
+          }
+        } catch {
+          // localStorage is best-effort for this display preference.
+        }
+      }
+      invalidateCache('home', 'profile')
+    } catch (error) {
+      setBwError(error?.message || 'Could not save your goal weight.')
+    } finally {
+      setGoalSaving(false)
+    }
+  }
+
+  function saveTrendMode() {
+    if (trendModeSaving) return
+    setBwError('')
+
+    if (!trendModeInput) {
+      clearTrendMode()
+      return
+    }
+
+    let rateKgPerWeek
+    if (trendModeInput === 'custom') {
+      const parsed = parseFloat(trendRateInput)
+      if (!Number.isFinite(parsed)) { setBwError('Enter a valid rate (e.g. 0.5 or -0.5).'); return }
+      const unit = weightSheetUnit || profile?.unit_preference || 'kg'
+      rateKgPerWeek = unit === 'lbs' ? parsed / 2.20462 : parsed
+    } else {
+      rateKgPerWeek = getPresetRate(trendModeInput) ?? 0
+    }
+
+    if (!weightLogs.length) { setBwError('Log at least one weigh-in before setting a pace.'); return }
+
+    setPendingTrendRate(rateKgPerWeek)
+    const defaultDate = weightLogs.at(-1)?.date
+      || weightLogs.at(-1)?.loggedAt?.slice(0, 10)
+      || new Date().toISOString().slice(0, 10)
+    setTrendDatePickerValue(defaultDate)
+    setTrendDatePickerOpen(true)
+  }
+
+  async function clearTrendMode() {
+    setTrendModeSaving(true)
+    try {
+      const { error } = await supabase.from('profiles').update({
+        weight_trend_mode: null,
+        weight_trend_rate_kg_per_week: null,
+        weight_trend_anchor_date: null,
+        weight_trend_anchor_weight_kg: null,
+      }).eq('id', userId)
+      if (error) throw error
+      setTrendModeConfig(null)
+      setShowTrendMode(false)
+      try { localStorage.removeItem('bw_pace_line') } catch { /* best-effort */ }
+      invalidateCache('home', 'profile')
+    } catch (err) {
+      setBwError(err?.message || 'Could not clear pace setting.')
+    } finally {
+      setTrendModeSaving(false)
+    }
+  }
+
+  async function confirmTrendMode(selectedDate) {
+    if (!selectedDate || pendingTrendRate === null) return
+    setTrendModeSaving(true)
+    setBwError('')
+    try {
+      const selectedMs = new Date(selectedDate + 'T23:59:59').getTime()
+      const logsOnOrBefore = weightLogs.filter(log => {
+        const ms = new Date(log.loggedAt || log.date + 'T12:00:00').getTime()
+        return ms <= selectedMs
+      })
+      const anchorLog = logsOnOrBefore.at(-1) || weightLogs[0]
+      const anchorWeightKg = anchorLog.unit === 'lbs'
+        ? anchorLog.weight / 2.20462
+        : anchorLog.weight
+
+      const { error } = await supabase.from('profiles').update({
+        weight_trend_mode: trendModeInput,
+        weight_trend_rate_kg_per_week: pendingTrendRate,
+        weight_trend_anchor_date: selectedDate,
+        weight_trend_anchor_weight_kg: anchorWeightKg,
+      }).eq('id', userId)
+      if (error) throw error
+
+      setTrendModeConfig({ rateKgPerWeek: pendingTrendRate, anchorDate: selectedDate, anchorWeightKg })
+      setTrendDatePickerOpen(false)
+      setPendingTrendRate(null)
+      setShowTrendMode(true)
+      try { localStorage.setItem('bw_pace_line', 'true') } catch { /* best-effort */ }
+      invalidateCache('home', 'profile')
+    } catch (err) {
+      setBwError(err?.message || 'Could not save pace setting.')
+    } finally {
+      setTrendModeSaving(false)
+    }
   }
 
   async function deleteWeightLog(logId) {
@@ -408,22 +635,23 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       ? convertWeight(latestRemainingLog.weight, latestRemainingLog.unit || profile?.unit_preference || 'kg', profile?.unit_preference || 'kg')
       : null
 
-    const [{ error: deleteError }, { error: profileError }] = await Promise.all([
-      supabase.from('body_weight_logs').delete().eq('id', logId),
-      supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId),
-    ])
+    try {
+      const [{ error: deleteError }, { error: profileError }] = await Promise.all([
+        supabase.from('body_weight_logs').delete().eq('id', logId),
+        supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId),
+      ])
 
-    if (deleteError || profileError) {
+      if (deleteError || profileError) throw (deleteError || profileError)
+
+      invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(removedLog?.loggedAt || removedLog?.date || new Date()))
+      setWeightLogs(remainingLogs)
+      setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
+      setWeightDeleteTargetId(null)
+    } catch (error) {
+      setWeightDeleteError(error?.message || 'Could not delete this weight log.')
+    } finally {
       setWeightDeletingId(null)
-      setWeightDeleteError(deleteError?.message || profileError?.message || 'Could not delete this weight log.')
-      return
     }
-
-    invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(removedLog?.loggedAt || removedLog?.date || new Date()))
-    setWeightLogs(remainingLogs)
-    setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
-    setWeightDeletingId(null)
-    setWeightDeleteTargetId(null)
   }
 
   const calPct = Math.min(1, todayNut.calories / todayNut.goal)
@@ -438,10 +666,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const homeChartPadding = isPhoneWidth ? 'tight-mobile' : 'tight'
 
   const filteredWeightLogs = useMemo(() => {
-    if (weightPeriod === 'all') return weightLogs
-    const now = new Date()
-    const periodDays = { '1w': 7, '1m': 30, '1y': 365 }
-    return weightLogs.filter(d => (now - new Date(d.date)) / 86400000 <= periodDays[weightPeriod])
+    return filterByChartPeriod(weightLogs, weightPeriod, log => log.loggedAt || log.date)
   }, [weightLogs, weightPeriod])
   const recentWeightDelta = filteredWeightLogs.length >= 2
     ? convertWeight(filteredWeightLogs.at(-1)?.weight ?? 0, filteredWeightLogs.at(-1)?.unit || activeWeightUnit, activeWeightUnit)
@@ -456,6 +681,20 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const calendarRefreshKey = `${weightLogs.length}:${weightLogs.at(-1)?.loggedAt || ''}:${todayNut.calories}:${todayNut.protein}:${todayNut.carbs}:${todayNut.fat}`
 
   if (loading) return <LoadingSpinner fullPage />
+
+  if (loadError && !profile) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16, padding: 32, textAlign: 'center' }}>
+        <p style={{ color: 'var(--muted)', fontSize: 15, margin: 0 }}>Failed to load. Check your connection and try again.</p>
+        <button
+          onClick={() => { setLoading(true); load() }}
+          style={{ background: 'var(--blue)', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 28px', fontWeight: 700, fontSize: 15, cursor: 'pointer' }}
+        >
+          Retry
+        </button>
+      </div>
+    )
+  }
 
   if (selectedDay) {
     return (
@@ -491,6 +730,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         error={bwError}
         weightPeriod={weightPeriod}
         onPeriodChange={setWeightPeriod}
+        hasWeightLogs={weightLogs.length > 0}
         filteredWeightLogs={filteredWeightLogs}
         chartHeight={isPhoneWidth ? 232 : 260}
         recentWeightLogs={recentWeightLogs}
@@ -504,6 +744,53 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         deletingId={weightDeletingId}
         onDeleteWeightLog={deleteWeightLog}
         formatWeightLogLabel={formatWeightLogLabel}
+        showTrend={showTrendLine}
+        onToggleTrend={() => {
+          const next = !showTrendLine
+          setShowTrendLine(next)
+          try {
+            localStorage.setItem('bw_trend_line', String(next))
+          } catch {
+            // localStorage is best-effort for this display preference.
+          }
+        }}
+        goalWeightKg={goalWeightKg}
+        goalInput={goalInput}
+        onGoalInputChange={setGoalInput}
+        onSaveGoal={saveGoalWeight}
+        goalSaving={goalSaving}
+        showGoal={showGoalLine}
+        onToggleGoal={() => {
+          const next = !showGoalLine
+          setShowGoalLine(next)
+          try {
+            localStorage.setItem('bw_goal_line', String(next))
+          } catch {
+            // localStorage is best-effort for this display preference.
+          }
+        }}
+        trendModeConfig={trendModeConfig}
+        trendModeInput={trendModeInput}
+        onTrendModeInputChange={setTrendModeInput}
+        trendRateInput={trendRateInput}
+        onTrendRateInputChange={setTrendRateInput}
+        onSaveTrendMode={saveTrendMode}
+        trendModeSaving={trendModeSaving}
+        trendDatePickerOpen={trendDatePickerOpen}
+        trendDatePickerValue={trendDatePickerValue}
+        onTrendDateChange={setTrendDatePickerValue}
+        onTrendDateConfirm={confirmTrendMode}
+        onTrendDateCancel={() => { setTrendDatePickerOpen(false); setPendingTrendRate(null) }}
+        showTrendMode={showTrendMode}
+        onToggleTrendMode={() => {
+          const next = !showTrendMode
+          setShowTrendMode(next)
+          try {
+            localStorage.setItem('bw_pace_line', String(next))
+          } catch {
+            // localStorage is best-effort for this display preference.
+          }
+        }}
       />
     )
   }
@@ -532,7 +819,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                 <div className="home-today-sub">of {todayNut.goal} kcal</div>
               </div>
             </div>
-            <div className={`home-today-bar home-today-bar-compact${barGlowActive ? ' home-macro-track-glow' : ''}`} style={barGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}>
+            <div className={`home-today-bar home-today-bar-compact${nutGlowActive ? ' home-macro-track-glow' : ''}`} style={nutGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}>
               <div className="home-today-bar-fill" style={{ width: calBarWidth, background: calPct >= 1 ? '#22c55e' : 'var(--blue)' }} />
             </div>
             <div className="home-macro-bars home-macro-bars-compact">
@@ -550,8 +837,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                     </span>
                   </div>
                   <div
-                    className={`home-macro-track${barGlowActive ? ' home-macro-track-glow' : ''}`}
-                    style={barGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}
+                    className={`home-macro-track${nutGlowActive ? ' home-macro-track-glow' : ''}`}
+                    style={nutGlowActive ? { '--glow-color': 'var(--blue)' } : undefined}
                   >
                     <div className="home-macro-fill" style={{ width: `${barsAnimatedIn ? Math.min(100, (m.val / m.goal) * 100) : 0}%`, background: 'var(--blue)' }} />
                   </div>
@@ -574,7 +861,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
               <span>Calories Burned</span>
             </div>
             <div className="home-burn-ring-wrap">
-              <svg width="100" height="100" viewBox="0 0 100 100" aria-hidden="true" className={barGlowActive && burnedToday === 0 ? 'home-burn-ring-glow' : undefined}>
+              <svg width="100" height="100" viewBox="0 0 100 100" aria-hidden="true" className={burnGlowActive ? 'home-burn-ring-glow' : undefined}>
                 <defs>
                   <linearGradient id="blg" x1="0" y1="0" x2="1" y2="1">
                     {!burnComplete && (
@@ -637,6 +924,11 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                     tickCount={homeChartTickCount}
                     padding={homeChartPadding}
                     animationReady={widgetAnimationReady}
+                    showTrend={showTrendLine}
+                    goalWeightKg={goalWeightKg}
+                    showGoal={showGoalLine}
+                    trendModeConfig={trendModeConfig}
+                    showTrendMode={showTrendMode}
                   />
                 </div>
               : <div className="home-chart-empty">
@@ -682,7 +974,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         className="home-weight-modal-overlay"
         onClick={() => { if (!burnSheetJustOpenedRef.current) setBurnGoalSheetOpen(false) }}
       >
-        <div className="home-weight-modal" onClick={e => e.stopPropagation()}>
+        <div className="home-weight-modal" onClick={e => e.stopPropagation()} ref={burnGoalModalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Daily Burn Goal">
           <div className="home-weight-sheet-handle" />
           <div className="home-weight-modal-title">Daily Burn Goal</div>
           <div className="home-weight-panel-log-row">
@@ -690,9 +982,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
               className="home-weight-panel-input"
               type="number"
               min="1"
+              max={VALIDATION_LIMITS.caloriesBurnedGoalMax}
+              step="1"
+              inputMode="numeric"
               placeholder="e.g. 500"
               value={burnGoalInput}
-              onChange={e => setBurnGoalInput(e.target.value)}
+              onChange={e => { setBurnGoalError(''); setBurnGoalInput(e.target.value) }}
               onKeyDown={e => e.key === 'Enter' && saveBurnGoal()}
               autoFocus
             />
@@ -701,6 +996,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
               {burnGoalSaving ? '…' : 'Save'}
             </button>
           </div>
+          {burnGoalError && <div className="quick-weight-error">{burnGoalError}</div>}
         </div>
       </div>,
       document.body

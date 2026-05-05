@@ -43,7 +43,7 @@ Built with assistance from Claude (Anthropic).
 - Post-workout breakdown with rank-up animations and achievement unlocks
 
 ### Nutrition
-- Food log split by meal (Breakfast, Lunch, Dinner, Snacks)
+- Unified daily food log feed
 - Calorie ring, macro bars, and micronutrient breakdown
 - Food search, recent foods, and custom food creation
 - Daily date navigation

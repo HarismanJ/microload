@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useFocusTrap } from '../../lib/useFocusTrap'
 import { supabase } from '../../lib/supabase'
-import { loadHeadToHeadByOpponent } from '../../lib/battles'
+import { BATTLE_MODES, getBattleModeLabel, loadHeadToHeadByOpponent } from '../../lib/battles'
 import LoadingSpinner from '../LoadingSpinner'
 import {
   acceptFriendRequest,
@@ -9,6 +10,11 @@ import {
   searchFriendProfiles,
   sendFriendRequest,
 } from '../../lib/friends'
+import { VALIDATION_LIMITS } from '../../lib/inputValidation'
+
+const FRIENDS_REALTIME_REFRESH_DEBOUNCE_MS = 120
+const FRIENDS_FOREGROUND_REFRESH_DEBOUNCE_MS = 180
+const FRIENDS_FALLBACK_POLL_MS = 60 * 1000
 
 function getDisplayName(profile) {
   return profile?.full_name || profile?.username || 'Unknown user'
@@ -38,9 +44,27 @@ export default function FriendsSection({ userId, username, profileLoaded = false
   const [searchError, setSearchError] = useState('')
   const [actionKey, setActionKey] = useState('')
   const [notice, setNotice] = useState('')
+  const [battleModeFriendship, setBattleModeFriendship] = useState(null)
+  const battleModeModalRef = useRef(null)
+  useFocusTrap(battleModeModalRef, { active: !!battleModeFriendship, onEscape: () => setBattleModeFriendship(null) })
+  const friendsRefreshTimerRef = useRef(null)
+  const friendsFallbackPollRef = useRef(null)
+  const friendsRealtimeHealthyRef = useRef(true)
   const hasUsername = Boolean(username?.trim())
   const missingUsername = profileLoaded && !hasUsername
   const canSearchForFriends = profileLoaded && hasUsername
+
+  const clearScheduledFriendsRefresh = useCallback(() => {
+    if (!friendsRefreshTimerRef.current) return
+    clearTimeout(friendsRefreshTimerRef.current)
+    friendsRefreshTimerRef.current = null
+  }, [friendsRefreshTimerRef])
+
+  const clearFriendsFallbackPoll = useCallback(() => {
+    if (!friendsFallbackPollRef.current) return
+    clearInterval(friendsFallbackPollRef.current)
+    friendsFallbackPollRef.current = null
+  }, [friendsFallbackPollRef])
 
   const refreshFriends = useCallback(async ({ silent = false } = {}) => {
     if (!userId) return
@@ -68,46 +92,136 @@ export default function FriendsSection({ userId, username, profileLoaded = false
     }
   }, [userId])
 
+  const scheduleFriendsRefresh = useCallback(({ delayMs = 0, silent = true } = {}) => {
+    if (!userId) return
+
+    clearScheduledFriendsRefresh()
+
+    if (delayMs <= 0) {
+      refreshFriends({ silent })
+      return
+    }
+
+    friendsRefreshTimerRef.current = setTimeout(() => {
+      friendsRefreshTimerRef.current = null
+      refreshFriends({ silent })
+    }, delayMs)
+  }, [clearScheduledFriendsRefresh, refreshFriends, userId])
+
+  const restartFriendsFallbackPoll = useCallback(() => {
+    clearFriendsFallbackPoll()
+    if (!userId || friendsRealtimeHealthyRef.current) return
+
+    friendsFallbackPollRef.current = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      scheduleFriendsRefresh({ silent: true })
+    }, FRIENDS_FALLBACK_POLL_MS)
+  }, [
+    clearFriendsFallbackPoll,
+    scheduleFriendsRefresh,
+    userId,
+  ])
+
   useEffect(() => {
     refreshFriends()
   }, [refreshFriends])
 
   useEffect(() => {
-    const interval = setInterval(() => refreshFriends({ silent: true }), 15000)
-    return () => clearInterval(interval)
-  }, [refreshFriends])
+    if (!userId) {
+      clearScheduledFriendsRefresh()
+      clearFriendsFallbackPoll()
+      friendsRealtimeHealthyRef.current = true
+      return undefined
+    }
 
-  useEffect(() => {
-    if (!userId) return undefined
+    friendsRealtimeHealthyRef.current = true
+
+    const scheduleRealtimeRefresh = () => {
+      scheduleFriendsRefresh({
+        delayMs: FRIENDS_REALTIME_REFRESH_DEBOUNCE_MS,
+        silent: true,
+      })
+    }
+
+    const scheduleForegroundRefresh = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      scheduleFriendsRefresh({
+        delayMs: FRIENDS_FOREGROUND_REFRESH_DEBOUNCE_MS,
+        silent: true,
+      })
+    }
+
+    const handleVisibilityChange = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible') return
+      scheduleForegroundRefresh()
+    }
+
+    const handleChannelStatus = (status) => {
+      if (status === 'SUBSCRIBED') {
+        const wasHealthy = friendsRealtimeHealthyRef.current
+        friendsRealtimeHealthyRef.current = true
+        clearFriendsFallbackPoll()
+        if (!wasHealthy) {
+          scheduleFriendsRefresh({ silent: true })
+        }
+        return
+      }
+
+      if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR' || status === 'CLOSED') {
+        friendsRealtimeHealthyRef.current = false
+        restartFriendsFallbackPoll()
+      }
+    }
 
     const channel = supabase
       .channel(`friendships-${userId}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'friendships', filter: `requester_id=eq.${userId}` },
-        () => { refreshFriends({ silent: true }) }
+        scheduleRealtimeRefresh
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'friendships', filter: `addressee_id=eq.${userId}` },
-        () => { refreshFriends({ silent: true }) }
+        scheduleRealtimeRefresh
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'workout_rooms', filter: `challenger_id=eq.${userId}` },
-        () => { refreshFriends({ silent: true }) }
+        scheduleRealtimeRefresh
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'workout_rooms', filter: `challenged_id=eq.${userId}` },
-        () => { refreshFriends({ silent: true }) }
+        scheduleRealtimeRefresh
       )
-      .subscribe()
+      .subscribe(handleChannelStatus)
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', scheduleForegroundRefresh)
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange)
+    }
 
     return () => {
+      clearScheduledFriendsRefresh()
+      clearFriendsFallbackPoll()
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', scheduleForegroundRefresh)
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange)
+      }
       supabase.removeChannel(channel)
     }
-  }, [refreshFriends, userId])
+  }, [
+    clearFriendsFallbackPoll,
+    clearScheduledFriendsRefresh,
+    restartFriendsFallbackPoll,
+    scheduleFriendsRefresh,
+    userId,
+  ])
 
   const relationByUserId = useMemo(() => {
     return new Map(overview.all.map(row => [row.otherUserId, row]))
@@ -172,7 +286,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
       cancelled = true
       clearTimeout(timer)
     }
-  }, [canSearchForFriends, search, userId, overview.all])
+  }, [canSearchForFriends, relationByUserId, search, userId])
 
   async function handleSendRequest(profile) {
     if (!canSearchForFriends) {
@@ -238,7 +352,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
     }
   }
 
-  async function handleChallenge(friendship) {
+  async function handleChallenge(friendship, battleMode) {
     if (!username || !friendship.otherProfile?.username) {
       setError('Both friends need usernames before a battle can start.')
       setNotice('')
@@ -252,11 +366,12 @@ export default function FriendsSection({ userId, username, profileLoaded = false
 
     try {
       if (onChallenge) {
-        await onChallenge(friendship)
-        setNotice(`Challenge sent to ${getDisplayName(friendship.otherProfile)}.`)
+        await onChallenge(friendship, battleMode)
+        setNotice(`${getBattleModeLabel(battleMode)} challenge sent to ${getDisplayName(friendship.otherProfile)}.`)
       } else {
         setNotice(`Challenge button added for ${getDisplayName(friendship.otherProfile)}. Battle setup is the next piece to wire in.`)
       }
+      setBattleModeFriendship(null)
     } catch (err) {
       const message = err.code === '23505'
         ? 'You already have a pending battle invite with that friend.'
@@ -297,6 +412,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
           }
           value={search}
           onChange={event => setSearch(event.target.value)}
+          maxLength={VALIDATION_LIMITS.searchMaxLength}
           disabled={!canSearchForFriends}
         />
       </div>
@@ -406,6 +522,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
               placeholder="Filter friends"
               value={friendFilter}
               onChange={event => setFriendFilter(event.target.value)}
+              maxLength={VALIDATION_LIMITS.searchMaxLength}
             />
           </div>
           <div className="friends-scroll-panel friends-scroll-panel-friends">
@@ -449,7 +566,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
                     </button>
                     <button
                       className="friends-primary-btn"
-                      onClick={() => handleChallenge(friendship)}
+                      onClick={() => setBattleModeFriendship(friendship)}
                       disabled={actionKey === `challenge-${friendship.id}` || !username || !friendship.otherProfile?.username || workoutActive}
                     >
                       {actionKey === `challenge-${friendship.id}`
@@ -474,6 +591,44 @@ export default function FriendsSection({ userId, username, profileLoaded = false
           </div>
         </div>
       </div>
+      {battleModeFriendship && (
+        <div className="friends-battle-mode-overlay" onClick={() => setBattleModeFriendship(null)}>
+          <div className="friends-battle-mode-modal" onClick={event => event.stopPropagation()} ref={battleModeModalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="battle-mode-title">
+            <div className="friends-battle-mode-kicker">Choose Battle</div>
+            <div id="battle-mode-title" className="friends-battle-mode-title">
+              {`Challenge ${getDisplayName(battleModeFriendship.otherProfile)}`}
+            </div>
+            <div className="friends-battle-mode-options">
+              {BATTLE_MODES.map(mode => (
+                <button
+                  key={mode}
+                  type="button"
+                  className="friends-battle-mode-option"
+                  onClick={() => handleChallenge(battleModeFriendship, mode)}
+                  disabled={actionKey === `challenge-${battleModeFriendship.id}`}
+                >
+                  <span>{getBattleModeLabel(mode)}</span>
+                  <small>
+                    {mode === 'strength'
+                      ? 'Lifting volume and shared strength'
+                      : mode === 'cardio'
+                        ? 'Cardio time and intensity'
+                        : 'Strength plus cardio balance'}
+                  </small>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="friends-battle-mode-cancel"
+              onClick={() => setBattleModeFriendship(null)}
+              disabled={actionKey === `challenge-${battleModeFriendship.id}`}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

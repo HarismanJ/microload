@@ -46,7 +46,24 @@ function formatWeightTick(value, step) {
   return value.toFixed(2)
 }
 
-export default function WeightChart({ data, unit = 'kg', height = 130, tickCount = 3, padding = 'default', animationReady = true }) {
+function linearRegression(points) {
+  const n = points.length
+  if (n < 2) return null
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+  for (const { x, y } of points) {
+    sumX  += x
+    sumY  += y
+    sumXY += x * y
+    sumX2 += x * x
+  }
+  const denom = n * sumX2 - sumX * sumX
+  if (denom === 0) return null
+  const slope     = (n * sumXY - sumX * sumY) / denom
+  const intercept = (sumY - slope * sumX) / n
+  return { slope, intercept }
+}
+
+export default function WeightChart({ data, unit = 'kg', height = 130, tickCount = 3, padding = 'default', animationReady = true, showTrend = false, goalWeightKg = null, showGoal = false, trendModeConfig = null, showTrendMode = false }) {
   const containerRef = useRef(null)
   const gradientBaseId = useId()
   const [containerWidth, setContainerWidth] = useState(0)
@@ -99,6 +116,10 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
     displayWeight: convertWeight(point.weight, point.unit || unit, unit),
   }))
 
+  const goalDisplay = showGoal && goalWeightKg !== null
+    ? convertWeight(goalWeightKg, 'kg', unit)
+    : null
+
   const tightPadding = padding === 'tight'
   const mobileTightPadding = padding === 'tight-mobile'
   const W = containerWidth || 300
@@ -110,9 +131,25 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
   const plotW = W - padL - padR
   const plotH = H - padT - padB
 
+  const firstDate = getPointDate(normalizedData[0])
+  const lastDate = getPointDate(normalizedData.at(-1))
+
   const values = normalizedData.map(d => d.displayWeight)
-  const rawMin = Math.min(...values)
-  const rawMax = Math.max(...values)
+  const trendDomainValues = []
+  if (showTrendMode && trendModeConfig && firstDate && lastDate) {
+    const { rateKgPerWeek, anchorDate, anchorWeightKg } = trendModeConfig
+    const anchorMs = new Date(anchorDate + 'T12:00:00').getTime()
+    if (Number.isFinite(anchorMs) && Number.isFinite(anchorWeightKg) && Number.isFinite(rateKgPerWeek)) {
+      const ratePerMs = rateKgPerWeek / (7 * 86400000)
+      const weightAtMs = ms => convertWeight(anchorWeightKg + ratePerMs * (ms - anchorMs), 'kg', unit)
+      const startMs = Math.max(firstDate.getTime(), anchorMs)
+      const endMs = Math.max(lastDate.getTime(), Date.now())
+      trendDomainValues.push(weightAtMs(startMs), weightAtMs(endMs))
+    }
+  }
+  const domainValues = [...values, ...(goalDisplay !== null ? [goalDisplay] : []), ...trendDomainValues]
+  const rawMin = Math.min(...domainValues)
+  const rawMax = Math.max(...domainValues)
   const range = rawMax - rawMin
   const niceStep = getNiceStep(range || Math.max(Math.abs(rawMax), 1) * 0.25, tickCount)
   let minVal = Math.floor(rawMin / niceStep) * niceStep
@@ -143,8 +180,6 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
 
   const n = normalizedData.length - 1
   const xLabelIdx = [...new Set([0, Math.round(n / 4), Math.round(n / 2), Math.round((3 * n) / 4), n])]
-  const firstDate = getPointDate(normalizedData[0])
-  const lastDate = getPointDate(normalizedData.at(-1))
   const spanDays = firstDate && lastDate ? (lastDate - firstDate) / 86400000 : 0
 
   return (
@@ -212,6 +247,109 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
             }}
           />
         ))}
+
+        {goalDisplay !== null && (
+          <>
+            <line
+              x1={padL} y1={yAt(goalDisplay)} x2={padL + plotW} y2={yAt(goalDisplay)}
+              stroke="#5ecc8b"
+              strokeWidth="1.5"
+              strokeDasharray="5 4"
+              strokeLinecap="round"
+              opacity="0.85"
+            />
+            <text
+              x={padL + plotW - 4}
+              y={yAt(goalDisplay) - 3}
+              fontSize="8"
+              fill="#5ecc8b"
+              textAnchor="end"
+              opacity="0.9"
+            >
+              Goal {formatWeightTick(goalDisplay, niceStep)}
+            </text>
+          </>
+        )}
+
+        {showTrend && (() => {
+          const regrPoints = normalizedData.map((d, i) => ({ x: xAt(i), y: yAt(d.displayWeight) }))
+          const reg = linearRegression(regrPoints)
+          if (!reg) return null
+          const x0 = xAt(0)
+          const x1 = xAt(normalizedData.length - 1)
+          const y0 = reg.slope * x0 + reg.intercept
+          const y1 = reg.slope * x1 + reg.intercept
+          return (
+            <>
+              <line
+                x1={x0} y1={y0} x2={x1} y2={y1}
+                stroke="var(--blue)"
+                strokeWidth="1.5"
+                strokeDasharray="4 3"
+                strokeLinecap="round"
+                opacity="0.7"
+              />
+            </>
+          )
+        })()}
+
+        {showTrendMode && trendModeConfig && firstDate && lastDate && (() => {
+          const { rateKgPerWeek, anchorDate, anchorWeightKg } = trendModeConfig
+          const anchorMs = new Date(anchorDate + 'T12:00:00').getTime()
+          if (!Number.isFinite(anchorMs) || !Number.isFinite(anchorWeightKg) || !Number.isFinite(rateKgPerWeek)) return null
+          const ratePerMs = rateKgPerWeek / (7 * 86400000)
+          const weightAtMs = ms => convertWeight(anchorWeightKg + ratePerMs * (ms - anchorMs), 'kg', unit)
+          const firstMs = firstDate.getTime()
+          const lastMs = lastDate.getTime()
+          if (firstMs === lastMs) return null
+
+          const dateToX = ms => padL + Math.min(1, Math.max(0, (ms - firstMs) / (lastMs - firstMs))) * plotW
+          const lineStartMs = Math.max(firstMs, anchorMs)
+          if (lineStartMs > lastMs) return null
+
+          const x0 = dateToX(lineStartMs)
+          const x1 = padL + plotW
+          const y0 = yAt(weightAtMs(lineStartMs))
+          const y1 = yAt(weightAtMs(lastMs))
+
+          // Pace delta vs most recent actual
+          const latestActual = normalizedData.at(-1)
+          const latestActualMs = getPointDate(latestActual)?.getTime()
+          const expectedAtLatest = Number.isFinite(latestActualMs) ? weightAtMs(latestActualMs) : null
+          const delta = expectedAtLatest !== null ? latestActual.displayWeight - expectedAtLatest : null
+          const absDelta = delta !== null ? Math.abs(delta) : null
+          const onPace = absDelta !== null && absDelta < (unit === 'lbs' ? 0.5 : 0.3)
+          const isAhead = delta !== null && (rateKgPerWeek < 0 ? delta <= 0 : rateKgPerWeek > 0 ? delta >= 0 : onPace)
+          const paceColor = onPace ? '#5ecc8b' : isAhead ? '#5ecc8b' : '#fb923c'
+          const paceLabel = onPace || delta === null ? 'On pace'
+            : `${formatWeightTick(absDelta, niceStep)} ${unit} ${isAhead ? 'ahead' : 'behind'}`
+
+          const labelAnchor = x1 > padL + plotW * 0.55 ? 'end' : 'start'
+
+          return (
+            <>
+              <line
+                x1={x0} y1={y0} x2={x1} y2={y1}
+                stroke="#fb923c"
+                strokeWidth="1.5"
+                strokeDasharray="5 3"
+                strokeLinecap="round"
+                opacity="0.85"
+              />
+              <circle cx={x1} cy={y1} r="3" fill="#fb923c" opacity="0.9" />
+              <text
+                x={x1 - (labelAnchor === 'end' ? 5 : -5)}
+                y={y1 - 5}
+                fontSize="7.5"
+                fill={paceColor}
+                textAnchor={labelAnchor}
+                opacity="0.95"
+              >
+                {paceLabel}
+              </text>
+            </>
+          )
+        })()}
 
         {xLabelIdx.map(i => (
           <text key={i} x={xAt(i)} y={H - 6} fontSize="8.5" fill="#6b7280" textAnchor="middle">

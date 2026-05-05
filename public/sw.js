@@ -14,8 +14,8 @@ self.addEventListener('message', (event) => {
       delete pendingTimers[id]
       self.registration.showNotification(title || 'Timer Complete', {
         body: body || 'Your rest timer has finished.',
-        icon: '/icon-192.png',
-        badge: '/icon-192.png',
+        icon: '/favicon.svg',
+        badge: '/favicon.svg',
         tag: id,
         renotify: true,
       })

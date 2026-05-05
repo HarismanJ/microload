@@ -14,6 +14,17 @@
       "smallIcon": "ic_launcher_foreground",
       "iconColor": "#3b9eff",
       "sound": "default"
+    },
+    "SocialLogin": {
+      "google": {
+        "iOSClientId": "1052822933922-i6h18p1qlvek9f8jfu60mgcnj9iqieb5.apps.googleusercontent.com",
+        "androidClientId": "1052822933922-tb4ta3e0se7rc7t7sgmnbil411larbqa.apps.googleusercontent.com",
+        "webClientId": "1052822933922-r7sa24t8buocnadn6emof98hp6dmndjo.apps.googleusercontent.com"
+      },
+      "apple": {
+        "clientId": "com.harisman.microload.service",
+        "redirectUrl": "https://zheocsxrwynbnvwpwfhk.supabase.co/auth/v1/callback"
+      }
     }
   }
 }

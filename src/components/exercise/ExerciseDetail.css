@@ -496,6 +496,167 @@
   fill: color-mix(in srgb, #3b9eff 70%, white 30%) !important;
 }
 
+/* Tier swiper */
+.tier-swiper {
+  background: var(--surface2);
+  border-radius: 14px;
+  padding: 12px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.tier-swiper-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tier-swiper-label-wrap {
+  flex: 1;
+  overflow: hidden;
+}
+
+.tier-swiper-arrow {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  width: 28px;
+  height: 28px;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.tier-swiper-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tier-swiper-you {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+.tier-swiper-body {
+  overflow: hidden;
+}
+
+.tier-swiper-bw-hint {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 0;
+  text-align: center;
+}
+
+.tier-swiper-dots {
+  display: flex;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.tier-swiper-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: background 0.2s;
+}
+
+.tier-swiper-stage {
+  animation-fill-mode: both;
+  animation-duration: 0.22s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.tier-swiper-stage-next {
+  animation-name: tier-swiper-in-next;
+}
+
+.tier-swiper-stage-prev {
+  animation-name: tier-swiper-in-prev;
+}
+
+@keyframes tier-swiper-in-next {
+  from { opacity: 0; transform: translateX(28px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes tier-swiper-in-prev {
+  from { opacity: 0; transform: translateX(-28px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Previous sets list */
+.ex-prev-sets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ex-prev-set-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.ex-prev-set-date {
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 90px;
+}
+
+.ex-prev-set-lift {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+
+.ex-prev-set-orm {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.ex-load-more-btn {
+  align-self: center;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 20px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.ex-load-more-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 @media (max-width: 520px) {
   .ex-muscle-models {
     gap: 8px;

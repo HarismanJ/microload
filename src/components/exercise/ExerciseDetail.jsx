@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback, useEffectEvent } from 'react'
+import { useState, useEffect, useCallback, useEffectEvent, useRef } from 'react'
 import Model from 'react-body-highlighter'
 import { supabase } from '../../lib/supabase'
 import { fetchExerciseRankStates } from '../../data/rankStates'
+import { useCurrentUserId } from '../../context/UserContext'
+import { CHART_PERIOD_OPTIONS, filterByChartPeriod, getChartPeriodLabel } from '../../lib/chartPeriods'
 import RankBadge from '../RankBadge'
 import LoadingSpinner from '../LoadingSpinner'
 import ExerciseChart from './ExerciseChart'
 import {
-  TIERS, TIER_COLORS, ANCHORS,
+  TIERS, TIER_GROUPS, TIER_COLORS, ANCHORS,
   tierGroup, tierColor,
   expandAnchors, getTierIdx, getProgress, weightForOrm,
 } from '../../lib/strengthStandards'
@@ -186,15 +188,101 @@ function deriveExerciseHistoryFromSets(sets = []) {
   }
 }
 
+const PREV_SETS_PAGE = 10
+
+function formatSetDate(isoString) {
+  if (!isoString) return ''
+  return new Date(isoString).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function TierSwiper({ thresholds, isBW, bodyweightKg, currentTierIdx, fmt, useLbs }) {
+  const total = TIERS.length
+  const [idx, setIdx] = useState(currentTierIdx ?? 0)
+  const [motionDir, setMotionDir] = useState(null)
+  const startX = useRef(null)
+
+  const go = (delta) => {
+    setMotionDir(delta > 0 ? 'next' : 'prev')
+    setIdx(i => (i + delta + total) % total)
+  }
+
+  const onTouchStart = (e) => { startX.current = e.touches[0].clientX }
+  const onTouchEnd = (e) => {
+    if (startX.current === null) return
+    const dx = e.changedTouches[0].clientX - startX.current
+    if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1)
+    startX.current = null
+  }
+
+  const tier = TIERS[idx]
+  const color = tierColor(tier)
+  const targetKg = isBW
+    ? thresholds[idx] * bodyweightKg - bodyweightKg
+    : thresholds[idx] * bodyweightKg
+  const isCurrent = idx === currentTierIdx
+  const stageClass = motionDir ? `tier-swiper-stage tier-swiper-stage-${motionDir}` : 'tier-swiper-stage'
+
+  return (
+    <div
+      className="tier-swiper"
+      data-tab-swipe-ignore="true"
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+    >
+      <div className="tier-swiper-header">
+        <button className="tier-swiper-arrow" onClick={() => go(-1)}>‹</button>
+        <div className="tier-swiper-label-wrap">
+          <div key={`label-${idx}-${motionDir ?? 'idle'}`} className={stageClass}>
+            <div className="tier-swiper-label" style={{ color }}>
+              <RankBadge tier={tierGroup(tier)} size={14} />
+              {tier}
+              {isCurrent && <span className="tier-swiper-you">(current)</span>}
+            </div>
+          </div>
+        </div>
+        <button className="tier-swiper-arrow" onClick={() => go(1)}>›</button>
+      </div>
+      <div className="tier-swiper-body">
+        <div key={`body-${idx}-${motionDir ?? 'idle'}`} className={stageClass}>
+          {!isBW && targetKg <= 0 ? (
+            <div className="tier-swiper-bw-hint">Complete a set with 0 {useLbs ? 'lbs' : 'kg'}</div>
+          ) : (
+            <div className="ex-target-chips">
+              {[1, 3, 5, 8].map(reps => (
+                <div key={reps} className="ex-target-chip">
+                  <span className="chip-reps">{reps === 1 ? '1 rep' : `${reps} reps`}</span>
+                  <span className="chip-weight">{fmt(weightForOrm(targetKg, reps))}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="tier-swiper-dots">
+            {TIER_GROUPS.map((g, i) => (
+              <div key={g} className="tier-swiper-dot" style={{ background: Math.floor(idx / 3) === i ? TIER_COLORS[g] : undefined }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME_RANK_MODE }) {
+  const userId = useCurrentUserId()
   const [exercise, setExercise]   = useState(null)
   const [profile, setProfile]     = useState(null)
   const [chartData, setChartData] = useState([])
   const [stats, setStats]         = useState(null)
   const [activeRankState, setActiveRankState] = useState(null)
   const [loading, setLoading]     = useState(true)
-  const [chartPeriod, setChartPeriod] = useState('all')
+  const [loadError, setLoadError] = useState('')
+  const [chartPeriod, setChartPeriod] = useState('3m')
   const [muscleLabel, setMuscleLabel] = useState(null)
+  const [prevSets, setPrevSets] = useState([])
+  const [prevSetsHasMore, setPrevSetsHasMore] = useState(false)
+  const [prevSetsOffset, setPrevSetsOffset] = useState(0)
+  const [prevSetsLoading, setPrevSetsLoading] = useState(false)
+  const [prevSetsError, setPrevSetsError] = useState('')
 
   const handleMuscleClick = useCallback(({ muscle, data }) => {
     const preferred = data?.exercises?.find(Boolean)
@@ -203,66 +291,117 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
   }, [])
 
   async function load() {
+    if (!userId) return
     setLoading(true)
-    const { data: { user } } = await supabase.auth.getUser()
+    setLoadError('')
+    setPrevSetsError('')
+    setPrevSets([])
+    setPrevSetsHasMore(false)
+    setPrevSetsOffset(0)
 
-    const [{ data: ex }, { data: prof }, activeRankResult, dailyHistoryResult, summaryResult] = await Promise.all([
-      supabase.from('exercises').select('*').eq('id', exerciseId).single(),
-      supabase.from('profiles').select('bodyweight, gender, unit_preference').eq('id', user.id).single(),
-      fetchExerciseRankStates(user.id, [exerciseId]),
-      fetchExerciseDailyOrmPoints(user.id, exerciseId),
-      fetchExerciseHistorySummary(user.id, exerciseId),
-    ])
+    try {
+      const [{ data: ex, error: exError }, { data: prof, error: profileError }, activeRankResult, dailyHistoryResult, summaryResult, prevSetsResult] = await Promise.all([
+        supabase.from('exercises').select('*').eq('id', exerciseId).single(),
+        supabase.from('profiles').select('bodyweight, gender, unit_preference').eq('id', userId).single(),
+        fetchExerciseRankStates(userId, [exerciseId]),
+        fetchExerciseDailyOrmPoints(userId, exerciseId),
+        fetchExerciseHistorySummary(userId, exerciseId),
+        supabase
+          .from('workout_sets')
+          .select('id, weight, reps, unit, estimated_1rm, created_at')
+          .eq('user_id', userId)
+          .eq('exercise_id', exerciseId)
+          .not('reps', 'is', null)
+          .order('created_at', { ascending: false })
+          .range(0, PREV_SETS_PAGE),
+      ])
+      const initialLoadError = exError || profileError || prevSetsResult.error
+      if (initialLoadError) throw initialLoadError
 
-    setExercise(ex)
-    setProfile(prof)
-    setActiveRankState(activeRankResult.rows.find(row => row.exercise_id === exerciseId) || null)
+      const rawSets = prevSetsResult.data || []
+      const initialSets = rawSets.slice(0, PREV_SETS_PAGE)
+      setPrevSets(initialSets)
+      setPrevSetsHasMore(rawSets.length > PREV_SETS_PAGE)
+      setPrevSetsOffset(initialSets.length)
 
-    const useLegacyHistory = dailyHistoryResult.missingFunction || summaryResult.missingFunction
+      setExercise(ex)
+      setProfile(prof)
+      setActiveRankState(activeRankResult.rows.find(row => row.exercise_id === exerciseId) || null)
 
-    if (useLegacyHistory) {
-      const { data: sets, error: setsError } = await supabase
-        .from('workout_sets')
-        .select('estimated_1rm, weight, reps, unit, created_at')
-        .eq('user_id', user.id)
-        .eq('exercise_id', exerciseId)
-        .not('estimated_1rm', 'is', null)
-        .order('created_at', { ascending: true })
+      const useLegacyHistory = dailyHistoryResult.missingFunction || summaryResult.missingFunction
 
-      if (setsError) throw setsError
+      if (useLegacyHistory) {
+        const { data: sets, error: setsError } = await supabase
+          .from('workout_sets')
+          .select('estimated_1rm, weight, reps, unit, created_at')
+          .eq('user_id', userId)
+          .eq('exercise_id', exerciseId)
+          .not('estimated_1rm', 'is', null)
+          .order('created_at', { ascending: true })
+          .limit(500)
 
-      const legacyHistory = deriveExerciseHistoryFromSets(sets || [])
-      setChartData(legacyHistory.chartData)
-      setStats(legacyHistory.stats)
-      setLoading(false)
-      return
-    }
+        if (setsError) throw setsError
 
-    const nextChartData = (dailyHistoryResult.rows || [])
-      .map(row => ({
-        date: String(row.day).slice(0, 10),
-        orm: Number(row.best_orm_kg) || 0,
-      }))
-      .filter(point => point.date && point.orm > 0)
-
-    const summaryRow = summaryResult.row
-    const nextStats = summaryRow && Number(summaryRow.total_sets) > 0
-      ? {
-        bestOrmKg: Number(summaryRow.best_orm_kg) || 0,
-        bestSet: {
-          weight: Number(summaryRow.best_set_weight) || 0,
-          reps: Number(summaryRow.best_set_reps) || 0,
-          unit: summaryRow.best_set_unit || 'kg',
-        },
-        totalVolumeKg: Number(summaryRow.total_volume_kg) || 0,
-        totalSets: Number(summaryRow.total_sets) || 0,
+        const legacyHistory = deriveExerciseHistoryFromSets(sets || [])
+        setChartData(legacyHistory.chartData)
+        setStats(legacyHistory.stats)
+        return
       }
-      : null
 
-    setChartData(nextChartData)
-    setStats(nextStats)
+      const nextChartData = (dailyHistoryResult.rows || [])
+        .map(row => ({
+          date: String(row.day).slice(0, 10),
+          orm: Number(row.best_orm_kg) || 0,
+        }))
+        .filter(point => point.date && point.orm > 0)
 
-    setLoading(false)
+      const summaryRow = summaryResult.row
+      const nextStats = summaryRow && Number(summaryRow.total_sets) > 0
+        ? {
+          bestOrmKg: Number(summaryRow.best_orm_kg) || 0,
+          bestSet: {
+            weight: Number(summaryRow.best_set_weight) || 0,
+            reps: Number(summaryRow.best_set_reps) || 0,
+            unit: summaryRow.best_set_unit || 'kg',
+          },
+          totalVolumeKg: Number(summaryRow.total_volume_kg) || 0,
+          totalSets: Number(summaryRow.total_sets) || 0,
+        }
+        : null
+
+      setChartData(nextChartData)
+      setStats(nextStats)
+    } catch (error) {
+      setLoadError(error?.message || 'Could not load this exercise. Check your connection and try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleLoadMore() {
+    if (prevSetsLoading || !userId) return
+    setPrevSetsLoading(true)
+    setPrevSetsError('')
+    try {
+      const { data, error } = await supabase
+        .from('workout_sets')
+        .select('id, weight, reps, unit, estimated_1rm, created_at')
+        .eq('user_id', userId)
+        .eq('exercise_id', exerciseId)
+        .not('reps', 'is', null)
+        .order('created_at', { ascending: false })
+        .range(prevSetsOffset, prevSetsOffset + PREV_SETS_PAGE)
+      if (error) throw error
+      const loaded = data || []
+      const more = loaded.slice(0, PREV_SETS_PAGE)
+      setPrevSets(prev => [...prev, ...more])
+      setPrevSetsHasMore(loaded.length > PREV_SETS_PAGE)
+      setPrevSetsOffset(prev => prev + more.length)
+    } catch (error) {
+      setPrevSetsError(error?.message || 'Could not load more sets.')
+    } finally {
+      setPrevSetsLoading(false)
+    }
   }
 
   const loadLatest = useEffectEvent(() => { load() })
@@ -270,7 +409,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
   useEffect(() => {
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [exerciseId])
+  }, [exerciseId, userId])
 
   const useLbs = profile?.unit_preference === 'lbs'
   const fmt    = (kg) => useLbs ? `${kgToLbs(kg).toFixed(1)} lbs` : `${kg.toFixed(1)} kg`
@@ -282,14 +421,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
     : null
 
   // Chart data filtered by period then converted to display unit
-  const now = new Date()
-  const periodDays = { '1w': 7, '1m': 30, '1y': 365 }
-  const filteredChart = chartPeriod === 'all'
-    ? chartData
-    : chartData.filter(d => {
-        const diff = (now - new Date(d.date)) / (1000 * 60 * 60 * 24)
-        return diff <= periodDays[chartPeriod]
-      })
+  const filteredChart = filterByChartPeriod(chartData, chartPeriod, point => point.date)
   const chartDisplay = useLbs
     ? filteredChart.map(d => ({ ...d, orm: kgToLbs(d.orm) }))
     : filteredChart
@@ -349,13 +481,6 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
     ? (activeRankSection || allTimeRankSection)
     : allTimeRankSection
 
-  // Iron target shown when unranked but standards + bodyweight are available
-  const ironTargetKg = !stats && exerciseAnchors && bodyweightKg
-    ? (isBW
-        ? expandAnchors(exerciseAnchors)[1] * bodyweightKg - bodyweightKg
-        : expandAnchors(exerciseAnchors)[1] * bodyweightKg)
-    : null
-
   // Volume display
   const displayVolume = stats
     ? (useLbs
@@ -387,6 +512,13 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
       {loading ? (
         <div className="ex-loading">
           <LoadingSpinner size="md" />
+        </div>
+      ) : loadError ? (
+        <div className="ex-no-data">
+          {loadError}
+          <button className="ex-load-more-btn" onClick={load} style={{ marginTop: 12 }}>
+            Retry
+          </button>
         </div>
       ) : exercise?.category === 'Cardio' ? (
         <div className="ex-no-data">Cardio exercise — logged by duration, no strength rank.</div>
@@ -457,20 +589,15 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
                   )}
                   {rankSection.isMax && <span className="ex-next-label" style={{ color: TIER_COLORS.Elite }}>Max Rank</span>}
                 </div>
-                {rankSection.targetKg && (
-                  <div className="ex-rank-targets">
-                    <div className="ex-targets-label">
-                      {isBW ? 'Added weight' : 'Target 1RM'} to reach <span style={{ color: TIER_COLORS[tierGroup(rankSection.nextTier)] }}>{rankSection.nextTier}</span>: {fmt(rankSection.targetKg)}
-                    </div>
-                    <div className="ex-target-chips">
-                      {[1, 3, 5, 8].map(reps => (
-                        <div key={reps} className="ex-target-chip">
-                          <span className="chip-reps">{reps === 1 ? '1 rep' : `${reps} reps`}</span>
-                          <span className="chip-weight">{fmt(weightForOrm(rankSection.targetKg, reps))}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {exerciseAnchors && bodyweightKg && (
+                  <TierSwiper
+                    thresholds={expandAnchors(exerciseAnchors)}
+                    isBW={isBW}
+                    bodyweightKg={bodyweightKg}
+                    currentTierIdx={rankSection.tierIdx}
+                    fmt={fmt}
+                    useLbs={useLbs}
+                  />
                 )}
               </div>
             ) : (
@@ -488,20 +615,15 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
                     ? 'No strength standards for this exercise yet'
                     : 'Log this exercise to earn a rank'}
                 </div>
-                {ironTargetKg && (
-                  <div className="ex-rank-targets">
-                    <div className="ex-targets-label">
-                      {isBW ? 'Added weight' : 'Target 1RM'} to reach <span style={{ color: TIER_COLORS.Iron }}>Iron</span>: {fmt(ironTargetKg)}
-                    </div>
-                    <div className="ex-target-chips">
-                      {[1, 3, 5, 8].map(reps => (
-                        <div key={reps} className="ex-target-chip">
-                          <span className="chip-reps">{reps === 1 ? '1 rep' : `${reps} reps`}</span>
-                          <span className="chip-weight">{fmt(weightForOrm(ironTargetKg, reps))}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                {exerciseAnchors && bodyweightKg && (
+                  <TierSwiper
+                    thresholds={expandAnchors(exerciseAnchors)}
+                    isBW={isBW}
+                    bodyweightKg={bodyweightKg}
+                    currentTierIdx={null}
+                    fmt={fmt}
+                    useLbs={useLbs}
+                  />
                 )}
               </div>
             )}
@@ -513,13 +635,13 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
               <div className="ex-section-title">1RM Progress</div>
               {chartData.length > 0 && (
                 <div className="ex-period-toggle">
-                  {['1w', '1m', '1y', 'all'].map(p => (
+                  {CHART_PERIOD_OPTIONS.map(({ value }) => (
                     <button
-                      key={p}
-                      className={`ex-period-btn ${chartPeriod === p ? 'active' : ''}`}
-                      onClick={() => setChartPeriod(p)}
+                      key={value}
+                      className={`ex-period-btn ${chartPeriod === value ? 'active' : ''}`}
+                      onClick={() => setChartPeriod(value)}
                     >
-                      {p === 'all' ? 'All' : p === '1w' ? '1W' : p === '1m' ? '1M' : '1Y'}
+                      {getChartPeriodLabel(value)}
                     </button>
                   ))}
                 </div>
@@ -587,41 +709,29 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
             )
           })()}
 
-          {/* Tier Targets Table */}
-          {exerciseAnchors && bodyweightKg && (
+          {/* Previous Sets */}
+          {prevSets.length > 0 && (
             <div className="ex-section">
-              <div className="ex-section-title">All Tier Targets</div>
-              <div className="ex-tier-table">
-                <div className="ex-tier-table-header">
-                  <span className="ex-tier-col-tier">Tier</span>
-                  <span className="ex-tier-col-rep">1 rep</span>
-                  <span className="ex-tier-col-rep">3 reps</span>
-                  <span className="ex-tier-col-rep">5 reps</span>
-                  <span className="ex-tier-col-rep">8 reps</span>
-                </div>
-                {TIERS.map((tier, i) => {
-                  const thresholds = expandAnchors(exerciseAnchors)
-                  const targetKg = isBW
-                    ? thresholds[i] * bodyweightKg - bodyweightKg
-                    : thresholds[i] * bodyweightKg
-                  const isCurrent = rankSection?.tier === tier
-                  const color = tierColor(tier)
-                  return (
-                    <div key={tier} className={`ex-tier-row${isCurrent ? ' ex-tier-row-current' : ''}`} style={isCurrent ? { borderColor: color + '66' } : {}}>
-                      <span className="ex-tier-col-tier" style={{ color: isCurrent ? color : undefined }}>
-                        <RankBadge tier={tierGroup(tier)} size={13} />
-                        {tier}
-                      </span>
-                      {!isBW && targetKg <= 0
-                        ? <span className="ex-tier-col-rep" style={{ gridColumn: 'span 4', textAlign: 'center', color: 'var(--muted)', fontSize: 10 }}>0 {displayUnit}</span>
-                        : [1, 3, 5, 8].map(reps => (
-                            <span key={reps} className="ex-tier-col-rep">{fmt(weightForOrm(targetKg, reps))}</span>
-                          ))
-                      }
-                    </div>
-                  )
-                })}
+              <div className="ex-section-title">Previous Sets</div>
+              <div className="ex-prev-sets">
+                {prevSets.map(set => (
+                  <div key={set.id} className="ex-prev-set-row">
+                    <span className="ex-prev-set-date">{formatSetDate(set.created_at)}</span>
+                    <span className="ex-prev-set-lift">{set.weight} {set.unit} × {set.reps} reps</span>
+                    {set.estimated_1rm != null && (
+                      <span className="ex-prev-set-orm">est. 1RM: {fmt(set.unit === 'lbs' ? lbsToKg(set.estimated_1rm) : set.estimated_1rm)}</span>
+                    )}
+                  </div>
+                ))}
               </div>
+              <button
+                className="ex-load-more-btn"
+                onClick={handleLoadMore}
+                disabled={!prevSetsHasMore || prevSetsLoading}
+              >
+                {prevSetsLoading ? 'Loading…' : 'Load More'}
+              </button>
+              {prevSetsError && <div className="ex-no-data">{prevSetsError}</div>}
             </div>
           )}
         </>

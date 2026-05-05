@@ -105,6 +105,19 @@ export function getSavedTheme() {
   }
 }
 
+export function getCachedThemeForUser(userId) {
+  if (!userId) return null
+
+  try {
+    const themeId = localStorage.getItem('theme')
+    const themeUserId = localStorage.getItem('themeUserId')
+    if (!themeId || themeUserId !== userId) return null
+    return themeId
+  } catch {
+    return null
+  }
+}
+
 export function saveTheme(themeId) {
   try {
     localStorage.setItem('theme', themeId)
@@ -112,4 +125,27 @@ export function saveTheme(themeId) {
     // Ignore storage failures — theme still applies in memory for this session
   }
   applyTheme(themeId)
+}
+
+export function saveThemeForUser(themeId, userId) {
+  try {
+    localStorage.setItem('theme', themeId)
+    if (userId) {
+      localStorage.setItem('themeUserId', userId)
+    } else {
+      localStorage.removeItem('themeUserId')
+    }
+  } catch {
+    // Ignore storage failures — theme still applies in memory for this session
+  }
+  applyTheme(themeId)
+}
+
+export function clearCachedTheme() {
+  try {
+    localStorage.removeItem('theme')
+    localStorage.removeItem('themeUserId')
+  } catch {
+    // Ignore storage failures during auth cleanup.
+  }
 }

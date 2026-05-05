@@ -1,40 +1,68 @@
 import { useState, useEffect, useRef, useEffectEvent } from 'react'
+import { useFocusTrap } from '../lib/useFocusTrap'
 import RestWheelPicker from './RestWheelPicker'
 import { supabase } from '../lib/supabase'
-import { clearCache, getCached, setCached, invalidateCache } from '../lib/cache'
+import { clearAccountDeletionLocalData, clearCache, getCached, setCached, invalidateCache } from '../lib/cache'
+import { cancelRestNotification } from '../lib/restNotification'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import WeightChart from './profile/WeightChart'
 import FriendsSection from './profile/FriendsSection'
 import FriendProfileDetail from './profile/FriendProfileDetail'
 import Achievements from './Achievements'
 import { useTheme } from '../context/ThemeContext'
+import { useCurrentUser } from '../context/UserContext'
 import { convertWeight } from '../lib/liftMath'
+import { VALIDATION_LIMITS, normalizeUsername, validateLength, validateNumber, validateUsername } from '../lib/inputValidation'
+import { saveThemeForUser } from '../lib/theme'
 import '../styles/Profile.css'
 
-function formatWeightLogLabel(timestamp) {
-  return new Date(timestamp).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+function normalizePersistableUsername(username) {
+  const normalized = normalizeUsername(username)
+  if (!normalized) return null
+  const error = validateUsername(normalized)
+  return error ? null : normalized
 }
 
 export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive = false }) {
+  const currentUser = useCurrentUser()
   const { themeId, switchTheme, previewTheme, themes } = useTheme()
   const profileIdRef = useRef(null)
-  const weightSectionRef = useRef(null)
+  const themeToastRef = useRef(null)
+  const bugReportRef = useRef(null)
+  const deleteConfirmRef = useRef(null)
   const [themeToast, setThemeToast] = useState(null)
+  const [themeError, setThemeError] = useState('')
 
   async function savePreferredTheme() {
-    if (profileIdRef.current) {
-      const { error } = await supabase.from('profiles').update({ theme: themeId }).eq('id', profileIdRef.current)
-      if (error) return
-      switchTheme(themeId)
-      const name = themes.find(t => t.id === themeId)?.name || themeId
-      setThemeToast(name)
+    const profileId = currentUser?.id
+    if (!profileId) {
+      setThemeError('Could not save your preferred colour. Please sign in again.')
+      return
     }
+
+    setThemeError('')
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({
+        theme: themeId,
+        username: normalizePersistableUsername(profile?.username),
+      })
+      .eq('id', profileId)
+      .select('id, theme, username, full_name, age, gender, unit_preference, default_rest_seconds, bodyweight')
+      .single()
+
+    if (error || !data) {
+      setThemeError(error?.message || 'Could not save your preferred colour. Please try again.')
+      return
+    }
+
+    profileIdRef.current = data.id
+    setProfile(data)
+    setCached('profile', { email: currentUser.email || email, profile: data })
+    saveThemeForUser(data.theme || themeId, profileId)
+    switchTheme(data.theme || themeId)
+    const name = themes.find(t => t.id === (data.theme || themeId))?.name || data.theme || themeId
+    setThemeToast(name)
   }
 
   const [profile, setProfile] = useState(null)
@@ -46,38 +74,39 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   const [viewingSession, setViewingSession] = useState(null) // { sessionIds, dateStr }
   const [viewingAchievements, setViewingAchievements] = useState(false)
   const [viewingFriendProfile, setViewingFriendProfile] = useState(null)
-  const [weightLogs, setWeightLogs] = useState([])
-  const [weightPeriod, setWeightPeriod] = useState('all')
-  const [weightDeleteTargetId, setWeightDeleteTargetId] = useState(null)
-  const [weightDeletingId, setWeightDeletingId] = useState(null)
-  const [weightDeleteError, setWeightDeleteError] = useState('')
   const [showBugReport, setShowBugReport] = useState(false)
   const [bugMessage, setBugMessage] = useState('')
   const [bugSubmitting, setBugSubmitting] = useState(false)
   const [bugSubmitted, setBugSubmitted] = useState(false)
   const [bugError, setBugError] = useState('')
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteConfirmText, setDeleteConfirmText] = useState('')
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
+  useFocusTrap(themeToastRef, { active: !!themeToast, onEscape: () => setThemeToast(null) })
+  useFocusTrap(bugReportRef, { active: showBugReport, onEscape: () => setShowBugReport(false) })
+  useFocusTrap(deleteConfirmRef, { active: showDeleteConfirm, onEscape: () => !deleting && setShowDeleteConfirm(false) })
 
   async function load() {
     const cached = getCached('profile')
+    const currentEmail = currentUser.email || ''
     if (cached) {
-      setEmail(cached.email)
+      setEmail(currentEmail || cached.email || '')
       setProfile(cached.profile)
       profileIdRef.current = cached.profile?.id ?? null
       if (cached.profile?.theme && !localStorage.getItem('theme')) switchTheme(cached.profile.theme)
     }
 
     // Weight logs are never cached — always fresh
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!getCached('profile')) {
+    if (!cached) {
       const { data: profileData } = await supabase
         .from('profiles')
-        .select('*')
-        .eq('id', user.id)
+        .select('id, theme, username, full_name, age, gender, unit_preference, default_rest_seconds, bodyweight')
+        .eq('id', currentUser.id)
         .single()
 
-      setCached('profile', { email: user.email, profile: profileData })
-      setEmail(user.email)
+      setCached('profile', { email: currentEmail, profile: profileData })
+      setEmail(currentEmail)
       if (profileData) {
         setProfile(profileData)
         profileIdRef.current = profileData.id
@@ -85,21 +114,6 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
       }
     }
 
-    const { data: logs } = await supabase
-      .from('body_weight_logs')
-      .select('id, weight, unit, logged_at')
-      .eq('user_id', user.id)
-      .order('logged_at', { ascending: true })
-
-    if (logs) {
-      setWeightLogs(logs.map(l => ({
-        id: l.id,
-        weight: l.weight,
-        unit: l.unit,
-        date: l.logged_at.slice(0, 10),
-        loggedAt: l.logged_at,
-      })))
-    }
   }
 
   const loadLatest = useEffectEvent(() => { load() })
@@ -107,39 +121,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   useEffect(() => {
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [])
-
-  async function deleteWeightLog(logId) {
-    if (!logId || weightDeletingId) return
-    setWeightDeletingId(logId)
-    setWeightDeleteError('')
-
-    const remainingLogs = weightLogs.filter(log => log.id !== logId)
-    const latestRemainingLog = remainingLogs.at(-1)
-    const nextBodyweight = latestRemainingLog
-      ? convertWeight(latestRemainingLog.weight, latestRemainingLog.unit || profile?.unit_preference || 'kg', profile?.unit_preference || 'kg')
-      : null
-    const profileId = profileIdRef.current
-
-    const [{ error: deleteError }, { error: profileError }] = await Promise.all([
-      supabase.from('body_weight_logs').delete().eq('id', logId),
-      profileId
-        ? supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', profileId)
-        : Promise.resolve({ error: null }),
-    ])
-
-    if (deleteError || profileError) {
-      setWeightDeletingId(null)
-      setWeightDeleteError(deleteError?.message || profileError?.message || 'Could not delete this weight log.')
-      return
-    }
-
-    invalidateCache('profile', 'ranks', 'home')
-    setWeightLogs(remainingLogs)
-    setProfile(p => (p ? { ...p, bodyweight: nextBodyweight } : p))
-    setWeightDeletingId(null)
-    setWeightDeleteTargetId(null)
-  }
+  }, [currentUser.id])
 
   function startEdit() {
     setSaveError('')
@@ -157,27 +139,55 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   async function saveProfile() {
     setSaving(true)
     setSaveError('')
-    const { data: { user } } = await supabase.auth.getUser()
-    const isUnitPreferenceChanging = Boolean(profile?.unit_preference && form.unit_preference && profile.unit_preference !== form.unit_preference)
+    try {
+      const fullNameError = validateLength(form.full_name, {
+        label: 'Full name',
+        min: 1,
+        max: VALIDATION_LIMITS.fullNameMaxLength,
+        required: true,
+      })
+      const usernameError = validateUsername(form.username)
+      const ageError = validateNumber(form.age, {
+        label: 'Age',
+        min: VALIDATION_LIMITS.ageMin,
+        max: VALIDATION_LIMITS.ageMax,
+        integer: true,
+      })
+      const restError = validateNumber(form.default_rest_seconds, {
+        label: 'Rest time',
+        min: VALIDATION_LIMITS.restSecondsMin,
+        max: VALIDATION_LIMITS.restSecondsMax,
+        integer: true,
+        required: true,
+      })
+      const validationError = fullNameError || usernameError || ageError || restError
+      if (validationError) {
+        setSaveError(validationError)
+        return
+      }
+      const isUnitPreferenceChanging = Boolean(profile?.unit_preference && form.unit_preference && profile.unit_preference !== form.unit_preference)
 
-    const updates = {
-      ...form,
-      username: form.username?.trim() || null,
-      age: form.age ? parseInt(form.age) : null,
-      bodyweight: form.bodyweight !== undefined
-        ? (form.bodyweight ? parseFloat(form.bodyweight) : null)
-        : (profile?.bodyweight ?? null),
-    }
+      const updates = {
+        ...form,
+        username: normalizeUsername(form.username) || null,
+        full_name: form.full_name.trim(),
+        age: form.age ? parseInt(form.age) : null,
+        default_rest_seconds: Number(form.default_rest_seconds),
+        bodyweight: form.bodyweight !== undefined
+          ? (form.bodyweight ? parseFloat(form.bodyweight) : null)
+          : (profile?.bodyweight ?? null),
+      }
 
-    if (isUnitPreferenceChanging) {
-      try {
-        const { data: latestWeightLog } = await supabase
+      if (isUnitPreferenceChanging) {
+        const { data: latestWeightLog, error: latestWeightError } = await supabase
           .from('body_weight_logs')
           .select('weight, unit')
-          .eq('user_id', user.id)
+          .eq('user_id', currentUser.id)
           .order('logged_at', { ascending: false })
           .limit(1)
           .maybeSingle()
+
+        if (latestWeightError) throw latestWeightError
 
         const sourceWeight = latestWeightLog?.weight ?? profile?.bodyweight
         const sourceUnit = latestWeightLog?.unit || profile?.unit_preference || form.unit_preference
@@ -185,34 +195,57 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         if (sourceWeight !== null && sourceWeight !== undefined) {
           updates.bodyweight = Math.round(convertWeight(sourceWeight, sourceUnit, form.unit_preference) * 10) / 10
         }
-      } catch {
-        setSaving(false)
-        return
       }
-    }
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', user.id)
-      .select()
-      .single()
+      const { data, error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', currentUser.id)
+        .select()
+        .single()
 
-    if (!error) {
+      if (error) throw error
       setProfile(data)
       invalidateCache('profile', 'home', 'ranks')
       setEditing(false)
-    } else if (error.code === '23505' || error.message?.toLowerCase().includes('username')) {
-      setSaveError('That username is already in use.')
-    } else {
-      setSaveError(error.message || 'Could not save your profile.')
+    } catch (error) {
+      if (error?.code === '23505' || error?.message?.toLowerCase().includes('username')) {
+        setSaveError('That username is already in use.')
+      } else {
+        setSaveError(error?.message || 'Could not save your profile.')
+      }
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
   }
 
   async function signOut() {
     clearCache()
     await supabase.auth.signOut()
+  }
+
+  async function deleteAccount() {
+    setDeleting(true)
+    setDeleteError('')
+    try {
+      const { data, error } = await supabase.functions.invoke('delete-account')
+      if (error) {
+        let serverMessage = ''
+        try {
+          serverMessage = error.context ? (await error.context.json())?.error || '' : ''
+        } catch {
+          serverMessage = ''
+        }
+        throw new Error(serverMessage || error.message || 'Account deletion failed.')
+      }
+      if (data?.error) throw new Error(data.error)
+      await cancelRestNotification('all')
+      clearAccountDeletionLocalData(currentUser.id)
+      await supabase.auth.signOut()
+    } catch (err) {
+      setDeleteError(err?.message || 'Failed to delete account. Please try again or contact support.')
+      setDeleting(false)
+    }
   }
 
   function handleDeletedWorkout({ remainingSessionIds = [], dateStr }) {
@@ -224,15 +257,6 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   const initials = profile?.full_name
     ? profile.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
     : email?.[0]?.toUpperCase() || '?'
-
-  const periodDays = { '1w': 7, '1m': 30, '1y': 365 }
-  const now = new Date()
-  const filteredWeightLogs = weightPeriod === 'all'
-    ? weightLogs
-    : weightLogs.filter(d => (now - new Date(d.date)) / 86400000 <= periodDays[weightPeriod])
-  const visibleWeightLogs = [...filteredWeightLogs].reverse()
-  const recentWeightLogs = visibleWeightLogs.slice(0, 3)
-  const displayWeight = (log) => Math.round(convertWeight(log.weight, log.unit || profile?.unit_preference || 'kg', profile?.unit_preference || 'kg') * 10) / 10
 
   if (viewingAchievements) {
     return <Achievements onBack={() => setViewingAchievements(false)} />
@@ -299,21 +323,22 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         <button className="theme-save-btn" onClick={savePreferredTheme}>
           Set as preferred colour
         </button>
+        {themeError && <div className="bug-report-error">{themeError}</div>}
       </div>
 
       {editing ? (
         <div className="profile-form">
           <div className="form-group">
             <label className="form-label">Full Name</label>
-            <input className="form-input" value={form.full_name} onChange={e => { setSaveError(''); setForm(f => ({ ...f, full_name: e.target.value })) }} placeholder="Your name" />
+            <input className="form-input" value={form.full_name} maxLength={VALIDATION_LIMITS.fullNameMaxLength} onChange={e => { setSaveError(''); setForm(f => ({ ...f, full_name: e.target.value })) }} placeholder="Your name" />
           </div>
           <div className="form-group">
             <label className="form-label">Username</label>
-            <input className="form-input" value={form.username} onChange={e => { setSaveError(''); setForm(f => ({ ...f, username: e.target.value })) }} placeholder="@username" />
+            <input className="form-input" value={form.username} maxLength={VALIDATION_LIMITS.usernameMaxLength + 1} onChange={e => { setSaveError(''); setForm(f => ({ ...f, username: e.target.value })) }} placeholder="@username" />
           </div>
           <div className="form-group">
             <label className="form-label">Age</label>
-            <input className="form-input" type="number" value={form.age} onChange={e => { setSaveError(''); setForm(f => ({ ...f, age: e.target.value })) }} placeholder="25" />
+            <input className="form-input" type="number" min={VALIDATION_LIMITS.ageMin} max={VALIDATION_LIMITS.ageMax} step="1" inputMode="numeric" value={form.age} onChange={e => { setSaveError(''); setForm(f => ({ ...f, age: e.target.value })) }} placeholder="25" />
           </div>
           <div className="form-group">
             <label className="form-label">Gender</label>
@@ -363,9 +388,24 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         <button className="signout-btn" onClick={signOut}>Sign Out</button>
       </div>
 
+      <div className="account-danger-zone">
+        <div>
+          <div className="account-danger-title">Delete Account</div>
+          <div className="account-danger-copy">
+            Permanently remove your account and personal app data.
+          </div>
+        </div>
+        <button
+          className="delete-account-btn"
+          onClick={() => { setShowDeleteConfirm(true); setDeleteConfirmText(''); setDeleteError('') }}
+        >
+          Delete Account
+        </button>
+      </div>
+
       {themeToast && (
         <div className="theme-toast-overlay" onClick={() => setThemeToast(null)}>
-          <div className="theme-toast-modal" onClick={e => e.stopPropagation()}>
+          <div className="theme-toast-modal" onClick={e => e.stopPropagation()} ref={themeToastRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Theme confirmation">
             <div className="theme-toast-msg">Preferred colour set to <strong>{themeToast}</strong></div>
             <button className="theme-toast-ok" onClick={() => setThemeToast(null)}>OK</button>
           </div>
@@ -374,7 +414,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
 
       {showBugReport && (
         <div className="bug-report-overlay" onClick={() => setShowBugReport(false)}>
-          <div className="bug-report-modal" onClick={e => e.stopPropagation()}>
+          <div className="bug-report-modal" onClick={e => e.stopPropagation()} ref={bugReportRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="bug-report-title">
             {bugSubmitted ? (
               <>
                 <div className="bug-report-title">Thanks!</div>
@@ -383,12 +423,13 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
               </>
             ) : (
               <>
-                <div className="bug-report-title">Report a Bug</div>
+                <div id="bug-report-title" className="bug-report-title">Report a Bug</div>
                 <textarea
                   className="bug-report-textarea"
                   placeholder="Describe what happened..."
                   value={bugMessage}
                   onChange={e => setBugMessage(e.target.value)}
+                  maxLength={VALIDATION_LIMITS.bugReportMaxLength}
                   rows={5}
                 />
                 {bugError ? <div className="bug-report-error">{bugError}</div> : null}
@@ -399,30 +440,41 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
                     disabled={bugSubmitting || !bugMessage.trim()}
                     onClick={async () => {
                       if (!bugMessage.trim() || bugSubmitting) return
-                      setBugSubmitting(true)
-                      setBugError('')
-                      const { data: { user } } = await supabase.auth.getUser()
-                      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-                      const { count } = await supabase
-                        .from('bug_reports')
-                        .select('*', { count: 'exact', head: true })
-                        .eq('user_id', user.id)
-                        .gte('created_at', since)
-                      if (count >= 10) {
-                        setBugSubmitting(false)
-                        setBugError('You\'ve submitted 10 reports in the last 24 hours. Please try again later.')
+                      const bugValidationError = validateLength(bugMessage, {
+                        label: 'Bug report',
+                        min: VALIDATION_LIMITS.bugReportMinLength,
+                        max: VALIDATION_LIMITS.bugReportMaxLength,
+                        required: true,
+                      })
+                      if (bugValidationError) {
+                        setBugError(bugValidationError)
                         return
                       }
-                      const { error } = await supabase.from('bug_reports').insert({
-                        user_id: user.id,
-                        message: bugMessage.trim(),
-                      })
-                      setBugSubmitting(false)
-                      if (error) {
-                        setBugError('Could not submit. Please try again.')
-                      } else {
+                      setBugSubmitting(true)
+                      setBugError('')
+                      try {
+                        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+                        const { count, error: countError } = await supabase
+                          .from('bug_reports')
+                          .select('*', { count: 'exact', head: true })
+                          .eq('user_id', currentUser.id)
+                          .gte('created_at', since)
+                        if (countError) throw countError
+                        if (count >= 10) {
+                          setBugError('You\'ve submitted 10 reports in the last 24 hours. Please try again later.')
+                          return
+                        }
+                        const { error } = await supabase.from('bug_reports').insert({
+                          user_id: currentUser.id,
+                          message: bugMessage.trim(),
+                        })
+                        if (error) throw error
                         setBugSubmitted(true)
                         setBugMessage('')
+                      } catch {
+                        setBugError('Could not submit. Please try again.')
+                      } finally {
+                        setBugSubmitting(false)
                       }
                     }}
                   >
@@ -434,6 +486,46 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
           </div>
         </div>
       )}
+      {showDeleteConfirm && (
+        <div className="bug-report-overlay" onClick={() => !deleting && setShowDeleteConfirm(false)}>
+          <div className="bug-report-modal" onClick={e => e.stopPropagation()} ref={deleteConfirmRef} tabIndex={-1} role="alertdialog" aria-modal="true" aria-labelledby="delete-confirm-title">
+            <div id="delete-confirm-title" className="bug-report-title" style={{ color: '#ef4444' }}>Delete Account</div>
+            <p style={{ color: 'var(--muted)', fontSize: 13, margin: '8px 0 16px', lineHeight: 1.5 }}>
+              This permanently deletes your account, workouts, nutrition logs, body weight, friendships, and battles. Bug reports are de-identified and kept for debugging. This cannot be undone.
+            </p>
+            <p style={{ color: 'var(--muted)', fontSize: 13, margin: '0 0 10px' }}>Type <strong style={{ color: 'var(--text)' }}>DELETE</strong> to confirm:</p>
+            <input
+              type="text"
+              value={deleteConfirmText}
+              onChange={e => setDeleteConfirmText(e.target.value)}
+              placeholder="DELETE"
+              disabled={deleting}
+              style={{
+                width: '100%', background: 'var(--bg)', border: '1px solid var(--border)',
+                borderRadius: 8, padding: '10px 12px', color: 'var(--text)', fontSize: 14,
+                outline: 'none', marginBottom: 12,
+              }}
+            />
+            {deleteError && <div className="bug-report-error">{deleteError}</div>}
+            <div className="bug-report-actions">
+              <button className="bug-report-cancel" onClick={() => setShowDeleteConfirm(false)} disabled={deleting}>Cancel</button>
+              <button
+                disabled={deleteConfirmText !== 'DELETE' || deleting}
+                onClick={deleteAccount}
+                style={{
+                  background: deleteConfirmText === 'DELETE' && !deleting ? '#ef4444' : 'rgba(239,68,68,0.3)',
+                  color: '#fff', border: 'none', borderRadius: 8,
+                  padding: '9px 18px', fontWeight: 700, fontSize: 14,
+                  cursor: deleteConfirmText === 'DELETE' && !deleting ? 'pointer' : 'not-allowed',
+                }}
+              >
+                {deleting ? 'Deleting...' : 'Delete Forever'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="profile-made-by">microload by Harisman</div>
     </div>
   )

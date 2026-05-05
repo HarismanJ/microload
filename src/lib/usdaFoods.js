@@ -1,6 +1,10 @@
+import { NUTRITION_FIELD_LIMITS, VALIDATION_LIMITS, trimToMax } from './inputValidation'
+
 const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY
 if (!USDA_API_KEY) throw new Error('VITE_USDA_API_KEY is not set — add it to your .env file')
 const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search'
+const USDA_LOCAL_SOFT_LIMIT_PER_HOUR = 1000
+const USDA_LOCAL_THROTTLE_KEY = 'usdaRequestBucket'
 
 const SEARCH_ALIAS_REPLACEMENTS = [
   ['pb2', 'peanut butter powder'],
@@ -123,6 +127,33 @@ function numberOrZero(value) {
   return Number.isFinite(numeric) ? numeric : 0
 }
 
+function clampNumber(value, min, max) {
+  const numeric = numberOrZero(value)
+  return Math.min(max, Math.max(min, numeric))
+}
+
+function recordUsdaRequest() {
+  if (typeof window === 'undefined') return
+
+  try {
+    const now = Date.now()
+    const raw = JSON.parse(window.localStorage.getItem(USDA_LOCAL_THROTTLE_KEY) || '{}')
+    const resetAt = Number(raw.resetAt) || 0
+    const count = now < resetAt ? Number(raw.count) || 0 : 0
+    const next = {
+      resetAt: now < resetAt ? resetAt : now + 60 * 60 * 1000,
+      count: count + 1,
+    }
+    window.localStorage.setItem(USDA_LOCAL_THROTTLE_KEY, JSON.stringify(next))
+    if (next.count > USDA_LOCAL_SOFT_LIMIT_PER_HOUR) {
+      throw new Error('USDA lookup limit reached on this device. Please try again later.')
+    }
+  } catch (error) {
+    if (error?.message?.includes('USDA lookup limit')) throw error
+    // Storage failures should not block USDA lookup.
+  }
+}
+
 function normalizeNutrientName(value) {
   return String(value || '')
     .toLowerCase()
@@ -179,9 +210,11 @@ function getNutrientValue(nutrientKey, foodNutrients = [], labelNutrients = null
 function mapUsdaFood(food) {
   if (!food?.fdcId || !food?.description) return null
 
-  const servingSize = numberOrZero(food.servingSize) > 0 ? numberOrZero(food.servingSize) : 100
+  const servingSize = numberOrZero(food.servingSize) > 0
+    ? clampNumber(food.servingSize, NUTRITION_FIELD_LIMITS.serving_size.min, NUTRITION_FIELD_LIMITS.serving_size.max)
+    : 100
   const servingUnit = numberOrZero(food.servingSize) > 0
-    ? normalizeUnit(food.servingSizeUnit)
+    ? trimToMax(normalizeUnit(food.servingSizeUnit), VALIDATION_LIMITS.servingUnitMaxLength)
     : 'g'
   const nutrients = Array.isArray(food.foodNutrients) ? food.foodNutrients : []
   const labelNutrients = food.labelNutrients && typeof food.labelNutrients === 'object'
@@ -201,37 +234,39 @@ function mapUsdaFood(food) {
     usdaFdcId: food.fdcId,
     data_type: String(food.dataType || ''),
     is_branded: String(food.dataType || '').toLowerCase() === 'branded' || Boolean(food.brandName || food.brandOwner),
-    searchText: `${food.brandName || food.brandOwner || ''} ${String(food.description).trim()}`.trim(),
-    name: String(food.description).trim(),
-    brand: food.brandName || food.brandOwner || null,
+    searchText: trimToMax(`${food.brandName || food.brandOwner || ''} ${String(food.description).trim()}`.trim(), VALIDATION_LIMITS.foodNameMaxLength + VALIDATION_LIMITS.foodBrandMaxLength + 1),
+    name: trimToMax(String(food.description).trim(), VALIDATION_LIMITS.foodNameMaxLength),
+    brand: food.brandName || food.brandOwner ? trimToMax(food.brandName || food.brandOwner, VALIDATION_LIMITS.foodBrandMaxLength) : null,
     serving_size: servingSize,
     serving_unit: servingUnit,
-    calories: Math.round(calories),
-    protein,
-    carbs,
-    fat,
-    fiber: getNutrientValue('fiber', nutrients, labelNutrients),
-    sugar: getNutrientValue('sugar', nutrients, labelNutrients),
-    saturated_fat: getNutrientValue('saturated_fat', nutrients, labelNutrients),
-    sodium: getNutrientValue('sodium', nutrients, labelNutrients),
-    potassium: getNutrientValue('potassium', nutrients, labelNutrients),
-    cholesterol: getNutrientValue('cholesterol', nutrients, labelNutrients),
-    calcium: getNutrientValue('calcium', nutrients, labelNutrients),
-    iron: getNutrientValue('iron', nutrients, labelNutrients),
-    magnesium: getNutrientValue('magnesium', nutrients, labelNutrients),
-    zinc: getNutrientValue('zinc', nutrients, labelNutrients),
-    vitamin_a: getNutrientValue('vitamin_a', nutrients, labelNutrients),
-    vitamin_c: getNutrientValue('vitamin_c', nutrients, labelNutrients),
-    vitamin_d: getNutrientValue('vitamin_d', nutrients, labelNutrients),
+    calories: Math.round(clampNumber(calories, NUTRITION_FIELD_LIMITS.calories.min, NUTRITION_FIELD_LIMITS.calories.max)),
+    protein: clampNumber(protein, NUTRITION_FIELD_LIMITS.protein.min, NUTRITION_FIELD_LIMITS.protein.max),
+    carbs: clampNumber(carbs, NUTRITION_FIELD_LIMITS.carbs.min, NUTRITION_FIELD_LIMITS.carbs.max),
+    fat: clampNumber(fat, NUTRITION_FIELD_LIMITS.fat.min, NUTRITION_FIELD_LIMITS.fat.max),
+    fiber: clampNumber(getNutrientValue('fiber', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.fiber.min, NUTRITION_FIELD_LIMITS.fiber.max),
+    sugar: clampNumber(getNutrientValue('sugar', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.sugar.min, NUTRITION_FIELD_LIMITS.sugar.max),
+    saturated_fat: clampNumber(getNutrientValue('saturated_fat', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.saturated_fat.min, NUTRITION_FIELD_LIMITS.saturated_fat.max),
+    sodium: clampNumber(getNutrientValue('sodium', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.sodium.min, NUTRITION_FIELD_LIMITS.sodium.max),
+    potassium: clampNumber(getNutrientValue('potassium', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.potassium.min, NUTRITION_FIELD_LIMITS.potassium.max),
+    cholesterol: clampNumber(getNutrientValue('cholesterol', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.cholesterol.min, NUTRITION_FIELD_LIMITS.cholesterol.max),
+    calcium: clampNumber(getNutrientValue('calcium', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.calcium.min, NUTRITION_FIELD_LIMITS.calcium.max),
+    iron: clampNumber(getNutrientValue('iron', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.iron.min, NUTRITION_FIELD_LIMITS.iron.max),
+    magnesium: clampNumber(getNutrientValue('magnesium', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.magnesium.min, NUTRITION_FIELD_LIMITS.magnesium.max),
+    zinc: clampNumber(getNutrientValue('zinc', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.zinc.min, NUTRITION_FIELD_LIMITS.zinc.max),
+    vitamin_a: clampNumber(getNutrientValue('vitamin_a', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_a.min, NUTRITION_FIELD_LIMITS.vitamin_a.max),
+    vitamin_c: clampNumber(getNutrientValue('vitamin_c', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_c.min, NUTRITION_FIELD_LIMITS.vitamin_c.max),
+    vitamin_d: clampNumber(getNutrientValue('vitamin_d', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_d.min, NUTRITION_FIELD_LIMITS.vitamin_d.max),
   }
 }
 
 function normalizeBarcode(code) {
-  return String(code || '').replace(/^0+/, '') || '0'
+  const digits = trimToMax(String(code || '').replace(/\D/g, ''), 32)
+  if (!digits) return ''
+  return digits.replace(/^0+/, '') || '0'
 }
 
 export async function searchUsdaFoods(query, { signal, pageSize = 24 } = {}) {
-  const trimmedQuery = String(query || '').trim()
+  const trimmedQuery = trimToMax(String(query || '').trim(), VALIDATION_LIMITS.searchMaxLength)
   if (!trimmedQuery) return []
 
   const requestedPageSize = Math.max(1, Math.min(50, pageSize))
@@ -247,6 +282,7 @@ export async function searchUsdaFoods(query, { signal, pageSize = 24 } = {}) {
       pageSize: String(requestedPageSize),
     })
 
+    recordUsdaRequest()
     const response = await fetch(`${USDA_SEARCH_URL}?${params.toString()}`, { signal })
     if (!response.ok) throw new Error(`USDA search failed (${response.status})`)
 
@@ -266,13 +302,15 @@ export async function searchUsdaFoods(query, { signal, pageSize = 24 } = {}) {
 
 export async function lookupUsdaBarcode(barcode, { signal } = {}) {
   const normalizedInput = normalizeBarcode(barcode)
+  if (!normalizedInput || normalizedInput.length > 32) return null
   const params = new URLSearchParams({
     api_key: USDA_API_KEY,
-    query: String(barcode),
+    query: trimToMax(String(barcode).replace(/\D/g, ''), 32),
     dataType: 'Branded',
     pageSize: '5',
   })
 
+  recordUsdaRequest()
   const response = await fetch(`${USDA_SEARCH_URL}?${params.toString()}`, { signal })
   if (!response.ok) return null
 

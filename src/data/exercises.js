@@ -3,6 +3,16 @@ import { getCached, setCached, invalidateCache } from '../lib/cache'
 import { STRENGTHLEVEL_EXERCISES } from './strengthLevelCatalog'
 
 const EXERCISES_CACHE_KEY = 'exercises'
+const CUSTOM_EXERCISE_SELECT = [
+  'id',
+  'name',
+  'category',
+  'equipment',
+  'user_id',
+  'primary_muscles',
+  'secondary_muscles',
+  'default_rest_seconds',
+].join(', ')
 
 // Cardio exercises — time-based, no strength standards, no muscles
 const CARDIO_EXERCISES = [
@@ -104,7 +114,7 @@ export async function fetchExercises(userId) {
   if (userId) {
     const { data: custom, error: customError } = await supabase
       .from('exercises')
-      .select('*')
+      .select(CUSTOM_EXERCISE_SELECT)
       .eq('user_id', userId)
 
     if (customError) {
@@ -127,7 +137,7 @@ export async function createCustomExercise(userId, payload) {
       user_id: userId,
       ...payload,
     })
-    .select('*')
+    .select(CUSTOM_EXERCISE_SELECT)
     .single()
 
   if (error) {
@@ -182,17 +192,6 @@ export async function fetchPreviousSets(exerciseId, userId) {
     .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .limit(10)
-  if (error) throw error
-  return data
-}
-
-export async function fetchORMHistory(exerciseId, userId) {
-  const { data, error } = await supabase
-    .from('workout_sets')
-    .select('estimated_1rm, created_at')
-    .eq('exercise_id', exerciseId)
-    .eq('user_id', userId)
-    .order('created_at', { ascending: true })
   if (error) throw error
   return data
 }

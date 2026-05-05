@@ -1,32 +1,20 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useEffectEvent, useRef, useState } from 'react'
 import { Capacitor } from '@capacitor/core'
 import { BarcodeFormat, BarcodeScanner as NativeBarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
 import { Html5Qrcode } from 'html5-qrcode'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
+import { useCurrentUserId } from '../../context/UserContext'
+import {
+  buildFoodPayload,
+  EMPTY_FOOD_FORM,
+  foodToFormValues,
+  getFoodFormError,
+  isFoodFormValid,
+} from '../../lib/foodEditor'
 import { lookupUsdaBarcode } from '../../lib/usdaFoods'
+import FoodEditorFields from './FoodEditorFields'
 import LoadingSpinner from '../LoadingSpinner'
-
-const FIELDS = [
-  { key: 'name',          label: 'Name',          unit: '',     type: 'text',   required: true },
-  { key: 'brand',         label: 'Brand',          unit: '',     type: 'text'  },
-  { key: 'serving_size',  label: 'Serving Size',   unit: '',     type: 'number', required: true },
-  { key: 'serving_unit',  label: 'Serving Unit',   unit: '',     type: 'text'  },
-  { key: 'calories',      label: 'Calories',       unit: 'kcal', type: 'number', required: true },
-  { key: 'protein',       label: 'Protein',        unit: 'g',    type: 'number' },
-  { key: 'carbs',         label: 'Carbs',          unit: 'g',    type: 'number' },
-  { key: 'fat',           label: 'Fat',            unit: 'g',    type: 'number' },
-  { key: 'fiber',         label: 'Fiber',          unit: 'g',    type: 'number' },
-  { key: 'sugar',         label: 'Sugar',          unit: 'g',    type: 'number' },
-  { key: 'saturated_fat', label: 'Saturated Fat',  unit: 'g',    type: 'number' },
-  { key: 'sodium',        label: 'Sodium',         unit: 'mg',   type: 'number' },
-  { key: 'potassium',     label: 'Potassium',      unit: 'mg',   type: 'number' },
-  { key: 'cholesterol',   label: 'Cholesterol',    unit: 'mg',   type: 'number' },
-  { key: 'vitamin_a',     label: 'Vitamin A',      unit: 'mcg',  type: 'number' },
-  { key: 'vitamin_c',     label: 'Vitamin C',      unit: 'mg',   type: 'number' },
-  { key: 'calcium',       label: 'Calcium',        unit: 'mg',   type: 'number' },
-  { key: 'iron',          label: 'Iron',           unit: 'mg',   type: 'number' },
-]
 
 // Native ML Kit is used on real phone builds.
 // Browser BarcodeDetector/html5-qrcode stays as the web fallback.
@@ -61,13 +49,6 @@ function isAcceptedFoodBarcode(barcode) {
   ].includes(format)
 }
 
-const EMPTY_FORM = {
-  name: '', brand: '', serving_size: '100', serving_unit: 'g',
-  calories: '', protein: '', carbs: '', fat: '', fiber: '', sugar: '',
-  saturated_fat: '', sodium: '', potassium: '', cholesterol: '',
-  vitamin_a: '', vitamin_c: '', calcium: '', iron: '',
-}
-
 function parseOFF(product) {
   const n = product.nutriments || {}
   const per = n['energy-kcal_serving'] ? 'serving' : '100g'
@@ -100,6 +81,7 @@ function parseOFF(product) {
 }
 
 export default function BarcodeScanner({ onSave, onBack }) {
+  const userId = useCurrentUserId()
   const [phase, setPhase] = useState('scanning') // scanning | loading | confirm | error | saving
   const [errorMsg, setErrorMsg] = useState('')
   const [form, setForm] = useState(null)
@@ -200,9 +182,11 @@ export default function BarcodeScanner({ onSave, onBack }) {
     onBack()
   }
 
+  const startNativePhoneScanLatest = useEffectEvent(() => { startNativePhoneScan() })
+
   useEffect(() => {
     if (USE_NATIVE_PHONE_SCANNER) {
-      startNativePhoneScan()
+      startNativePhoneScanLatest()
       return () => {
         NativeBarcodeScanner.removeAllListeners().catch(() => {})
         NativeBarcodeScanner.stopScan().catch(() => {})
@@ -412,32 +396,12 @@ export default function BarcodeScanner({ onSave, onBack }) {
         const food = await lookupUsdaBarcode(barcode, { signal: controller.signal })
         if (food) {
           clearTimeout(timeout)
-          const f = food
-          setForm({
-            name:          String(f.name || ''),
-            brand:         String(f.brand || ''),
-            serving_size:  String(f.serving_size || 100),
-            serving_unit:  String(f.serving_unit || 'g'),
-            calories:      String(Math.round(f.calories || 0)),
-            protein:       String(+(f.protein || 0).toFixed(1)),
-            carbs:         String(+(f.carbs || 0).toFixed(1)),
-            fat:           String(+(f.fat || 0).toFixed(1)),
-            fiber:         String(+(f.fiber || 0).toFixed(1)),
-            sugar:         String(+(f.sugar || 0).toFixed(1)),
-            saturated_fat: String(+(f.saturated_fat || 0).toFixed(1)),
-            sodium:        String(Math.round(f.sodium || 0)),
-            potassium:     String(Math.round(f.potassium || 0)),
-            cholesterol:   String(Math.round(f.cholesterol || 0)),
-            vitamin_a:     String(+(f.vitamin_a || 0).toFixed(1)),
-            vitamin_c:     String(+(f.vitamin_c || 0).toFixed(1)),
-            calcium:       String(Math.round(f.calcium || 0)),
-            iron:          String(+(f.iron || 0).toFixed(2)),
-          })
+          setForm(foodToFormValues(food))
           setPhase('confirm')
           return
         }
       } catch {
-        // Edge function error — fall through to Open Food Facts
+        // USDA lookup failed — fall through to Open Food Facts
       }
 
       // 2. Fall back to Open Food Facts
@@ -446,7 +410,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
       const json = await res.json()
       if (json.status !== 1 || !json.product) {
         setErrorMsg('Product not found. You can enter details manually.')
-        setForm(EMPTY_FORM)
+        setForm(EMPTY_FOOD_FORM)
         setPhase('confirm')
         return
       }
@@ -456,7 +420,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
       clearTimeout(timeout)
       if (e.name === 'AbortError') {
         setErrorMsg('Lookup timed out. You can enter details manually.')
-        setForm(EMPTY_FORM)
+        setForm(EMPTY_FOOD_FORM)
         setPhase('confirm')
       } else {
         setErrorMsg('Network error. Check your connection.')
@@ -466,27 +430,28 @@ export default function BarcodeScanner({ onSave, onBack }) {
   }
 
   async function save() {
-    if (!form?.name?.trim() || !form?.calories) return
+    if (!userId) return
+    const validationError = getFoodFormError(form)
+    if (validationError) {
+      setErrorMsg(validationError)
+      return
+    }
     setSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    const n = v => v === '' ? 0 : +v
-    const { data, error } = await supabase.from('foods').insert({
-      user_id: user.id,
-      name: form.name.trim(),
-      brand: form.brand?.trim() || null,
-      serving_size: +form.serving_size || 100,
-      serving_unit: form.serving_unit || 'g',
-      calories: n(form.calories),
-      protein: n(form.protein), carbs: n(form.carbs), fat: n(form.fat),
-      fiber: n(form.fiber), sugar: n(form.sugar), saturated_fat: n(form.saturated_fat),
-      sodium: n(form.sodium), potassium: n(form.potassium), cholesterol: n(form.cholesterol),
-      vitamin_a: n(form.vitamin_a), vitamin_c: n(form.vitamin_c),
-      calcium: n(form.calcium), iron: n(form.iron),
-    }).select().single()
-    setSaving(false)
-    if (error) { setErrorMsg(error.message); return }
-    invalidateCache(`user_foods:${user.id}`)
-    onSave(data)
+    setErrorMsg('')
+    try {
+      const { data, error } = await supabase
+        .from('foods')
+        .insert(buildFoodPayload(form, userId))
+        .select()
+        .single()
+      if (error) throw error
+      invalidateCache(`user_foods:${userId}`)
+      onSave(data)
+    } catch (error) {
+      setErrorMsg(error?.message || 'Could not save this food. Check your connection and try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
@@ -560,7 +525,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
   }
 
   // confirm phase
-  const valid = form?.name?.trim() && form?.calories !== ''
+  const valid = isFoodFormValid(form)
   return (
     <div className="bs-screen">
       <div className="bs-header">
@@ -578,9 +543,11 @@ export default function BarcodeScanner({ onSave, onBack }) {
         <div className="bs-manual-row">
           <input
             className="bs-manual-input"
-            type="number"
+            type="text"
+            inputMode="numeric"
             placeholder="e.g. 0123456789012"
             value={manualCode}
+            maxLength={32}
             onChange={e => setManualCode(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleManualLookup()}
           />
@@ -594,41 +561,8 @@ export default function BarcodeScanner({ onSave, onBack }) {
         </div>
         <div className="bs-manual-hint">Type the numbers printed below the barcode on the packaging (including the numbers at each end)</div>
       </div>
-      <div className="cf-section">
-        <div className="cf-section-title">Food Info</div>
-        {FIELDS.slice(0, 4).map(f => (
-          <div key={f.key} className="cf-field">
-            <label className="cf-label">{f.label}{f.required && <span className="cf-required"> *</span>}</label>
-            <div className="cf-input-wrap">
-              <input className="cf-input" type={f.type} value={form[f.key] ?? ''} onChange={e => set(f.key, e.target.value)} />
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="cf-section">
-        <div className="cf-section-title">Macros <span className="cf-section-note">per serving</span></div>
-        {FIELDS.slice(4, 8).map(f => (
-          <div key={f.key} className="cf-field">
-            <label className="cf-label">{f.required && <span className="cf-required">* </span>}{f.label}</label>
-            <div className="cf-input-wrap">
-              <input className="cf-input" type="number" min="0" step="any" value={form[f.key] ?? ''} onChange={e => set(f.key, e.target.value)} />
-              {f.unit && <span className="cf-unit">{f.unit}</span>}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="cf-section">
-        <div className="cf-section-title">More Nutrition <span className="cf-section-note">(optional)</span></div>
-        {FIELDS.slice(8).map(f => (
-          <div key={f.key} className="cf-field">
-            <label className="cf-label">{f.label}</label>
-            <div className="cf-input-wrap">
-              <input className="cf-input" type="number" min="0" step="any" value={form[f.key] ?? ''} onChange={e => set(f.key, e.target.value)} />
-              {f.unit && <span className="cf-unit">{f.unit}</span>}
-            </div>
-          </div>
-        ))}
-      </div>
+      <FoodEditorFields form={form} onFieldChange={set} />
+      {!valid && <div className="bs-not-found-note">{getFoodFormError(form)}</div>}
       <button className="nut-add-to-log-btn" onClick={save} disabled={saving || !valid}>
         {saving ? 'Saving…' : 'Add Food'}
       </button>

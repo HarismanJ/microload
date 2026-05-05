@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import { THEMES, saveTheme, getSavedTheme, applyTheme } from '../lib/theme'
 
 const ThemeContext = createContext(null)
@@ -6,18 +6,25 @@ const ThemeContext = createContext(null)
 export function ThemeProvider({ children }) {
   const [themeId, setThemeId] = useState(getSavedTheme)
 
-  function switchTheme(id) {
+  const switchTheme = useCallback((id) => {
     setThemeId(id)
     saveTheme(id)
-  }
+  }, [])
 
-  function previewTheme(id) {
+  const previewTheme = useCallback((id) => {
     setThemeId(id)
     applyTheme(id)
-  }
+  }, [])
+
+  const value = useMemo(() => ({
+    themeId,
+    switchTheme,
+    previewTheme,
+    themes: THEMES,
+  }), [previewTheme, switchTheme, themeId])
 
   return (
-    <ThemeContext.Provider value={{ themeId, switchTheme, previewTheme, themes: THEMES }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   )

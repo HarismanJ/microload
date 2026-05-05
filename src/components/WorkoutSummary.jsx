@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useFocusTrap } from '../lib/useFocusTrap'
 import '../styles/WorkoutSummary.css'
 
 function fmtTime(s) {
@@ -17,7 +18,12 @@ function fmtVolume(v) {
 
 function fmtMetricValue(metric, value) {
   if (value === null || value === undefined) return '—'
-  return `${value.toFixed(2)}x`
+  const suffix = metric.display?.includes('min') && !metric.display?.includes('/')
+    ? ''
+    : metric.display?.includes('MET')
+      ? ''
+      : 'x'
+  return `${value.toFixed(2)}${suffix}`
 }
 
 function getBattleOutcome(battle) {
@@ -59,6 +65,7 @@ function getBattleOutcome(battle) {
 
 export default function WorkoutSummary({ summary, onDismiss }) {
   const [show, setShow] = useState(false)
+  const wsScreenRef = useRef(null)
 
   useEffect(() => {
     // Slight delay so CSS transition fires
@@ -71,6 +78,8 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     setTimeout(onDismiss, 280)
   }
 
+  useFocusTrap(wsScreenRef, { active: show, onEscape: handleDismiss })
+
   const {
     durationSeconds,
     caloriesBurned = 0,
@@ -82,12 +91,13 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     newAchievements = [],
     battle = null,
     battleOnly = false,
+    planCoaching = null,
   } = summary
   const battleOutcome = getBattleOutcome(battle)
 
   return (
     <div className={`ws-overlay ${show ? 'ws-overlay-in' : ''}`}>
-      <div className={`ws-screen ${show ? 'ws-screen-in' : ''}`}>
+      <div className={`ws-screen ${show ? 'ws-screen-in' : ''}`} ref={wsScreenRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Workout Summary">
 
         {/* Header */}
         <div className="ws-header">
@@ -134,7 +144,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
             <div className="ws-section">
               <div className="ws-section-title">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8h12M6 16h12"/><rect x="2" y="10" width="4" height="4" rx="1"/><rect x="18" y="10" width="4" height="4" rx="1"/><rect x="6" y="6" width="3" height="12" rx="1"/><rect x="15" y="6" width="3" height="12" rx="1"/></svg>
-                Head To Head
+                {`${battle.battleModeLabel || 'Hybrid'} Head To Head`}
               </div>
               <div className={`ws-battle-card ws-battle-card-${battleOutcome.tone}`}>
                 <div className="ws-battle-head">
@@ -166,7 +176,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                         <div className="ws-battle-metric-unit">
                           {metric.available
                             ? metric.display
-                            : 'Needs at least one shared exercise'}
+                            : metric.unavailableText || 'Needs both lifters to log this metric'}
                         </div>
                       </div>
                       <div className={`ws-battle-metric-value ${metric.winner === 'opponent' ? 'is-winner' : ''}`}>
@@ -178,6 +188,27 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                 {battle.bodyweightFallbackUsed && (
                   <div className="ws-battle-note">
                     Bodyweight was missing for at least one lifter, so this recap filled the gap from the available bodyweights in the room or a 170 lb default.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!battleOnly && planCoaching && (
+            <div className="ws-section">
+              <div className="ws-section-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.74V17h8v-2.26A7 7 0 0 0 12 2z"/></svg>
+                Plan Coach
+              </div>
+              <div className="ws-coach-card">
+                <div className="ws-coach-pill">Pending Review</div>
+                <div className="ws-coach-title">{planCoaching.summary}</div>
+                <div className="ws-coach-body">{planCoaching.body}</div>
+                {planCoaching.metrics && (
+                  <div className="ws-coach-metrics">
+                    <span>{planCoaching.metrics.completedSets}/{planCoaching.metrics.plannedSets} sets</span>
+                    <span>{planCoaching.metrics.actualMinutes}m actual</span>
+                    <span>{Math.round((planCoaching.metrics.completionRate || 0) * 100)}% complete</span>
                   </div>
                 )}
               </div>

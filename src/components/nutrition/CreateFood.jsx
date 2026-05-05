@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getCached, invalidateCache, setCached } from '../../lib/cache'
+import { useCurrentUserId } from '../../context/UserContext'
 import { searchUsdaFoods } from '../../lib/usdaFoods'
 import { buildFoodSearchKey, mergeFoodSearchResults, normalizeSearchValue } from '../../lib/foodSearch'
+import { NUTRITION_FIELD_LIMITS, VALIDATION_LIMITS, validateLength, validateNumber, validateNutritionForm } from '../../lib/inputValidation'
 
 const UNITS = ['g', 'ml', 'oz', 'cup', 'tbsp', 'tsp', 'piece', 'slice', 'scoop', 'bar', 'serving']
 const USDA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
@@ -64,7 +66,7 @@ const RECIPE_MICRO_ITEMS = [
   { key: 'iron', label: 'Iron', unit: 'mg' },
 ]
 
-function Field({ label, value, onChange, placeholder = '0', type = 'number', unit, required }) {
+function Field({ label, value, onChange, placeholder = '0', type = 'number', unit, required, maxLength, rules }) {
   return (
     <div className="cf-field">
       <label className="cf-label">
@@ -78,8 +80,11 @@ function Field({ label, value, onChange, placeholder = '0', type = 'number', uni
           value={value}
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
-          min={type === 'number' ? '0' : undefined}
-          step={type === 'number' ? 'any' : undefined}
+          min={type === 'number' ? (rules?.min ?? 0) : undefined}
+          max={type === 'number' ? rules?.max : undefined}
+          step={type === 'number' ? (rules?.decimals === 0 ? 1 : 0.01) : undefined}
+          inputMode={type === 'number' ? 'decimal' : undefined}
+          maxLength={type === 'number' ? undefined : maxLength}
         />
         {unit && <span className="cf-unit">{unit}</span>}
       </div>
@@ -191,6 +196,7 @@ function buildRecipePayload(userId, recipeForm, totalsPerServing) {
 }
 
 export default function CreateFood({ onSave, onBack }) {
+  const userId = useCurrentUserId()
   const [mode, setMode] = useState('food')
   const [form, setForm] = useState(initialForm)
   const [recipeForm, setRecipeForm] = useState(initialRecipeForm)
@@ -203,7 +209,6 @@ export default function CreateFood({ onSave, onBack }) {
   const [ingredientAmount, setIngredientAmount] = useState('')
   const [ingredientServings, setIngredientServings] = useState(1)
   const [localFoods, setLocalFoods] = useState([])
-  const [userId, setUserId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [searchingIngredients, setSearchingIngredients] = useState(false)
   const [error, setError] = useState('')
@@ -258,17 +263,14 @@ export default function CreateFood({ onSave, onBack }) {
   }, [mode])
 
   useEffect(() => {
-    if (mode !== 'recipe' || userId) return undefined
+    if (mode !== 'recipe' || !userId) return undefined
 
     let cancelled = false
 
     async function loadRecipeFoodSources() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user || cancelled) return
-
-      setUserId(user.id)
-      const userFoodsCacheKey = `user_foods:${user.id}`
-      const recentFoodsCacheKey = `recent_foods:${user.id}`
+      if (cancelled) return
+      const userFoodsCacheKey = `user_foods:${userId}`
+      const recentFoodsCacheKey = `recent_foods:${userId}`
       const cachedFoods = getCached(userFoodsCacheKey)
       const cachedRecent = getCached(recentFoodsCacheKey)
 
@@ -282,7 +284,7 @@ export default function CreateFood({ onSave, onBack }) {
           : supabase
             .from('foods')
             .select('*')
-            .eq('user_id', user.id)
+            .eq('user_id', userId)
             .order('id', { ascending: false })
             .limit(200),
         cachedRecent
@@ -290,7 +292,7 @@ export default function CreateFood({ onSave, onBack }) {
           : supabase
             .from('nutrition_logs')
             .select('food_id, foods(*)')
-            .eq('user_id', user.id)
+            .eq('user_id', userId)
             .not('food_id', 'is', null)
             .order('created_at', { ascending: false })
             .limit(40),
@@ -353,7 +355,7 @@ export default function CreateFood({ onSave, onBack }) {
 
           return searchUsdaFoods(ingredientSearch, { signal: controller.signal, pageSize: 30 })
             .then(foods => {
-              setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS)
+              setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS, { bucket: 'search' })
               return foods
             })
         })()
@@ -388,6 +390,13 @@ export default function CreateFood({ onSave, onBack }) {
   }
 
   function addIngredient() {
+    const amountError = ingredientAmountMode === 'direct'
+      ? validateNumber(ingredientAmount, { label: 'Ingredient amount', min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, required: true, decimals: 2 })
+      : validateNumber(ingredientServings, { label: 'Ingredient servings', min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, required: true, decimals: 2 })
+    if (amountError) {
+      setError(amountError)
+      return
+    }
     const multiplier = getIngredientMultiplier(
       ingredientCandidate,
       ingredientAmountMode,
@@ -430,60 +439,83 @@ export default function CreateFood({ onSave, onBack }) {
   }
 
   async function save() {
-    if (!valid) {
-      setError(mode === 'recipe' ? 'Recipe name and ingredients are required' : 'Name and calories are required')
+    const validationError = mode === 'recipe'
+      ? validateRecipe()
+      : validateNutritionForm(form)
+    if (validationError) {
+      setError(validationError)
       return
     }
 
     setSaving(true)
     setError('')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
+    if (!userId) {
       setSaving(false)
       setError('You need to be signed in to save foods')
       return
     }
 
-    const payload = mode === 'recipe'
-      ? buildRecipePayload(user.id, recipeForm, recipePerServing)
-      : {
-        user_id: user.id,
-        name: form.name.trim(),
-        brand: form.brand.trim() || null,
-        serving_size: numberOrZero(form.serving_size) || 100,
-        serving_unit: form.serving_unit,
-        calories: numberOrZero(form.calories),
-        protein: numberOrZero(form.protein),
-        carbs: numberOrZero(form.carbs),
-        fat: numberOrZero(form.fat),
-        fiber: numberOrZero(form.fiber),
-        sugar: numberOrZero(form.sugar),
-        saturated_fat: numberOrZero(form.saturated_fat),
-        sodium: numberOrZero(form.sodium),
-        potassium: numberOrZero(form.potassium),
-        cholesterol: numberOrZero(form.cholesterol),
-        vitamin_a: numberOrZero(form.vitamin_a),
-        vitamin_c: numberOrZero(form.vitamin_c),
-        calcium: numberOrZero(form.calcium),
-        iron: numberOrZero(form.iron),
-      }
+    try {
+      const payload = mode === 'recipe'
+        ? buildRecipePayload(userId, recipeForm, recipePerServing)
+        : {
+          user_id: userId,
+          name: form.name.trim(),
+          brand: form.brand.trim() || null,
+          serving_size: numberOrZero(form.serving_size) || 100,
+          serving_unit: form.serving_unit,
+          calories: numberOrZero(form.calories),
+          protein: numberOrZero(form.protein),
+          carbs: numberOrZero(form.carbs),
+          fat: numberOrZero(form.fat),
+          fiber: numberOrZero(form.fiber),
+          sugar: numberOrZero(form.sugar),
+          saturated_fat: numberOrZero(form.saturated_fat),
+          sodium: numberOrZero(form.sodium),
+          potassium: numberOrZero(form.potassium),
+          cholesterol: numberOrZero(form.cholesterol),
+          vitamin_a: numberOrZero(form.vitamin_a),
+          vitamin_c: numberOrZero(form.vitamin_c),
+          calcium: numberOrZero(form.calcium),
+          iron: numberOrZero(form.iron),
+        }
 
-    const { data, error: saveError } = await supabase
-      .from('foods')
-      .insert(payload)
-      .select()
-      .single()
+      const { data, error: saveError } = await supabase
+        .from('foods')
+        .insert(payload)
+        .select()
+        .single()
 
-    setSaving(false)
+      if (saveError) throw saveError
 
-    if (saveError) {
-      setError(saveError.message)
-      return
+      invalidateCache(`recent_foods:${userId}`, `user_foods:${userId}`)
+      onSave(data)
+    } catch (error) {
+      setError(error?.message || 'Could not save this food. Check your connection and try again.')
+    } finally {
+      setSaving(false)
     }
+  }
 
-    invalidateCache(`recent_foods:${user.id}`, `user_foods:${user.id}`)
-    onSave(data)
+  function validateRecipe() {
+    const nameError = validateLength(recipeForm.name, {
+      label: 'Recipe name',
+      min: 1,
+      max: VALIDATION_LIMITS.foodNameMaxLength,
+      required: true,
+    })
+    if (nameError) return nameError
+    const servingsError = validateNumber(recipeForm.servings, {
+      label: 'Servings made',
+      min: 0.01,
+      max: VALIDATION_LIMITS.nutritionAmountMax,
+      required: true,
+      decimals: 2,
+    })
+    if (servingsError) return servingsError
+    if (recipeIngredients.length === 0) return 'Add at least one ingredient.'
+    return ''
   }
 
   return (
@@ -523,6 +555,7 @@ export default function CreateFood({ onSave, onBack }) {
               placeholder="e.g. Overnight Oats"
               type="text"
               required
+              maxLength={VALIDATION_LIMITS.foodNameMaxLength}
             />
             <div className="cf-row">
               <Field
@@ -532,6 +565,7 @@ export default function CreateFood({ onSave, onBack }) {
                 placeholder="1"
                 unit="servings"
                 required
+                rules={{ min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, decimals: 2 }}
               />
             </div>
           </div>
@@ -544,6 +578,7 @@ export default function CreateFood({ onSave, onBack }) {
               placeholder="Search foods to add..."
               value={ingredientSearch}
               onChange={e => setIngredientSearch(e.target.value)}
+              maxLength={VALIDATION_LIMITS.searchMaxLength}
             />
 
             {!ingredientSearch.trim() && ingredientRecent.length > 0 && (
@@ -624,8 +659,10 @@ export default function CreateFood({ onSave, onBack }) {
                       className="nut-serving-input"
                       type="number"
                       value={ingredientAmount}
-                      min="1"
-                      step="1"
+                      min="0.01"
+                      max={VALIDATION_LIMITS.nutritionAmountMax}
+                      step="0.01"
+                      inputMode="decimal"
                       onChange={e => setIngredientAmount(e.target.value)}
                     />
                     <button
@@ -655,8 +692,10 @@ export default function CreateFood({ onSave, onBack }) {
                       className="nut-serving-input"
                       type="number"
                       value={ingredientServings}
-                      min="0.25"
-                      step="0.25"
+                      min="0.01"
+                      max={VALIDATION_LIMITS.nutritionAmountMax}
+                      step="0.01"
+                      inputMode="decimal"
                       onChange={e => setIngredientServings(Math.max(0.25, Number.parseFloat(e.target.value) || 0.25))}
                     />
                     <button
@@ -756,10 +795,10 @@ export default function CreateFood({ onSave, onBack }) {
         <>
           <div className="cf-section">
             <div className="cf-section-title">Food Info</div>
-            <Field label="Name" value={form.name} onChange={value => set('name', value)} placeholder="e.g. Chicken Breast" type="text" required />
-            <Field label="Brand" value={form.brand} onChange={value => set('brand', value)} placeholder="Optional" type="text" />
+            <Field label="Name" value={form.name} onChange={value => set('name', value)} placeholder="e.g. Chicken Breast" type="text" required maxLength={VALIDATION_LIMITS.foodNameMaxLength} />
+            <Field label="Brand" value={form.brand} onChange={value => set('brand', value)} placeholder="Optional" type="text" maxLength={VALIDATION_LIMITS.foodBrandMaxLength} />
             <div className="cf-row">
-              <Field label="Serving Size" value={form.serving_size} onChange={value => set('serving_size', value)} placeholder="100" required />
+              <Field label="Serving Size" value={form.serving_size} onChange={value => set('serving_size', value)} placeholder="100" required rules={NUTRITION_FIELD_LIMITS.serving_size} />
               <div className="cf-field">
                 <label className="cf-label">Unit</label>
                 <select className="cf-select" value={form.serving_unit} onChange={e => set('serving_unit', e.target.value)}>
@@ -771,11 +810,11 @@ export default function CreateFood({ onSave, onBack }) {
 
           <div className="cf-section">
             <div className="cf-section-title">Macros <span className="cf-section-note">per serving</span></div>
-            <Field label="Calories" value={form.calories} onChange={value => set('calories', value)} unit="kcal" required />
+            <Field label="Calories" value={form.calories} onChange={value => set('calories', value)} unit="kcal" required rules={NUTRITION_FIELD_LIMITS.calories} />
             <div className="cf-row">
-              <Field label="Protein" value={form.protein} onChange={value => set('protein', value)} unit="g" />
-              <Field label="Carbs" value={form.carbs} onChange={value => set('carbs', value)} unit="g" />
-              <Field label="Fat" value={form.fat} onChange={value => set('fat', value)} unit="g" />
+              <Field label="Protein" value={form.protein} onChange={value => set('protein', value)} unit="g" rules={NUTRITION_FIELD_LIMITS.protein} />
+              <Field label="Carbs" value={form.carbs} onChange={value => set('carbs', value)} unit="g" rules={NUTRITION_FIELD_LIMITS.carbs} />
+              <Field label="Fat" value={form.fat} onChange={value => set('fat', value)} unit="g" rules={NUTRITION_FIELD_LIMITS.fat} />
             </div>
           </div>
 
@@ -786,24 +825,24 @@ export default function CreateFood({ onSave, onBack }) {
           {showFoodMicros && (
             <div className="cf-section">
               <div className="cf-row">
-                <Field label="Fiber" value={form.fiber} onChange={value => set('fiber', value)} unit="g" />
-                <Field label="Sugar" value={form.sugar} onChange={value => set('sugar', value)} unit="g" />
+                <Field label="Fiber" value={form.fiber} onChange={value => set('fiber', value)} unit="g" rules={NUTRITION_FIELD_LIMITS.fiber} />
+                <Field label="Sugar" value={form.sugar} onChange={value => set('sugar', value)} unit="g" rules={NUTRITION_FIELD_LIMITS.sugar} />
               </div>
               <div className="cf-row">
-                <Field label="Saturated Fat" value={form.saturated_fat} onChange={value => set('saturated_fat', value)} unit="g" />
-                <Field label="Cholesterol" value={form.cholesterol} onChange={value => set('cholesterol', value)} unit="mg" />
+                <Field label="Saturated Fat" value={form.saturated_fat} onChange={value => set('saturated_fat', value)} unit="g" rules={NUTRITION_FIELD_LIMITS.saturated_fat} />
+                <Field label="Cholesterol" value={form.cholesterol} onChange={value => set('cholesterol', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.cholesterol} />
               </div>
               <div className="cf-row">
-                <Field label="Sodium" value={form.sodium} onChange={value => set('sodium', value)} unit="mg" />
-                <Field label="Potassium" value={form.potassium} onChange={value => set('potassium', value)} unit="mg" />
+                <Field label="Sodium" value={form.sodium} onChange={value => set('sodium', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.sodium} />
+                <Field label="Potassium" value={form.potassium} onChange={value => set('potassium', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.potassium} />
               </div>
               <div className="cf-row">
-                <Field label="Vitamin A" value={form.vitamin_a} onChange={value => set('vitamin_a', value)} unit="mcg" />
-                <Field label="Vitamin C" value={form.vitamin_c} onChange={value => set('vitamin_c', value)} unit="mg" />
+                <Field label="Vitamin A" value={form.vitamin_a} onChange={value => set('vitamin_a', value)} unit="mcg" rules={NUTRITION_FIELD_LIMITS.vitamin_a} />
+                <Field label="Vitamin C" value={form.vitamin_c} onChange={value => set('vitamin_c', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.vitamin_c} />
               </div>
               <div className="cf-row">
-                <Field label="Calcium" value={form.calcium} onChange={value => set('calcium', value)} unit="mg" />
-                <Field label="Iron" value={form.iron} onChange={value => set('iron', value)} unit="mg" />
+                <Field label="Calcium" value={form.calcium} onChange={value => set('calcium', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.calcium} />
+                <Field label="Iron" value={form.iron} onChange={value => set('iron', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.iron} />
               </div>
             </div>
           )}

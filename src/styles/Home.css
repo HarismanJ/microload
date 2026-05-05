@@ -71,7 +71,9 @@
   align-items: center;
   min-height: 0;
   padding: 2px 0;
+  transition: transform 0.18s ease;
 }
+.home-burn-ring-wrap:active { transform: scale(0.96); }
 
 .home-burn-update-btn {
   font-size: 11px;
@@ -892,6 +894,7 @@
   border-color: color-mix(in srgb, var(--blue) 20%, var(--border));
   box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18);
 }
+.home-last-workout:active { transform: scale(0.99); box-shadow: none; }
 
 .home-lw-top {
   display: flex;
@@ -1186,6 +1189,7 @@
   color: var(--text);
   border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
 }
+.home-weight-panel-close:active { transform: scale(0.90); }
 
 .home-weight-panel-log-row {
   display: grid;
@@ -1239,6 +1243,7 @@
   transform: translateY(-1px);
   box-shadow: 0 14px 24px color-mix(in srgb, var(--blue) 26%, transparent);
 }
+.home-weight-panel-save:active { transform: scale(0.97); box-shadow: none; }
 
 .home-weight-unit-toggle {
   display: inline-flex;
@@ -1266,6 +1271,7 @@
   background: var(--blue);
   color: white;
 }
+.home-weight-unit-btn:active { transform: scale(0.93); }
 
 .home-weight-panel-error {
   font-size: 12px;
@@ -1300,6 +1306,7 @@
   background: var(--blue);
   color: #fff;
 }
+.ex-period-btn:active { transform: scale(0.92); }
 
 .home-weight-panel-chart-wrap {
   width: 100%;
@@ -1385,6 +1392,7 @@
   transform: translateY(-1px);
   background: rgba(239, 68, 68, 0.14);
 }
+.home-weight-panel-history-delete:active { transform: scale(0.93); }
 
 .home-weight-panel-history-confirm {
   background: rgba(239, 68, 68, 0.08);
@@ -1428,12 +1436,14 @@
   border: 1px solid var(--border);
   color: var(--muted);
 }
+.home-weight-panel-history-cancel:active { transform: scale(0.97); }
 
 .home-weight-panel-history-confirm-btn {
   background: #ef4444;
   border: none;
   color: white;
 }
+.home-weight-panel-history-confirm-btn:active { transform: scale(0.97); }
 
 .home-weight-panel-close:disabled,
 .home-weight-panel-save:disabled,
@@ -1488,7 +1498,15 @@
   .home-section-calendar .cal-card,
   .home-section-calendar .cal-card-hybrid .cal-cell,
   .home-last-workout,
-  .home-section-calendar .cal-card-heatmap .cal-cell {
+  .home-section-calendar .cal-card-heatmap .cal-cell,
+  .home-burn-ring-wrap,
+  .home-weight-panel-close,
+  .home-weight-panel-save,
+  .home-weight-unit-btn,
+  .ex-period-btn,
+  .home-weight-panel-history-delete,
+  .home-weight-panel-history-cancel,
+  .home-weight-panel-history-confirm-btn {
     transition: none;
   }
 

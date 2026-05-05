@@ -1,6 +1,7 @@
 import { useState, useEffect, useEffectEvent, useRef, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getCached, setCached } from '../../lib/cache'
+import { useCurrentUserId } from '../../context/UserContext'
 import '../../styles/Profile.css'
 
 const DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
@@ -20,6 +21,17 @@ function buildGrid(year, month) {
   return cells
 }
 
+function getLocalToday() {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate())
+}
+
+function getMsUntilNextLocalDay() {
+  const now = new Date()
+  const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1)
+  return Math.max(1000, nextDay.getTime() - now.getTime())
+}
+
 export default function WorkoutCalendar({
   onDayClick,
   compact = false,
@@ -32,7 +44,8 @@ export default function WorkoutCalendar({
   refreshKey = 0,
   onInitialLoadComplete = null,
 }) {
-  const today = new Date()
+  const userId = useCurrentUserId()
+  const [today, setToday] = useState(() => getLocalToday())
   const startingMonth = initialMonth
     ? new Date(new Date(initialMonth).getFullYear(), new Date(initialMonth).getMonth(), 1)
     : new Date(today.getFullYear(), today.getMonth(), 1)
@@ -41,73 +54,81 @@ export default function WorkoutCalendar({
   const [nutDates, setNutDates] = useState({}) // 'YYYY-MM-DD' → true
   const [weightDates, setWeightDates] = useState({}) // 'YYYY-MM-DD' → true
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const initialLoadReportedRef = useRef(false)
 
   async function loadMonth() {
+    if (!userId) return
     setLoading(true)
+    setLoadError('')
     const year = month.getFullYear()
     const m = month.getMonth()
     const cacheKey = `cal_${year}-${String(m + 1).padStart(2, '0')}`
 
-    const cached = getCached(cacheKey)
-    if (cached) {
-      setDateMap(cached.dateMap)
-      setNutDates(cached.nutDates)
-      setWeightDates(cached.weightDates || {})
+    try {
+      const cached = getCached(cacheKey)
+      if (cached) {
+        setDateMap(cached.dateMap)
+        setNutDates(cached.nutDates)
+        setWeightDates(cached.weightDates || {})
+        return
+      }
+
+      const start = new Date(year, m, 1).toISOString()
+      const end   = new Date(year, m + 1, 0, 23, 59, 59).toISOString()
+      const startDate = `${year}-${String(m+1).padStart(2,'0')}-01`
+      const endDate   = `${year}-${String(m+1).padStart(2,'0')}-${String(new Date(year, m+1, 0).getDate()).padStart(2,'0')}`
+
+      const [{ data: sessions, error: sessionsError }, { data: nutLogs, error: nutLogsError }, { data: weightLogs, error: weightLogsError }] = await Promise.all([
+        supabase
+          .from('workout_sessions')
+          .select('id, started_at')
+          .eq('user_id', userId)
+          .not('finished_at', 'is', null)
+          .gte('started_at', start)
+          .lte('started_at', end),
+        supabase
+          .from('nutrition_logs')
+          .select('log_date')
+          .eq('user_id', userId)
+          .gte('log_date', startDate)
+          .lte('log_date', endDate),
+        supabase
+          .from('body_weight_logs')
+          .select('logged_at')
+          .eq('user_id', userId)
+          .gte('logged_at', start)
+          .lte('logged_at', end),
+      ])
+      const queryError = sessionsError || nutLogsError || weightLogsError
+      if (queryError) throw queryError
+
+      const map = {}
+      sessions?.forEach(s => {
+        const d = new Date(s.started_at)
+        const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        if (!map[date]) map[date] = []
+        map[date].push(s.id)
+      })
+
+      const nmap = {}
+      nutLogs?.forEach(l => { nmap[l.log_date] = true })
+      const wmap = {}
+      weightLogs?.forEach(l => {
+        const d = new Date(l.logged_at)
+        const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+        wmap[date] = true
+      })
+
+      setCached(cacheKey, { dateMap: map, nutDates: nmap, weightDates: wmap })
+      setDateMap(map)
+      setNutDates(nmap)
+      setWeightDates(wmap)
+    } catch (error) {
+      setLoadError(error?.message || 'Could not load calendar entries.')
+    } finally {
       setLoading(false)
-      return
     }
-
-    const { data: { user } } = await supabase.auth.getUser()
-    const start = new Date(year, m, 1).toISOString()
-    const end   = new Date(year, m + 1, 0, 23, 59, 59).toISOString()
-    const startDate = `${year}-${String(m+1).padStart(2,'0')}-01`
-    const endDate   = `${year}-${String(m+1).padStart(2,'0')}-${String(new Date(year, m+1, 0).getDate()).padStart(2,'0')}`
-
-    const [{ data: sessions }, { data: nutLogs }, { data: weightLogs }] = await Promise.all([
-      supabase
-        .from('workout_sessions')
-        .select('id, started_at')
-        .eq('user_id', user.id)
-        .not('finished_at', 'is', null)
-        .gte('started_at', start)
-        .lte('started_at', end),
-      supabase
-        .from('nutrition_logs')
-        .select('log_date')
-        .eq('user_id', user.id)
-        .gte('log_date', startDate)
-        .lte('log_date', endDate),
-      supabase
-        .from('body_weight_logs')
-        .select('logged_at')
-        .eq('user_id', user.id)
-        .gte('logged_at', start)
-        .lte('logged_at', end),
-    ])
-
-    const map = {}
-    sessions?.forEach(s => {
-      const d = new Date(s.started_at)
-      const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      if (!map[date]) map[date] = []
-      map[date].push(s.id)
-    })
-
-    const nmap = {}
-    nutLogs?.forEach(l => { nmap[l.log_date] = true })
-    const wmap = {}
-    weightLogs?.forEach(l => {
-      const d = new Date(l.logged_at)
-      const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-      wmap[date] = true
-    })
-
-    setCached(cacheKey, { dateMap: map, nutDates: nmap, weightDates: wmap })
-    setDateMap(map)
-    setNutDates(nmap)
-    setWeightDates(wmap)
-    setLoading(false)
   }
 
   const loadMonthLatest = useEffectEvent(() => { loadMonth() })
@@ -115,7 +136,7 @@ export default function WorkoutCalendar({
   useEffect(() => {
     const timer = setTimeout(() => { loadMonthLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [month, refreshKey])
+  }, [month, refreshKey, userId])
 
   useEffect(() => {
     if (!initialMonth) return
@@ -139,6 +160,35 @@ export default function WorkoutCalendar({
     initialLoadReportedRef.current = true
     onInitialLoadComplete?.()
   }, [loading, onInitialLoadComplete])
+
+  useEffect(() => {
+    let timer = null
+
+    const refreshToday = () => {
+      setToday(getLocalToday())
+    }
+
+    const scheduleNextDayRefresh = () => {
+      timer = setTimeout(() => {
+        refreshToday()
+        scheduleNextDayRefresh()
+      }, getMsUntilNextLocalDay())
+    }
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) refreshToday()
+    }
+
+    scheduleNextDayRefresh()
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', refreshToday)
+
+    return () => {
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', refreshToday)
+    }
+  }, [])
 
   function prevMonth() { setMonth(d => new Date(d.getFullYear(), d.getMonth() - 1, 1)) }
   function nextMonth() { setMonth(d => new Date(d.getFullYear(), d.getMonth() + 1, 1)) }
@@ -200,6 +250,10 @@ export default function WorkoutCalendar({
           <div className="cal-day-headers">
             {DAYS.map((d, i) => <div key={i} className="cal-day-header">{d}</div>)}
           </div>
+        )}
+
+        {loadError && !isVisuallyLoading && (
+          <div className="cal-load-error">{loadError}</div>
         )}
 
         <div className="cal-grid">

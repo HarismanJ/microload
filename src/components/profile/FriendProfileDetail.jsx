@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Model from 'react-body-highlighter'
 import { supabase } from '../../lib/supabase'
+import { useCurrentUserId } from '../../context/UserContext'
 import { fetchExercises } from '../../data/exercises'
 import { fetchExerciseRankStates, mapExerciseRankStates } from '../../data/rankStates'
 import RankBadge from '../RankBadge'
@@ -191,7 +192,7 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
 
   const queries = [
-    supabase.from('profiles').select('*').eq('id', userId).single(),
+    supabase.from('profiles').select('full_name, username, unit_preference, gender, bodyweight').eq('id', userId).single(),
     supabase
       .from('exercise_prs')
       .select('exercise_id, best_1rm_kg')
@@ -389,6 +390,7 @@ function MuscleModelPair({ label, muscleChartData, setSelectedMuscleGroup }) {
 }
 
 export default function FriendProfileDetail({ friendId, fallbackProfile = null, onBack }) {
+  const currentUserId = useCurrentUserId()
   const [profile, setProfile] = useState(fallbackProfile)
   const [lifts, setLifts] = useState([])
   const [workoutStreak, setWorkoutStreak] = useState(0)
@@ -418,13 +420,9 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
       setError('')
 
       try {
-        const { data: authData, error: authError } = await supabase.auth.getUser()
-        if (authError) throw authError
-
-        const selfId = authData?.user?.id
         const [friendBundle, selfBundle] = await Promise.all([
           loadRankBundle(friendId, { fallbackProfile, includeSessions: true }),
-          selfId ? loadRankBundle(selfId) : Promise.resolve(null),
+          currentUserId ? loadRankBundle(currentUserId) : Promise.resolve(null),
         ])
 
         if (!cancelled) {
@@ -448,7 +446,7 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
       cancelled = true
       clearTimeout(timer)
     }
-  }, [fallbackProfile, friendId])
+  }, [currentUserId, fallbackProfile, friendId])
 
   const useLbs = profile?.unit_preference === 'lbs'
   const fmt = (kg) => useLbs ? `${kgToLbs(kg).toFixed(1)} lbs` : `${kg.toFixed(1)} kg`

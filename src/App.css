@@ -1,4 +1,5 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+*:focus:not(:focus-visible) { outline: none; }
 
 :root {
   --blue: #3b9eff;
@@ -1224,6 +1225,58 @@ body {
   50% {
     transform: translate3d(16px, 22px, 0) scale(1.06);
   }
+}
+
+.app-crash-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app-crash-panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  text-align: center;
+}
+
+.app-crash-panel h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.app-crash-panel p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.app-crash-message {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+}
+
+.app-crash-panel button {
+  justify-self: center;
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 16px;
+  background: var(--blue);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 @keyframes app-intro-fade-out {

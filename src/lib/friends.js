@@ -60,6 +60,13 @@ export async function searchFriendProfiles(searchTerm, currentUserId) {
   const term = searchTerm.trim()
   if (!term) return []
 
+  const rpcResult = await supabase.rpc('search_profiles_for_friendship', { p_search: term })
+  if (!rpcResult.error) return rpcResult.data ?? []
+
+  const missingRpc = rpcResult.error?.code === '42883'
+    || rpcResult.error?.message?.toLowerCase?.().includes('search_profiles_for_friendship')
+  if (!missingRpc) throw rpcResult.error
+
   const { data, error } = await supabase
     .from('profiles')
     .select('id, username, full_name')

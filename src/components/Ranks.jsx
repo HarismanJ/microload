@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, lazy, Suspense, useMemo } from 'react'
+import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
 import Model from 'react-body-highlighter'
 import { supabase } from '../lib/supabase'
-import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, invalidateCache } from '../lib/cache'
+import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, getCalendarMonthCacheKey, invalidateCache } from '../lib/cache'
 import { calculateORM } from '../lib/orm'
 import { fetchExercises } from '../data/exercises'
 import { fetchExerciseRankStates, mapExerciseRankStates, upsertExerciseRankStates } from '../data/rankStates'
@@ -15,7 +16,6 @@ import {
 } from '../lib/strengthStandards'
 import {
   MAX_REPS,
-  convertWeight,
   getWeightInputMax,
   getWeightInputMin,
   isRepsWithinInputRange,
@@ -31,7 +31,9 @@ import {
   resolveTierFromScore,
   updateRollingScore,
 } from '../lib/rollingRanks'
+import { useCurrentUserId } from '../context/UserContext'
 import { matchesSearchQuery, scoreExerciseMatch } from '../lib/exerciseSearch'
+import { VALIDATION_LIMITS, validateBodyweight } from '../lib/inputValidation'
 import '../styles/Ranks.css'
 
 const ExerciseDetail = lazy(() => import('./exercise/ExerciseDetail'))
@@ -331,6 +333,7 @@ function TierSwiper({ thresholds, isBW, bodyweightKg, currentTierIdx, fmt, useLb
 }
 
 export default function Ranks({ refreshTick = 0 }) {
+  const userId = useCurrentUserId()
   const [profile, setProfile] = useState(null)
   const [lifts, setLifts] = useState([])
   const [rankDisplayMode, setRankDisplayMode] = useState(readRankDisplayMode)
@@ -342,6 +345,7 @@ export default function Ranks({ refreshTick = 0 }) {
   const [search, setSearch] = useState('')
   const [selectedMuscleGroup, setSelectedMuscleGroup] = useState(null)
   const [bwInput, setBwInput] = useState('')
+  const [bwError, setBwError] = useState('')
   const [bwSaving, setBwSaving] = useState(false)
   const [editingLiftId, setEditingLiftId] = useState(null)
   const [topSetForm, setTopSetForm] = useState({ weight: '', reps: '1' })
@@ -352,6 +356,8 @@ export default function Ranks({ refreshTick = 0 }) {
   const [ormWeight, setOrmWeight] = useState('')
   const [ormReps, setOrmReps] = useState('')
   const [ormUnit, setOrmUnit] = useState('kg')
+  const ormCalcRef = useRef(null)
+  useFocusTrap(ormCalcRef, { active: ormCalcOpen, onEscape: () => setOrmCalcOpen(false) })
 
   useEffect(() => {
     try {
@@ -364,22 +370,35 @@ export default function Ranks({ refreshTick = 0 }) {
   async function saveBW() {
     const val = parseFloat(bwInput)
     const unit = profile?.unit_preference || 'kg'
-    if (!val || val <= 0) return
-    if (convertWeight(val, unit, 'kg') > 600) return
+    if (!userId) return
+    const weightError = validateBodyweight(bwInput, unit)
+    if (weightError) {
+      setBwError(weightError)
+      return
+    }
     setBwSaving(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    await Promise.all([
-      supabase.from('profiles').update({ bodyweight: val }).eq('id', user.id),
-      supabase.from('body_weight_logs').insert({ user_id: user.id, weight: val, unit }),
-    ])
-    invalidateCache('ranks', 'profile', 'home')
-    setProfile(p => ({ ...p, bodyweight: val }))
-    setBwInput('')
-    setBwSaving(false)
+    setBwError('')
+    const timestamp = new Date().toISOString()
+    try {
+      const [{ error: profileError }, { error: logError }] = await Promise.all([
+        supabase.from('profiles').update({ bodyweight: val }).eq('id', userId),
+        supabase.from('body_weight_logs').insert({ user_id: userId, weight: val, unit, logged_at: timestamp }),
+      ])
+      const saveError = profileError || logError
+      if (saveError) throw saveError
+      invalidateCache('ranks', 'profile', 'home', getCalendarMonthCacheKey(timestamp))
+      setProfile(p => ({ ...p, bodyweight: val }))
+      setBwInput('')
+    } catch (error) {
+      setBwError(error?.message || 'Could not save your bodyweight.')
+    } finally {
+      setBwSaving(false)
+    }
   }
 
-  function isValidRanksSnapshot(data) {
+  function isValidRanksSnapshot(data, expectedUserId) {
     return (
+      data?.userId === expectedUserId &&
       data?.profile &&
       Array.isArray(data.lifts) &&
       data.lifts.length > 0 &&
@@ -388,16 +407,17 @@ export default function Ranks({ refreshTick = 0 }) {
   }
 
   async function load() {
+    if (!userId) return
     const cached = getCached('ranks')
-    if (isValidRanksSnapshot(cached)) {
+    if (isValidRanksSnapshot(cached, userId)) {
       setProfile(cached.profile)
       setLifts(cached.lifts)
       setLoading(false)
       return
     }
 
-    const snapshot = getStartupSnapshot('ranks')
-    if (isValidRanksSnapshot(snapshot)) {
+    const snapshot = getStartupSnapshot('ranks', userId)
+    if (isValidRanksSnapshot(snapshot, userId)) {
       setCached('ranks', snapshot)
       setProfile(snapshot.profile)
       setLifts(snapshot.lifts)
@@ -406,18 +426,17 @@ export default function Ranks({ refreshTick = 0 }) {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser()
       const anchorNames = Object.keys(ANCHORS.male)
       const anchorNameSet = new Set(anchorNames)
 
       const [{ data: profileData }, { data: prsData }, exerciseRows, rankStatesResult] = await Promise.all([
-        supabase.from('profiles').select('*').eq('id', user.id).single(),
+        supabase.from('profiles').select('gender, bodyweight, unit_preference').eq('id', userId).single(),
         supabase
           .from('exercise_prs')
           .select('exercise_id, best_1rm_kg')
-          .eq('user_id', user.id),
-        fetchExercises(user.id),
-        fetchExerciseRankStates(user.id),
+          .eq('user_id', userId),
+        fetchExercises(userId),
+        fetchExerciseRankStates(userId),
       ])
 
       // Best ORM per exercise name (from cached PRs table)
@@ -473,9 +492,9 @@ export default function Ranks({ refreshTick = 0 }) {
           activeLastRankedAt: null,
         }))
 
-      const ranksData = { profile: profileData, lifts: [...allLifts, ...cardioLifts] }
+      const ranksData = { userId, profile: profileData, lifts: [...allLifts, ...cardioLifts] }
       setCached('ranks', ranksData)
-      setStartupSnapshot('ranks', ranksData)
+      setStartupSnapshot('ranks', ranksData, undefined, userId)
       setProfile(profileData)
       setLifts(allLifts)
     } catch (err) {
@@ -489,7 +508,7 @@ export default function Ranks({ refreshTick = 0 }) {
   useEffect(() => {
     const timer = setTimeout(() => { load() }, 0)
     return () => clearTimeout(timer)
-  }, [refreshTick]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refreshTick, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function openTopSetEditor(lift) {
     setEditingLiftId(lift.exerciseId)
@@ -587,8 +606,8 @@ export default function Ranks({ refreshTick = 0 }) {
     }
   }, [loading, muscleChartSignature])
 
-  const filteredLifts = useMemo(() => liftsWithDetails
-    .filter(lift => {
+  const filteredLifts = useMemo(() => {
+    const filtered = liftsWithDetails.filter(lift => {
       if (selectedMuscleGroupData && getMuscleContributionWeight(lift, selectedMuscleGroupData) === 0) {
         return false
       }
@@ -602,10 +621,12 @@ export default function Ranks({ refreshTick = 0 }) {
         (lift.secondary_muscles || []).join(' ')
       )
     })
-    .slice()
-    .sort((a, b) => {
-      if (search.trim()) {
-        const diff = scoreExerciseMatch(search, b) - scoreExerciseMatch(search, a)
+    const scores = search.trim()
+      ? new Map(filtered.map(lift => [lift, scoreExerciseMatch(search, lift)]))
+      : null
+    return filtered.slice().sort((a, b) => {
+      if (scores) {
+        const diff = scores.get(b) - scores.get(a)
         if (diff !== 0) return diff
         const lengthDiff = a.name.length - b.name.length
         if (lengthDiff !== 0) return lengthDiff
@@ -617,7 +638,7 @@ export default function Ranks({ refreshTick = 0 }) {
       if (b.cardRank.ratio !== a.cardRank.ratio) return b.cardRank.ratio - a.cardRank.ratio
       return a.name.localeCompare(b.name)
     })
-  , [liftsWithDetails, selectedMuscleGroupData, search])
+  }, [liftsWithDetails, selectedMuscleGroupData, search])
 
   const editingLift = liftsWithDetails.find(lift => lift.exerciseId === editingLiftId) ?? null
   const enteredWeight = Number.parseFloat(topSetForm.weight)
@@ -697,94 +718,99 @@ export default function Ranks({ refreshTick = 0 }) {
     setTopSetSaving(true)
     setTopSetError('')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const unit = useLbs ? 'lbs' : 'kg'
-    const { error } = await supabase.from('workout_sets').insert({
-      user_id: user.id,
-      session_id: null,
-      exercise_id: lift.exerciseId,
-      set_number: 1,
-      reps,
-      weight,
-      unit,
-      estimated_1rm: estimated1RM,
-    })
-
-    if (error) {
+    if (!userId) {
       setTopSetSaving(false)
-      setTopSetError(error.message || 'Could not save your imported top set.')
       return
     }
+    try {
+      const unit = useLbs ? 'lbs' : 'kg'
+      const { error } = await supabase.from('workout_sets').insert({
+        user_id: userId,
+        session_id: null,
+        exercise_id: lift.exerciseId,
+        set_number: 1,
+        reps,
+        weight,
+        unit,
+        estimated_1rm: estimated1RM,
+      })
 
-    const nowIso = new Date().toISOString()
+      if (error) throw error
 
-    await supabase.from('exercise_prs').upsert({
-      user_id: user.id,
-      exercise_id: lift.exerciseId,
-      best_1rm_kg: estimated1RMKg,
-      updated_at: nowIso,
-    }, { onConflict: 'user_id,exercise_id' })
+      const nowIso = new Date().toISOString()
 
-    let nextActiveScore = null
-    let nextActivePeakScore = null
-    if (bodyweightKg && lift.thresholds) {
-      const sessionScore = getLiftScoreFromOrm(lift, estimated1RMKg, bodyweightKg, lift.thresholds)
-      if (sessionScore !== null) {
-        const currentActiveScore = Number.isFinite(lift.activeCurrentScore)
-          ? applyInactivityDecay(
-              Number(lift.activeCurrentScore),
-              lift.activeLastRankedAt,
-              nowIso
-            ).score
-          : (lift.allTimeCardRank ? getContinuousTierScore(lift.allTimeCardRank) : sessionScore)
+      const { error: prError } = await supabase.from('exercise_prs').upsert({
+        user_id: userId,
+        exercise_id: lift.exerciseId,
+        best_1rm_kg: estimated1RMKg,
+        updated_at: nowIso,
+      }, { onConflict: 'user_id,exercise_id' })
+      if (prError) throw prError
 
-        nextActiveScore = updateRollingScore({
-          priorScore: currentActiveScore,
-          priorLastRankedAt: lift.activeLastRankedAt,
-          sessionScore,
-          now: nowIso,
-        })
+      let nextActiveScore = null
+      let nextActivePeakScore = null
+      if (bodyweightKg && lift.thresholds) {
+        const sessionScore = getLiftScoreFromOrm(lift, estimated1RMKg, bodyweightKg, lift.thresholds)
+        if (sessionScore !== null) {
+          const currentActiveScore = Number.isFinite(lift.activeCurrentScore)
+            ? applyInactivityDecay(
+                Number(lift.activeCurrentScore),
+                lift.activeLastRankedAt,
+                nowIso
+              ).score
+            : (lift.allTimeCardRank ? getContinuousTierScore(lift.allTimeCardRank) : sessionScore)
 
-        const previousPeak = Number.isFinite(lift.activePeakScore)
-          ? Number(lift.activePeakScore)
-          : currentActiveScore
-        nextActivePeakScore = Math.max(previousPeak, nextActiveScore)
+          nextActiveScore = updateRollingScore({
+            priorScore: currentActiveScore,
+            priorLastRankedAt: lift.activeLastRankedAt,
+            sessionScore,
+            now: nowIso,
+          })
 
-        await upsertExerciseRankStates(user.id, [{
-          exerciseId: lift.exerciseId,
-          currentScore: nextActiveScore,
-          peakScore: nextActivePeakScore,
-          lastRankedAt: nowIso,
-          updatedAt: nowIso,
-        }])
+          const previousPeak = Number.isFinite(lift.activePeakScore)
+            ? Number(lift.activePeakScore)
+            : currentActiveScore
+          nextActivePeakScore = Math.max(previousPeak, nextActiveScore)
+
+          await upsertExerciseRankStates(userId, [{
+            exerciseId: lift.exerciseId,
+            currentScore: nextActiveScore,
+            peakScore: nextActivePeakScore,
+            lastRankedAt: nowIso,
+            updatedAt: nowIso,
+          }])
+        }
       }
+
+      invalidateCache('ranks', 'profile', 'achievements')
+      setLifts(prev => prev.map(item => (
+        item.exerciseId === lift.exerciseId
+          ? {
+              ...item,
+              ormKg: Math.max(item.ormKg ?? 0, estimated1RMKg),
+              activeCurrentScore: nextActiveScore ?? item.activeCurrentScore,
+              activePeakScore: nextActivePeakScore ?? item.activePeakScore,
+              activeLastRankedAt: nextActiveScore !== null ? nowIso : item.activeLastRankedAt,
+            }
+          : item
+      )))
+
+      const savedAllTimeRank = getLiftRank(lift, estimated1RMKg, bodyweightKg, gender)
+      const savedActiveRank = nextActiveScore !== null && lift.thresholds
+        ? getRankFromScore(lift, nextActiveScore, lift.thresholds)
+        : null
+      const savedRank = isActiveMode ? (savedActiveRank || savedAllTimeRank) : savedAllTimeRank
+      setTopSetNotice(
+        savedRank
+          ? `${lift.name} saved. ${isActiveMode ? 'Active' : 'All-time'} rank: ${savedRank.tier}.`
+          : `${lift.name} saved as your top set.`
+      )
+      closeTopSetEditor()
+    } catch (error) {
+      setTopSetError(error?.message || 'Could not save your imported top set.')
+    } finally {
+      setTopSetSaving(false)
     }
-
-    invalidateCache('ranks', 'profile', 'achievements')
-    setLifts(prev => prev.map(item => (
-      item.exerciseId === lift.exerciseId
-        ? {
-            ...item,
-            ormKg: Math.max(item.ormKg ?? 0, estimated1RMKg),
-            activeCurrentScore: nextActiveScore ?? item.activeCurrentScore,
-            activePeakScore: nextActivePeakScore ?? item.activePeakScore,
-            activeLastRankedAt: nextActiveScore !== null ? nowIso : item.activeLastRankedAt,
-          }
-        : item
-    )))
-
-    const savedAllTimeRank = getLiftRank(lift, estimated1RMKg, bodyweightKg, gender)
-    const savedActiveRank = nextActiveScore !== null && lift.thresholds
-      ? getRankFromScore(lift, nextActiveScore, lift.thresholds)
-      : null
-    const savedRank = isActiveMode ? (savedActiveRank || savedAllTimeRank) : savedAllTimeRank
-    setTopSetNotice(
-      savedRank
-        ? `${lift.name} saved. ${isActiveMode ? 'Active' : 'All-time'} rank: ${savedRank.tier}.`
-        : `${lift.name} saved as your top set.`
-    )
-    setTopSetSaving(false)
-    closeTopSetEditor()
   }
 
   if (detailExerciseId) {
@@ -808,6 +834,87 @@ export default function Ranks({ refreshTick = 0 }) {
         return ormUnit === 'lbs' ? Math.round(resultKg * 2.20462 * 10) / 10 : resultKg
       })()
     : null
+
+  function renderImportPanel({ lift, isBW, isLogged, description }) {
+    const saveLabel = topSetSaving ? 'Saving…' : isLogged ? 'Update top set' : 'Save as top set'
+    const emptyPreviewHint = bodyweightKg
+      ? 'Enter a set to preview the rank.'
+      : 'Set bodyweight first to preview the rank.'
+    return (
+      <div className="lift-import-panel">
+        <div className="lift-import-title">Manual rank update</div>
+        <div className="lift-import-sub">{description}</div>
+        <div className="lift-import-grid">
+          <label className="lift-import-field">
+            <span>{isBW ? 'Added / assisted weight' : 'Weight'}</span>
+            <div className="lift-import-input-wrap">
+              <input
+                className="lift-import-input"
+                type="number"
+                inputMode={getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg) < 0 ? 'text' : 'decimal'}
+                min={String(getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg))}
+                max={String(getWeightInputMax(lift.equipment, useLbs ? 'lbs' : 'kg'))}
+                step="any"
+                value={topSetForm.weight}
+                onChange={e => {
+                  setTopSetForm(prev => ({ ...prev, weight: e.target.value }))
+                  setTopSetError('')
+                  setTopSetNotice('')
+                }}
+              />
+              <span>{useLbs ? 'lbs' : 'kg'}</span>
+            </div>
+          </label>
+          <label className="lift-import-field">
+            <span>Reps</span>
+            <input
+              className="lift-import-input"
+              type="number"
+              min="1"
+              max={String(MAX_REPS)}
+              step="1"
+              value={topSetForm.reps}
+              onChange={e => {
+                setTopSetForm(prev => ({ ...prev, reps: e.target.value }))
+                setTopSetError('')
+                setTopSetNotice('')
+              }}
+            />
+          </label>
+        </div>
+        {previewOrmKg !== null && (
+          <div className="lift-import-preview">
+            <span>Est. 1RM</span>
+            <strong>{fmt(previewOrmKg)}</strong>
+          </div>
+        )}
+        {previewRank ? (
+          <div className="lift-import-rank">
+            <div className="tier-badge" style={{ background: previewRank.color + '22', color: previewRank.color }}>
+              <RankBadge tier={tierGroup(previewRank.tier)} size={18} />
+              {previewRank.tier}
+            </div>
+            <span className="lift-import-ratio">{previewRank.ratio.toFixed(2)}× BW</span>
+          </div>
+        ) : (
+          <div className="lift-import-hint">{emptyPreviewHint}</div>
+        )}
+        {previewOrmKg !== null && !improvesTopSet && (
+          <div className="lift-import-hint">
+            Your current top set is still higher, so saving this would not change your rank.
+          </div>
+        )}
+        {topSetError && <div className="lift-import-error">{topSetError}</div>}
+        <button
+          className="lift-import-save"
+          onClick={() => saveTopSet(lift)}
+          disabled={!weightReady || !repsReady || !improvesTopSet || topSetSaving}
+        >
+          {saveLabel}
+        </button>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -1000,15 +1107,20 @@ export default function Ranks({ refreshTick = 0 }) {
             <input
               className="ranks-bw-input"
               type="number"
+              min={useLbs ? '44.1' : '20'}
+              max={useLbs ? '1322.8' : '600'}
+              step="0.1"
+              inputMode="decimal"
               placeholder={useLbs ? 'e.g. 175' : 'e.g. 80'}
               value={bwInput}
-              onChange={e => setBwInput(e.target.value)}
+              onChange={e => { setBwError(''); setBwInput(e.target.value) }}
             />
             <span className="ranks-bw-unit">{useLbs ? 'lbs' : 'kg'}</span>
             <button className="ranks-bw-save" onClick={saveBW} disabled={bwSaving || !bwInput}>
               {bwSaving ? 'Saving…' : 'Save'}
             </button>
           </div>
+          {bwError && <div className="ranks-notice">{bwError}</div>}
         </div>
       )}
 
@@ -1018,6 +1130,7 @@ export default function Ranks({ refreshTick = 0 }) {
         placeholder={selectedMuscleGroupData ? `Search ${selectedMuscleGroupData.label.toLowerCase()} exercises...` : 'Search exercises...'}
         value={search}
         onChange={e => setSearch(e.target.value)}
+        maxLength={VALIDATION_LIMITS.searchMaxLength}
       />
 
       {loading ? (
@@ -1065,86 +1178,14 @@ export default function Ranks({ refreshTick = 0 }) {
                   {lift.category !== 'Cardio' && <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
                     {isEditing ? 'Cancel' : isLogged ? 'Update top set' : 'Add top set'}
                   </button>}
-                  {lift.category !== 'Cardio' && isEditing && (
-                    <div className="lift-import-panel">
-                      <div className="lift-import-title">Manual rank update</div>
-                      <div className="lift-import-sub">
-                        {lift.equipment === 'Bodyweight'
-                          ? 'Enter the added or assisted weight for your best set. Use a negative number for assisted machine reps.'
-                          : 'Enter your best set and we’ll use it as your imported top set.'}
-                      </div>
-                      <div className="lift-import-grid">
-                        <label className="lift-import-field">
-                          <span>{lift.equipment === 'Bodyweight' ? 'Added / assisted weight' : 'Weight'}</span>
-                          <div className="lift-import-input-wrap">
-                            <input
-                              className="lift-import-input"
-                              type="number"
-                              inputMode={getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg) < 0 ? 'text' : 'decimal'}
-                              min={String(getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg))}
-                              max={String(getWeightInputMax(lift.equipment, useLbs ? 'lbs' : 'kg'))}
-                              step="any"
-                              value={topSetForm.weight}
-                              onChange={e => {
-                                setTopSetForm(prev => ({ ...prev, weight: e.target.value }))
-                                setTopSetError('')
-                                setTopSetNotice('')
-                              }}
-                            />
-                            <span>{useLbs ? 'lbs' : 'kg'}</span>
-                          </div>
-                        </label>
-                        <label className="lift-import-field">
-                          <span>Reps</span>
-                          <input
-                            className="lift-import-input"
-                            type="number"
-                            min="1"
-                            max={String(MAX_REPS)}
-                            step="1"
-                            value={topSetForm.reps}
-                            onChange={e => {
-                              setTopSetForm(prev => ({ ...prev, reps: e.target.value }))
-                              setTopSetError('')
-                              setTopSetNotice('')
-                            }}
-                          />
-                        </label>
-                      </div>
-                      {previewOrmKg !== null && (
-                        <div className="lift-import-preview">
-                          <span>Est. 1RM</span>
-                          <strong>{fmt(previewOrmKg)}</strong>
-                        </div>
-                      )}
-                      {previewRank ? (
-                        <div className="lift-import-rank">
-                          <div className="tier-badge" style={{ background: previewRank.color + '22', color: previewRank.color }}>
-                            <RankBadge tier={tierGroup(previewRank.tier)} size={18} />
-                            {previewRank.tier}
-                          </div>
-                          <span className="lift-import-ratio">{previewRank.ratio.toFixed(2)}× BW</span>
-                        </div>
-                      ) : (
-                        <div className="lift-import-hint">
-                          {bodyweightKg ? 'Enter a set to preview the rank.' : 'Set bodyweight first to preview the rank.'}
-                        </div>
-                      )}
-                      {previewOrmKg !== null && !improvesTopSet && (
-                        <div className="lift-import-hint">
-                          Your current top set is still higher, so saving this would not change your rank.
-                        </div>
-                      )}
-                      {topSetError && <div className="lift-import-error">{topSetError}</div>}
-                      <button
-                        className="lift-import-save"
-                        onClick={() => saveTopSet(lift)}
-                        disabled={!weightReady || !repsReady || !improvesTopSet || topSetSaving}
-                      >
-                        {topSetSaving ? 'Saving…' : isLogged ? 'Update top set' : 'Save as top set'}
-                      </button>
-                    </div>
-                  )}
+                  {lift.category !== 'Cardio' && isEditing && renderImportPanel({
+                    lift,
+                    isBW: lift.equipment === 'Bodyweight',
+                    isLogged,
+                    description: lift.equipment === 'Bodyweight'
+                      ? 'Enter the added or assisted weight for your best set. Use a negative number for assisted machine reps.'
+                      : "Enter your best set and we’ll use it as your imported top set.",
+                  })}
                 </div>
               )
             }
@@ -1191,84 +1232,14 @@ export default function Ranks({ refreshTick = 0 }) {
                 <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
                   {isEditing ? 'Cancel' : 'Update top set'}
                 </button>
-                {isEditing && (
-                  <div className="lift-import-panel">
-                    <div className="lift-import-title">Manual rank update</div>
-                    <div className="lift-import-sub">
-                      {isBW
-                        ? 'Enter the added or assisted weight for your imported best set. Use a negative number for assisted machine reps.'
-                        : 'Enter a better top set to update your best lift and rank.'}
-                    </div>
-                    <div className="lift-import-grid">
-                      <label className="lift-import-field">
-                        <span>{isBW ? 'Added / assisted weight' : 'Weight'}</span>
-                        <div className="lift-import-input-wrap">
-                          <input
-                            className="lift-import-input"
-                            type="number"
-                            inputMode={getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg) < 0 ? 'text' : 'decimal'}
-                            min={String(getWeightInputMin(lift.equipment, useLbs ? 'lbs' : 'kg', bodyweightKg))}
-                            max={String(getWeightInputMax(lift.equipment, useLbs ? 'lbs' : 'kg'))}
-                            step="any"
-                            value={topSetForm.weight}
-                            onChange={e => {
-                              setTopSetForm(prev => ({ ...prev, weight: e.target.value }))
-                              setTopSetError('')
-                              setTopSetNotice('')
-                            }}
-                          />
-                          <span>{useLbs ? 'lbs' : 'kg'}</span>
-                        </div>
-                      </label>
-                      <label className="lift-import-field">
-                        <span>Reps</span>
-                        <input
-                          className="lift-import-input"
-                          type="number"
-                          min="1"
-                          max={String(MAX_REPS)}
-                          step="1"
-                          value={topSetForm.reps}
-                          onChange={e => {
-                            setTopSetForm(prev => ({ ...prev, reps: e.target.value }))
-                            setTopSetError('')
-                            setTopSetNotice('')
-                          }}
-                        />
-                      </label>
-                    </div>
-                    {previewOrmKg !== null && (
-                      <div className="lift-import-preview">
-                        <span>Est. 1RM</span>
-                        <strong>{fmt(previewOrmKg)}</strong>
-                      </div>
-                    )}
-                    {previewRank ? (
-                      <div className="lift-import-rank">
-                        <div className="tier-badge" style={{ background: previewRank.color + '22', color: previewRank.color }}>
-                          <RankBadge tier={tierGroup(previewRank.tier)} size={18} />
-                          {previewRank.tier}
-                        </div>
-                        <span className="lift-import-ratio">{previewRank.ratio.toFixed(2)}× BW</span>
-                      </div>
-                    ) : (
-                      <div className="lift-import-hint">Enter a set to preview the updated rank.</div>
-                    )}
-                    {previewOrmKg !== null && !improvesTopSet && (
-                      <div className="lift-import-hint">
-                        Your current top set is still higher, so saving this would not change your rank.
-                      </div>
-                    )}
-                    {topSetError && <div className="lift-import-error">{topSetError}</div>}
-                    <button
-                      className="lift-import-save"
-                      onClick={() => saveTopSet(lift)}
-                      disabled={!weightReady || !repsReady || !improvesTopSet || topSetSaving}
-                    >
-                      {topSetSaving ? 'Saving…' : 'Update top set'}
-                    </button>
-                  </div>
-                )}
+                {isEditing && renderImportPanel({
+                  lift,
+                  isBW,
+                  isLogged: true,
+                  description: isBW
+                    ? 'Enter the added or assisted weight for your imported best set. Use a negative number for assisted machine reps.'
+                    : 'Enter a better top set to update your best lift and rank.',
+                })}
               </div>
             )
           })}
@@ -1278,7 +1249,7 @@ export default function Ranks({ refreshTick = 0 }) {
 
     {ormCalcOpen && createPortal(
       <div className="confirm-overlay" onClick={() => setOrmCalcOpen(false)}>
-        <div className="confirm-sheet orm-calc-sheet" onClick={e => e.stopPropagation()}>
+        <div className="confirm-sheet orm-calc-sheet" onClick={e => e.stopPropagation()} ref={ormCalcRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="1RM Calculator">
           <div className="orm-calc-header">
             <div className="orm-calc-title">1RM Calculator</div>
             <div className="unit-toggle">

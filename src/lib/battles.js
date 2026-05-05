@@ -1,8 +1,24 @@
 import { supabase } from './supabase'
 import { calculateORM } from './orm'
 import { DEFAULT_BODYWEIGHT_KG, getSetVolumeKg, toKg } from './liftMath'
+import { CARDIO_MET } from '../data/metValues'
 
 const BATTLE_HEAD_TO_HEAD_TABLE = 'battle_head_to_head'
+const FALLBACK_CARDIO_MET = 6.0
+
+export const BATTLE_MODES = ['strength', 'hybrid', 'cardio']
+export const DEFAULT_BATTLE_MODE = 'hybrid'
+
+export function normalizeBattleMode(mode) {
+  return BATTLE_MODES.includes(mode) ? mode : DEFAULT_BATTLE_MODE
+}
+
+export function getBattleModeLabel(mode) {
+  const normalized = normalizeBattleMode(mode)
+  if (normalized === 'strength') return 'Strength'
+  if (normalized === 'cardio') return 'Cardio'
+  return 'Hybrid'
+}
 
 async function fetchProfilesByIds(ids) {
   if (!ids.length) return {}
@@ -46,6 +62,110 @@ function compareMetric(yourValue, opponentValue) {
   if (yourValue === null || opponentValue === null) return null
   if (Math.abs(yourValue - opponentValue) <= 0.01) return 'tie'
   return yourValue > opponentValue ? 'you' : 'opponent'
+}
+
+function positiveMinutes(seconds) {
+  const minutes = (Number(seconds) || 0) / 60
+  return minutes > 0 ? minutes : null
+}
+
+function createMetric(id, label, yourValue, opponentValue, display, extra = {}) {
+  const available = yourValue !== null && opponentValue !== null
+  return {
+    id,
+    label,
+    yourValue: available ? yourValue : null,
+    opponentValue: available ? opponentValue : null,
+    display,
+    winner: compareMetric(available ? yourValue : null, available ? opponentValue : null),
+    available,
+    ...extra,
+  }
+}
+
+function buildBattleMetrics(mode, yourStats, opponentStats) {
+  const sharedExerciseIds = [...yourStats.exerciseStats.keys()]
+    .filter(exerciseId => opponentStats.exerciseStats.has(exerciseId))
+  const hasSharedStrength = sharedExerciseIds.length > 0
+
+  const yourStrengthVolumeBw = yourStats.strengthVolumeKg / yourStats.bodyweightKg
+  const opponentStrengthVolumeBw = opponentStats.strengthVolumeKg / opponentStats.bodyweightKg
+  const yourSharedVolumeBw = hasSharedStrength
+    ? sharedExerciseIds.reduce((sum, exerciseId) => {
+      const exercise = yourStats.exerciseStats.get(exerciseId)
+      return sum + (exercise ? exercise.volumeKg / yourStats.bodyweightKg : 0)
+    }, 0)
+    : null
+  const opponentSharedVolumeBw = hasSharedStrength
+    ? sharedExerciseIds.reduce((sum, exerciseId) => {
+      const exercise = opponentStats.exerciseStats.get(exerciseId)
+      return sum + (exercise ? exercise.volumeKg / opponentStats.bodyweightKg : 0)
+    }, 0)
+    : null
+  const yourSharedOrmBw = hasSharedStrength
+    ? sharedExerciseIds.reduce((sum, exerciseId) => {
+      const exercise = yourStats.exerciseStats.get(exerciseId)
+      if (!exercise) return sum
+      return sum + (
+        exercise.isBodyweight
+          ? (exercise.bestOrmKg + yourStats.bodyweightKg) / yourStats.bodyweightKg
+          : exercise.bestOrmKg / yourStats.bodyweightKg
+      )
+    }, 0)
+    : null
+  const opponentSharedOrmBw = hasSharedStrength
+    ? sharedExerciseIds.reduce((sum, exerciseId) => {
+      const exercise = opponentStats.exerciseStats.get(exerciseId)
+      if (!exercise) return sum
+      return sum + (
+        exercise.isBodyweight
+          ? (exercise.bestOrmKg + opponentStats.bodyweightKg) / opponentStats.bodyweightKg
+          : exercise.bestOrmKg / opponentStats.bodyweightKg
+      )
+    }, 0)
+    : null
+
+  const yourWorkoutMinutes = positiveMinutes(yourStats.durationSeconds) || positiveMinutes(yourStats.lastEventDurationSeconds) || positiveMinutes(yourStats.cardioDurationSeconds)
+  const opponentWorkoutMinutes = positiveMinutes(opponentStats.durationSeconds) || positiveMinutes(opponentStats.lastEventDurationSeconds) || positiveMinutes(opponentStats.cardioDurationSeconds)
+  const yourCardioMinutes = positiveMinutes(yourStats.cardioDurationSeconds)
+  const opponentCardioMinutes = positiveMinutes(opponentStats.cardioDurationSeconds)
+  const yourCardioDensity = yourCardioMinutes ? yourStats.cardioMetMinutes / yourCardioMinutes : null
+  const opponentCardioDensity = opponentCardioMinutes ? opponentStats.cardioMetMinutes / opponentCardioMinutes : null
+  const yourOverallDensity = yourWorkoutMinutes
+    ? (yourStrengthVolumeBw + yourStats.cardioMetMinutes) / yourWorkoutMinutes
+    : null
+  const opponentOverallDensity = opponentWorkoutMinutes
+    ? (opponentStrengthVolumeBw + opponentStats.cardioMetMinutes) / opponentWorkoutMinutes
+    : null
+
+  const common = {
+    strengthVolume: () => createMetric('strength_volume_bw', 'Strength Volume / BW', yourStrengthVolumeBw, opponentStrengthVolumeBw, 'x BW volume'),
+    sharedVolume: () => createMetric('shared_volume_bw', 'Shared Lift Volume / BW', yourSharedVolumeBw, opponentSharedVolumeBw, 'x BW volume', { unavailableText: 'Needs at least one shared strength lift' }),
+    sharedOrm: () => createMetric('shared_orm_bw', 'Shared Lift Top Set / BW', yourSharedOrmBw, opponentSharedOrmBw, 'x BW strength', { unavailableText: 'Needs at least one shared strength lift' }),
+    cardioMet: () => createMetric('cardio_met_minutes', 'Cardio MET-Minutes', yourStats.cardioMetMinutes, opponentStats.cardioMetMinutes, 'MET-min'),
+    cardioDuration: () => createMetric('cardio_duration', 'Cardio Duration', yourStats.cardioDurationSeconds / 60, opponentStats.cardioDurationSeconds / 60, 'min'),
+    cardioDensity: () => createMetric('cardio_density', 'Cardio Density', yourCardioDensity, opponentCardioDensity, 'MET-min / min', { unavailableText: 'Needs completed cardio from both lifters' }),
+    overallDensity: () => createMetric('overall_density', 'Overall Work Density', yourOverallDensity, opponentOverallDensity, 'score / min', { unavailableText: 'Needs workout time from both lifters' }),
+  }
+
+  if (mode === 'strength') {
+    return { metrics: [common.strengthVolume(), common.sharedVolume(), common.sharedOrm()], sharedExerciseCount: sharedExerciseIds.length }
+  }
+
+  if (mode === 'cardio') {
+    return { metrics: [common.cardioMet(), common.cardioDuration(), common.cardioDensity()], sharedExerciseCount: sharedExerciseIds.length }
+  }
+
+  return {
+    metrics: [
+      common.strengthVolume(),
+      common.sharedOrm(),
+      common.cardioMet(),
+      common.cardioDensity(),
+      common.overallDensity(),
+    ],
+    sharedExerciseCount: sharedExerciseIds.length,
+  }
 }
 
 function isMissingBattleHeadToHeadTable(error) {
@@ -141,7 +261,7 @@ async function upsertHeadToHeadSummaries(userId, summariesByOpponent = {}) {
 async function findPendingBattleInviteBetween(userA, userB) {
   const { data, error } = await supabase
     .from('battle_invites')
-    .select('id, challenger_id, challenged_id, status, room_id, created_at, responded_at')
+    .select('id, challenger_id, challenged_id, status, room_id, battle_mode, created_at, responded_at')
     .eq('status', 'pending')
     .or(`and(challenger_id.eq.${userA},challenged_id.eq.${userB}),and(challenger_id.eq.${userB},challenged_id.eq.${userA})`)
     .order('created_at', { ascending: false })
@@ -151,7 +271,7 @@ async function findPendingBattleInviteBetween(userA, userB) {
   return data?.[0] ?? null
 }
 
-export async function createBattleInvite(challengerId, challengedId) {
+export async function createBattleInvite(challengerId, challengedId, battleMode = DEFAULT_BATTLE_MODE) {
   const profilesById = await fetchProfilesByIds([challengerId, challengedId])
   const challenger = profilesById[challengerId]
   const challenged = profilesById[challengedId]
@@ -172,8 +292,9 @@ export async function createBattleInvite(challengerId, challengedId) {
     .insert({
       challenger_id: challengerId,
       challenged_id: challengedId,
+      battle_mode: normalizeBattleMode(battleMode),
     })
-    .select('id, challenger_id, challenged_id, status, room_id, created_at, responded_at')
+    .select('id, challenger_id, challenged_id, status, room_id, battle_mode, created_at, responded_at')
     .single()
 
   if (error) throw error
@@ -183,7 +304,7 @@ export async function createBattleInvite(challengerId, challengedId) {
 export async function loadPendingBattleInvite(userId) {
   const { data, error } = await supabase
     .from('battle_invites')
-    .select('id, challenger_id, challenged_id, status, room_id, created_at, responded_at')
+    .select('id, challenger_id, challenged_id, status, room_id, battle_mode, created_at, responded_at')
     .eq('challenged_id', userId)
     .eq('status', 'pending')
     .order('created_at', { ascending: false })
@@ -205,7 +326,7 @@ export async function loadPendingBattleInvite(userId) {
 export async function loadLatestDeclinedBattleInvite(userId) {
   const { data, error } = await supabase
     .from('battle_invites')
-    .select('id, challenger_id, challenged_id, status, room_id, created_at, responded_at')
+    .select('id, challenger_id, challenged_id, status, room_id, battle_mode, created_at, responded_at')
     .eq('challenger_id', userId)
     .eq('status', 'declined')
     .not('responded_at', 'is', null)
@@ -333,7 +454,7 @@ export async function loadHeadToHeadByOpponent(userId, opponentIds) {
 export async function loadActiveBattleRoom(userId) {
   const { data, error } = await supabase
     .from('workout_rooms')
-    .select('id, invite_id, challenger_id, challenged_id, status, created_at, ended_at')
+    .select('id, invite_id, challenger_id, challenged_id, status, battle_mode, created_at, ended_at')
     .or(`challenger_id.eq.${userId},challenged_id.eq.${userId}`)
     .eq('status', 'active')
     .order('created_at', { ascending: false })
@@ -372,7 +493,7 @@ export async function loadActiveBattleRoom(userId) {
 export async function loadUnseenBattleResult(userId) {
   const { data, error } = await supabase
     .from('workout_rooms')
-    .select('id, challenger_id, challenged_id, status, created_at, ended_at, finalized_at, challenger_seen_result_at, challenged_seen_result_at')
+    .select('id, challenger_id, challenged_id, status, battle_mode, created_at, ended_at, finalized_at, challenger_seen_result_at, challenged_seen_result_at')
     .in('status', ['finished', 'cancelled'])
     .not('finalized_at', 'is', null)
     .or(
@@ -437,8 +558,9 @@ export async function respondToBattleInvite(invite, action) {
       invite_id: invite.id,
       challenger_id: invite.challenger_id,
       challenged_id: invite.challenged_id,
+      battle_mode: normalizeBattleMode(invite.battle_mode),
     })
-    .select('id, invite_id, challenger_id, challenged_id, status, created_at, ended_at')
+    .select('id, invite_id, challenger_id, challenged_id, status, battle_mode, created_at, ended_at')
     .single()
 
   if (roomError) throw roomError
@@ -592,7 +714,7 @@ export async function loadBattleRecap(roomId, userId) {
   const [{ data: room, error: roomError }, { data: events, error: eventsError }] = await Promise.all([
     supabase
       .from('workout_rooms')
-      .select('id, challenger_id, challenged_id, status, created_at, ended_at, finalized_at')
+      .select('id, challenger_id, challenged_id, status, battle_mode, created_at, ended_at, finalized_at')
       .eq('id', roomId)
       .single(),
     supabase
@@ -606,6 +728,7 @@ export async function loadBattleRecap(roomId, userId) {
   if (eventsError) throw eventsError
   if (!room) return null
 
+  const battleMode = normalizeBattleMode(room.battle_mode)
   const opponentId = room.challenger_id === userId ? room.challenged_id : room.challenger_id
   const profilesById = await fetchProfilesByIds([userId, opponentId])
   const bodyweightsById = resolveBattleBodyweights(profilesById, userId, opponentId)
@@ -616,7 +739,7 @@ export async function loadBattleRecap(roomId, userId) {
   const exercisesById = exerciseIds.length
     ? Object.fromEntries(((await supabase
       .from('exercises')
-      .select('id, equipment, name')
+      .select('id, category, equipment, name')
       .in('id', exerciseIds)).data ?? []).map(exercise => [exercise.id, exercise]))
     : {}
 
@@ -628,8 +751,12 @@ export async function loadBattleRecap(roomId, userId) {
     totalExercises: 0,
     totalVolume: 0,
     totalVolumeKg: 0,
+    strengthVolumeKg: 0,
+    cardioDurationSeconds: 0,
+    cardioMetMinutes: 0,
     unit: 'kg',
     durationSeconds: null,
+    lastEventDurationSeconds: null,
     finished: false,
     cancelled: false,
     stale: false,
@@ -657,10 +784,12 @@ export async function loadBattleRecap(roomId, userId) {
     if (event.event_type === 'set_completed' || event.event_type === 'set_removed') {
       const fallbackExerciseId = payload.exerciseName || `${event.user_id}-${payload.setNumber || 'set'}`
       const exerciseId = payload.exerciseId || fallbackExerciseId
-      const exerciseMeta = typeof exerciseId === 'number' ? exercisesById[exerciseId] : null
+      const exerciseMeta = exercisesById[exerciseId] || null
       const exerciseName = payload.exerciseName || exerciseMeta?.name || 'Exercise'
       const unit = payload.unit || stats.unit || 'kg'
       const ledgerKey = `${exerciseId}:${Number(payload.setNumber) || 1}`
+      const durationSeconds = Number(payload.durationSeconds ?? payload.duration_seconds)
+      const category = payload.category || exerciseMeta?.category || (Number.isFinite(durationSeconds) && durationSeconds > 0 ? 'Cardio' : 'Strength')
 
       stats.unit = unit
       if (exerciseName) stats.exercises.add(exerciseName)
@@ -669,9 +798,12 @@ export async function loadBattleRecap(roomId, userId) {
         stats.setLedger.set(ledgerKey, {
           exerciseId,
           exerciseName,
+          category,
           unit,
           weight: Number(payload.weight) || 0,
           reps: Number(payload.reps) || 0,
+          durationSeconds: Number.isFinite(durationSeconds) ? Math.max(0, durationSeconds) : 0,
+          met: Number(payload.met) || CARDIO_MET[exerciseName] || FALLBACK_CARDIO_MET,
           isBodyweight: payload.equipment === 'Bodyweight' || exerciseMeta?.equipment === 'Bodyweight',
         })
       } else {
@@ -707,9 +839,18 @@ export async function loadBattleRecap(roomId, userId) {
     stats.totalSets = stats.setLedger.size
     stats.totalVolume = 0
     stats.totalVolumeKg = 0
+    stats.strengthVolumeKg = 0
+    stats.cardioDurationSeconds = 0
+    stats.cardioMetMinutes = 0
     stats.exerciseStats = new Map()
 
     for (const setEntry of stats.setLedger.values()) {
+      if (setEntry.category === 'Cardio' || setEntry.durationSeconds > 0) {
+        stats.cardioDurationSeconds += setEntry.durationSeconds
+        stats.cardioMetMinutes += (setEntry.met || FALLBACK_CARDIO_MET) * (setEntry.durationSeconds / 60)
+        continue
+      }
+
       const setVolumeKg = getSetVolumeKg({
         weight: setEntry.weight,
         reps: setEntry.reps,
@@ -724,6 +865,7 @@ export async function loadBattleRecap(roomId, userId) {
 
       stats.totalVolume += setVolume
       stats.totalVolumeKg += setVolumeKg
+      stats.strengthVolumeKg += setVolumeKg
 
       const prior = stats.exerciseStats.get(setEntry.exerciseId) || {
         id: setEntry.exerciseId,
@@ -743,77 +885,17 @@ export async function loadBattleRecap(roomId, userId) {
     }
 
     stats.totalExercises = stats.exercises.size
+    if (!stats.durationSeconds && room.created_at && room.status === 'active') {
+      const elapsed = Math.floor((Date.now() - Date.parse(room.created_at)) / 1000)
+      stats.lastEventDurationSeconds = Number.isFinite(elapsed) && elapsed > 0 ? elapsed : null
+    }
     delete stats.exercises
     delete stats.setLedger
   }
 
   const yourStats = statsByUser.get(userId) || makeStats(userId)
   const opponentStats = statsByUser.get(opponentId) || makeStats(opponentId)
-  const yourTotalVolumeBw = yourStats.totalVolumeKg / yourStats.bodyweightKg
-  const opponentTotalVolumeBw = opponentStats.totalVolumeKg / opponentStats.bodyweightKg
-  const sharedExerciseIds = [...yourStats.exerciseStats.keys()].filter(exerciseId => opponentStats.exerciseStats.has(exerciseId))
-  const yourSharedVolumeBw = sharedExerciseIds.reduce((sum, exerciseId) => {
-    const exercise = yourStats.exerciseStats.get(exerciseId)
-    return sum + (exercise ? exercise.volumeKg / yourStats.bodyweightKg : 0)
-  }, 0)
-  const opponentSharedVolumeBw = sharedExerciseIds.reduce((sum, exerciseId) => {
-    const exercise = opponentStats.exerciseStats.get(exerciseId)
-    return sum + (exercise ? exercise.volumeKg / opponentStats.bodyweightKg : 0)
-  }, 0)
-  const yourSharedOrmBw = sharedExerciseIds.reduce((sum, exerciseId) => {
-    const exercise = yourStats.exerciseStats.get(exerciseId)
-    if (!exercise) return sum
-    return sum + (
-      exercise.isBodyweight
-        ? (exercise.bestOrmKg + yourStats.bodyweightKg) / yourStats.bodyweightKg
-        : exercise.bestOrmKg / yourStats.bodyweightKg
-    )
-  }, 0)
-  const opponentSharedOrmBw = sharedExerciseIds.reduce((sum, exerciseId) => {
-    const exercise = opponentStats.exerciseStats.get(exerciseId)
-    if (!exercise) return sum
-    return sum + (
-      exercise.isBodyweight
-        ? (exercise.bestOrmKg + opponentStats.bodyweightKg) / opponentStats.bodyweightKg
-        : exercise.bestOrmKg / opponentStats.bodyweightKg
-    )
-  }, 0)
-
-  const metrics = [
-    {
-      id: 'total_volume_bw',
-      label: 'Total Volume / BW',
-      yourValue: yourTotalVolumeBw,
-      opponentValue: opponentTotalVolumeBw,
-      display: 'x BW volume',
-      winner: compareMetric(yourTotalVolumeBw, opponentTotalVolumeBw),
-      available: true,
-    },
-    {
-      id: 'shared_volume_bw',
-      label: 'Shared Lift Volume / BW',
-      yourValue: sharedExerciseIds.length ? yourSharedVolumeBw : null,
-      opponentValue: sharedExerciseIds.length ? opponentSharedVolumeBw : null,
-      display: 'x BW volume',
-      winner: compareMetric(
-        sharedExerciseIds.length ? yourSharedVolumeBw : null,
-        sharedExerciseIds.length ? opponentSharedVolumeBw : null
-      ),
-      available: sharedExerciseIds.length > 0,
-    },
-    {
-      id: 'shared_orm_bw',
-      label: 'Shared Lift Top Set / BW',
-      yourValue: sharedExerciseIds.length ? yourSharedOrmBw : null,
-      opponentValue: sharedExerciseIds.length ? opponentSharedOrmBw : null,
-      display: 'x BW strength',
-      winner: compareMetric(
-        sharedExerciseIds.length ? yourSharedOrmBw : null,
-        sharedExerciseIds.length ? opponentSharedOrmBw : null
-      ),
-      available: sharedExerciseIds.length > 0,
-    },
-  ]
+  const { metrics, sharedExerciseCount } = buildBattleMetrics(battleMode, yourStats, opponentStats)
 
   const points = metrics.reduce((score, metric) => {
     if (metric.winner === 'you') return { ...score, you: score.you + 1 }
@@ -860,6 +942,8 @@ export async function loadBattleRecap(roomId, userId) {
 
   return {
     roomId,
+    battleMode,
+    battleModeLabel: getBattleModeLabel(battleMode),
     created_at: room.created_at,
     ended_at: room.ended_at,
     finalized_at: room.finalized_at,
@@ -868,7 +952,7 @@ export async function loadBattleRecap(roomId, userId) {
     verdict,
     points,
     metrics,
-    sharedExerciseCount: sharedExerciseIds.length,
+    sharedExerciseCount,
     bodyweightFallbackUsed: bodyweightsById.fallback,
     yourStats,
     opponentStats,

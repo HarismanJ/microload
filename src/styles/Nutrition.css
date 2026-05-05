@@ -62,6 +62,7 @@
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--blue) 20%, var(--border));
 }
+.nut-date-btn:not(:disabled):active { transform: scale(0.90); }
 
 .nut-date-label {
   font-size: 16px;
@@ -279,6 +280,7 @@
   transform: translateY(-1px);
   box-shadow: 0 10px 18px rgba(0, 0, 0, 0.12);
 }
+.nut-add-btn:active { transform: scale(0.90); box-shadow: none; }
 
 .nut-food-list { border-top: 1px solid var(--border); }
 
@@ -296,6 +298,7 @@
 .nut-food-item:hover {
   background: color-mix(in srgb, var(--surface2) 82%, white 18%);
 }
+.nut-food-item:active { background: color-mix(in srgb, var(--blue) 8%, var(--surface2)); }
 
 .nut-food-info { flex: 1; min-width: 0; }
 
@@ -357,6 +360,7 @@
   transform: scale(1.08);
   background: rgba(239, 68, 68, 0.08);
 }
+.nut-remove-btn:active { transform: scale(0.88); color: #ef4444; }
 
 .nut-meal-empty {
   padding: 10px 16px 13px;
@@ -428,6 +432,7 @@
   transform: translateY(-1px);
   opacity: 0.94;
 }
+.nut-feed-add-btn:active { transform: scale(0.96); box-shadow: none; opacity: 1; }
 
 .nut-feed-add-btn-inline {
   align-self: flex-start;
@@ -462,6 +467,7 @@
   transform: translateY(-1px);
   color: var(--text);
 }
+.nut-feed-filter:active { transform: scale(0.93); }
 
 .nut-feed-filter.active {
   background: var(--blue-dim);
@@ -499,6 +505,7 @@
   transform: translateY(-1px);
   color: var(--text);
 }
+.nut-feed-order-btn:active { transform: scale(0.90); }
 
 .nut-feed-order-btn.active {
   background: var(--blue-dim);
@@ -571,6 +578,7 @@
   border-color: color-mix(in srgb, var(--blue) 16%, var(--border));
   box-shadow: 0 12px 22px rgba(0, 0, 0, 0.12);
 }
+.nut-feed-card:active { transform: scale(0.99); box-shadow: none; }
 
 .nut-feed-card-top {
   display: flex;
@@ -677,6 +685,7 @@
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.26);
 }
+.nut-feed-remove-btn:active { transform: scale(0.93); }
 
 .nut-feed-delete-confirm {
   display: flex;
@@ -1089,6 +1098,44 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
+}
+
+.nut-detail-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.nut-detail-actions > * {
+  flex: 1;
+}
+
+.nut-detail-edit-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 16px;
+  cursor: pointer;
+  transition: transform 0.26s ease, border-color 0.26s ease, background 0.26s ease, box-shadow 0.26s ease;
+}
+
+.nut-detail-edit-btn:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue) 20%, var(--border));
+  background: color-mix(in srgb, var(--surface2) 84%, white 16%);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.12);
+}
+
+.nut-edited-note {
+  font-size: 13px;
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--border));
+  border-radius: 12px;
+  padding: 12px 14px;
+  line-height: 1.45;
 }
 
 .nut-add-to-log-btn {
@@ -1851,7 +1898,9 @@
   font-weight: 500;
   padding: 10px;
   cursor: pointer;
+  transition: transform 0.18s ease;
 }
+.nut-goals-cancel:active { transform: scale(0.97); }
 
 .nut-goals-save {
   background: var(--blue);
@@ -1867,6 +1916,7 @@
 
 .nut-goals-save:disabled { opacity: 0.6; cursor: not-allowed; }
 .nut-goals-save:hover:not(:disabled) { opacity: 0.85; }
+.nut-goals-save:not(:disabled):active { transform: scale(0.97); }
 
 /* ── AI button in picker header ──────────────────────── */
 
@@ -2621,6 +2671,7 @@
   .nut-serving-card,
   .nut-preview-card,
   .nut-micros-card,
+  .nut-detail-edit-btn,
   .nut-add-to-log-btn,
   .nut-detail-card,
   .nut-micros-summary,
@@ -2628,6 +2679,8 @@
   .cf-section,
   .cf-toggle-micros,
   .nut-goals-btn,
+  .nut-goals-cancel,
+  .nut-goals-save,
   .nut-goals-panel,
   .ai-entry-analyze-btn,
   .ai-limit-card,

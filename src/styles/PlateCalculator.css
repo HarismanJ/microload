@@ -1,0 +1,260 @@
+.plate-calc-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 300;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+
+.plate-calc-overlay.open {
+  opacity: 1;
+}
+
+.plate-calc-overlay.closing {
+  opacity: 0;
+}
+
+.plate-calc-sheet {
+  background: var(--surface);
+  border-radius: 18px 18px 0 0;
+  padding: 20px 20px 32px;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  transform: translateY(18px);
+  opacity: 0.96;
+  transition:
+    transform 0.24s cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 0.18s ease;
+  will-change: transform, opacity;
+}
+
+.plate-calc-sheet.open {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.plate-calc-sheet.closing {
+  transform: translateY(18px);
+  opacity: 0.96;
+}
+
+.plate-calc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.plate-calc-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.plate-calc-close {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  transition: transform 0.15s ease;
+}
+.plate-calc-close:active { transform: scale(0.88); }
+
+.plate-calc-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.plate-calc-bar-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.plate-calc-bar-btn {
+  flex: 1;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.plate-calc-bar-btn.active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: rgba(59, 158, 255, 0.08);
+}
+.plate-calc-bar-btn:active { transform: scale(0.95); }
+
+.plate-calc-bar-weight {
+  font-size: 11px;
+  font-weight: 400;
+  color: inherit;
+  opacity: 0.8;
+}
+
+.plate-calc-plates-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.plate-calc-plate-btn {
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.plate-calc-plate-btn:active {
+  background: var(--blue-dim, rgba(59,158,255,0.12));
+  border-color: var(--blue);
+}
+
+.plate-calc-clear {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  transition: transform 0.15s ease;
+}
+.plate-calc-clear:active { transform: scale(0.90); }
+
+.plate-calc-per-side {
+  min-height: 38px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 18px;
+  align-items: center;
+}
+
+.plate-calc-empty {
+  font-size: 13px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.plate-calc-tag {
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 10px 4px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.plate-calc-tag:active {
+  background: rgba(255, 80, 80, 0.1);
+  border-color: rgba(255, 80, 80, 0.4);
+}
+
+.plate-calc-total-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  margin-bottom: 16px;
+}
+
+.plate-calc-total-formula {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.plate-calc-total-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.plate-calc-confirm {
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+  transition: opacity 0.15s;
+}
+
+.plate-calc-confirm:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.plate-calc-confirm:not(:disabled):active {
+  opacity: 0.85;
+}
+
+/* Plate icon button in set rows — sits below the weight input */
+.plate-icon-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--blue);
+  display: flex;
+  align-items: center;
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+
+.plate-icon-btn:active {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plate-calc-overlay,
+  .plate-calc-sheet,
+  .plate-calc-close,
+  .plate-calc-bar-btn,
+  .plate-calc-clear {
+    transition: none;
+  }
+}

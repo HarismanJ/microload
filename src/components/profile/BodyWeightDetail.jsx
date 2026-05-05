@@ -1,4 +1,6 @@
 import WeightChart from './WeightChart'
+import { CHART_PERIOD_OPTIONS, getChartPeriodLabel } from '../../lib/chartPeriods'
+import { WEIGHT_TREND_PRESETS, formatRateForUnit } from '../../lib/weightTrend'
 import '../../styles/Profile.css'
 
 export default function BodyWeightDetail({
@@ -13,6 +15,7 @@ export default function BodyWeightDetail({
   error,
   weightPeriod,
   onPeriodChange,
+  hasWeightLogs,
   filteredWeightLogs,
   chartHeight = 250,
   recentWeightLogs,
@@ -23,6 +26,29 @@ export default function BodyWeightDetail({
   deletingId,
   onDeleteWeightLog,
   formatWeightLogLabel,
+  showTrend = false,
+  onToggleTrend,
+  goalWeightKg = null,
+  goalInput = '',
+  onGoalInputChange,
+  onSaveGoal,
+  goalSaving = false,
+  showGoal = false,
+  onToggleGoal,
+  trendModeInput = '',
+  onTrendModeInputChange,
+  trendRateInput = '',
+  onTrendRateInputChange,
+  onSaveTrendMode,
+  trendModeSaving = false,
+  trendModeConfig = null,
+  showTrendMode = false,
+  onToggleTrendMode,
+  trendDatePickerOpen = false,
+  trendDatePickerValue = '',
+  onTrendDateChange,
+  onTrendDateConfirm,
+  onTrendDateCancel,
 }) {
   return (
     <div className="day-detail body-weight-detail">
@@ -52,6 +78,10 @@ export default function BodyWeightDetail({
           <input
             className="body-stats-input"
             type="number"
+            min={activeUnit === 'lbs' ? '44.1' : '20'}
+            max={activeUnit === 'lbs' ? '1322.8' : '600'}
+            step="0.1"
+            inputMode="decimal"
             placeholder={activeUnit === 'lbs' ? 'e.g. 175' : 'e.g. 80'}
             value={inputValue}
             onChange={(event) => onInputChange(event.target.value)}
@@ -75,16 +105,94 @@ export default function BodyWeightDetail({
 
         {error && <div className="body-stats-history-error">{error}</div>}
 
-        {filteredWeightLogs.length > 0 && (
+        <div className="body-stats-goal-row">
+          <span className="body-stats-goal-label">Goal</span>
+          <input
+            className="body-stats-input body-stats-goal-input"
+            type="number"
+            min={activeUnit === 'lbs' ? '44.1' : '20'}
+            max={activeUnit === 'lbs' ? '1322.8' : '600'}
+            step="0.1"
+            inputMode="decimal"
+            placeholder={activeUnit === 'lbs' ? 'e.g. 160' : 'e.g. 72'}
+            value={goalInput}
+            onChange={(e) => onGoalInputChange(e.target.value)}
+          />
+          <span className="body-stats-goal-unit">{activeUnit}</span>
+          <button
+            className="body-stats-save-btn"
+            onClick={onSaveGoal}
+            disabled={goalSaving || !goalInput}
+          >
+            {goalSaving ? 'Saving…' : goalWeightKg !== null ? 'Update' : 'Set'}
+          </button>
+        </div>
+
+        <div className="body-stats-goal-row">
+          <span className="body-stats-goal-label">Pace</span>
+          <select
+            className="body-stats-input body-stats-pace-select"
+            value={trendModeInput}
+            onChange={(e) => onTrendModeInputChange(e.target.value)}
+          >
+            <option value="">None</option>
+            {WEIGHT_TREND_PRESETS.map(({ key, label, rateKgPerWeek }) => {
+              const rate = formatRateForUnit(rateKgPerWeek, activeUnit)
+              return (
+                <option key={key} value={key}>
+                  {rate ? `${label} (${rate})` : label}
+                </option>
+              )
+            })}
+          </select>
+          {trendModeInput === 'custom' && (
+            <input
+              className="body-stats-input body-stats-pace-rate-input"
+              type="number"
+              step="0.05"
+              inputMode="decimal"
+              placeholder={activeUnit === 'lbs' ? 'lbs/wk' : 'kg/wk'}
+              value={trendRateInput}
+              onChange={(e) => onTrendRateInputChange(e.target.value)}
+            />
+          )}
+          <button
+            className="body-stats-save-btn"
+            onClick={onSaveTrendMode}
+            disabled={trendModeSaving || (trendModeInput === 'custom' && !trendRateInput)}
+          >
+            {trendModeSaving ? 'Saving…' : trendModeConfig ? 'Update' : 'Set'}
+          </button>
+        </div>
+
+        {hasWeightLogs && (
           <div className="body-stats-chart-header">
+            <div className="bw-chart-toggles">
+              {trendModeConfig && (
+                <label className="bw-trend-toggle">
+                  <input type="checkbox" checked={showTrendMode} onChange={onToggleTrendMode} />
+                  Pace
+                </label>
+              )}
+              {goalWeightKg !== null && (
+                <label className="bw-trend-toggle">
+                  <input type="checkbox" checked={showGoal} onChange={onToggleGoal} />
+                  Goal
+                </label>
+              )}
+              <label className="bw-trend-toggle">
+                <input type="checkbox" checked={showTrend} onChange={onToggleTrend} />
+                Trend
+              </label>
+            </div>
             <div className="ex-period-toggle">
-              {['1w', '1m', '1y', 'all'].map(period => (
+              {CHART_PERIOD_OPTIONS.map(({ value }) => (
                 <button
-                  key={period}
-                  className={`ex-period-btn ${weightPeriod === period ? 'active' : ''}`}
-                  onClick={() => onPeriodChange(period)}
+                  key={value}
+                  className={`ex-period-btn ${weightPeriod === value ? 'active' : ''}`}
+                  onClick={() => onPeriodChange(value)}
                 >
-                  {period === 'all' ? 'All' : period === '1w' ? '1W' : period === '1m' ? '1M' : '1Y'}
+                  {getChartPeriodLabel(value)}
                 </button>
               ))}
             </div>
@@ -98,6 +206,11 @@ export default function BodyWeightDetail({
               unit={activeUnit}
               height={chartHeight}
               tickCount={5}
+              showTrend={showTrend}
+              goalWeightKg={goalWeightKg}
+              showGoal={showGoal}
+              trendModeConfig={trendModeConfig}
+              showTrendMode={showTrendMode}
             />
           </div>
         ) : (
@@ -155,6 +268,31 @@ export default function BodyWeightDetail({
             </div>
           </div>
         )}
+      {trendDatePickerOpen && (
+        <div className="bw-date-picker-overlay" onClick={onTrendDateCancel}>
+          <div className="bw-date-picker-modal" onClick={e => e.stopPropagation()}>
+            <div className="bw-date-picker-title">Pace start date</div>
+            <div className="bw-date-picker-sub">The orange line will start from this date and weight.</div>
+            <input
+              type="date"
+              className="bw-date-picker-input"
+              value={trendDatePickerValue}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={e => onTrendDateChange(e.target.value)}
+            />
+            <div className="bw-date-picker-actions">
+              <button className="bw-date-picker-cancel" onClick={onTrendDateCancel}>Cancel</button>
+              <button
+                className="bw-date-picker-confirm"
+                onClick={() => onTrendDateConfirm(trendDatePickerValue)}
+                disabled={!trendDatePickerValue || trendModeSaving}
+              >
+                {trendModeSaving ? 'Saving…' : 'Set pace'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </div>
   )

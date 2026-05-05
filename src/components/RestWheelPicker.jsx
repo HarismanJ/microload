@@ -1,4 +1,5 @@
 import '../styles/RestWheelPicker.css'
+import { VALIDATION_LIMITS } from '../lib/inputValidation'
 
 export default function RestTimePicker({ value, onChange }) {
   const mins = Math.floor(value / 60)
@@ -6,8 +7,8 @@ export default function RestTimePicker({ value, onChange }) {
 
   const set = (m, s) => {
     let total = m * 60 + s
-    if (total < 5) total = 5
-    if (total > 595) total = 595
+    if (total < VALIDATION_LIMITS.restSecondsMin) total = VALIDATION_LIMITS.restSecondsMin
+    if (total > VALIDATION_LIMITS.restSecondsMax) total = VALIDATION_LIMITS.restSecondsMax
     onChange(total)
   }
 

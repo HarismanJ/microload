@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './App.css'
 import App from './App'
+import AppErrorBoundary from './components/AppErrorBoundary'
 import { ThemeProvider } from './context/ThemeContext'
 import { applyTheme, getSavedTheme } from './lib/theme'
 import { checkMissedTimers } from './lib/restNotification'
@@ -29,7 +30,9 @@ document.addEventListener('focusout', () => {
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <ThemeProvider>
-      <App />
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     </ThemeProvider>
   </StrictMode>
 )

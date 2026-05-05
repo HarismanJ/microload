@@ -1,6 +1,15 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getCached, invalidateCache, setCached } from '../../lib/cache'
+import { useCurrentUserId } from '../../context/UserContext'
+import {
+  EMPTY_FOOD_FORM,
+  foodFromFormValues,
+  foodToFormValues,
+  getFoodFormError,
+  buildFoodPayload,
+} from '../../lib/foodEditor'
+import { VALIDATION_LIMITS, validateNumber } from '../../lib/inputValidation'
 import { searchUsdaFoods } from '../../lib/usdaFoods'
 import {
   buildFoodSearchKey,
@@ -9,6 +18,7 @@ import {
   normalizeSearchValue,
 } from '../../lib/foodSearch'
 import CreateFood from './CreateFood'
+import FoodEditorFields from './FoodEditorFields'
 import LoadingSpinner from '../LoadingSpinner'
 
 const BarcodeScanner = lazy(() => import('./BarcodeScanner'))
@@ -16,16 +26,19 @@ const USDA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
 const USER_FOODS_CACHE_TTL_MS = 5 * 60 * 1000
 
 export default function NutritionFoodPicker({
-  mealType = 'snacks',
   onAdd,
   onClose,
   heading,
   submitLabel,
 }) {
+  const userId = useCurrentUserId()
   const [search, setSearch] = useState('')
   const [results, setResults] = useState([])
   const [recent, setRecent] = useState([])
   const [selected, setSelected] = useState(null)
+  const [editingSelectedFood, setEditingSelectedFood] = useState(false)
+  const [selectedFoodForm, setSelectedFoodForm] = useState(EMPTY_FOOD_FORM)
+  const [selectedFoodError, setSelectedFoodError] = useState('')
   const [amountMode, setAmountMode] = useState('grams')
   const [grams, setGrams] = useState('')
   const [servings, setServings] = useState('1')
@@ -33,11 +46,11 @@ export default function NutritionFoodPicker({
   const [loadingRecent, setLoadingRecent] = useState(true)
   const [creating, setCreating] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [adding, setAdding] = useState(false)
   const searchTimer = useRef()
 
-  const mealLabel = mealType.charAt(0).toUpperCase() + mealType.slice(1)
-  const pickerTitle = heading || `Add to ${mealLabel}`
-  const pickerSubmitLabel = submitLabel || `Add to ${mealLabel}`
+  const pickerTitle = heading || 'Add Food'
+  const pickerSubmitLabel = submitLabel || 'Add to Log'
 
   async function loadUserFoods(userId) {
     const cacheKey = `user_foods:${userId}`
@@ -59,9 +72,12 @@ export default function NutritionFoodPicker({
   }
 
   async function loadRecent(isCancelled) {
-    const { data: { user } } = await supabase.auth.getUser()
+    if (!userId) {
+      if (!isCancelled()) setLoadingRecent(false)
+      return
+    }
     if (isCancelled()) return
-    const cacheKey = `recent_foods:${user.id}`
+    const cacheKey = `recent_foods:${userId}`
     const cached = getCached(cacheKey)
     if (cached) {
       setRecent(cached)
@@ -69,14 +85,18 @@ export default function NutritionFoodPicker({
       return
     }
 
-    const { data } = await supabase
+    const { data, error: recentError } = await supabase
       .from('nutrition_logs')
       .select('food_id, food_name, foods(id, name, brand, serving_size, serving_unit, calories, protein, carbs, fat, fiber, sugar, saturated_fat, sodium, potassium, cholesterol)')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .not('food_id', 'is', null)
       .order('created_at', { ascending: false })
       .limit(30)
     if (isCancelled()) return
+    if (recentError) {
+      setLoadingRecent(false)
+      return
+    }
     const seen = new Set()
     const unique = (data || []).filter(r => {
       if (!r.foods || seen.has(r.food_id)) return false
@@ -90,22 +110,30 @@ export default function NutritionFoodPicker({
   }
 
   useEffect(() => {
+    setLoadingRecent(true)
     let cancelled = false
     const isCancelled = () => cancelled
     const timer = setTimeout(() => { loadRecent(isCancelled) }, 0)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [])
+  }, [userId])
 
   // Scroll to top whenever the active view changes
   useEffect(() => {
     document.querySelector('.content')?.scrollTo(0, 0)
-  }, [selected, creating, scanning])
+  }, [selected, editingSelectedFood, creating, scanning])
 
   useEffect(() => {
     clearTimeout(searchTimer.current)
     let cancelled = false
     const controller = new AbortController()
     let statusTimer
+    if (!userId) {
+      statusTimer = setTimeout(() => {
+        setResults([])
+        setSearching(false)
+      }, 0)
+      return () => clearTimeout(statusTimer)
+    }
     if (!search.trim()) {
       statusTimer = setTimeout(() => {
         setResults([])
@@ -121,22 +149,17 @@ export default function NutritionFoodPicker({
       const usdaCacheKey = `usda_food_search:${normalized}`
 
       try {
-        const { data: { user } } = await supabase.auth.getUser()
         if (cancelled) return
-        if (!user) {
-          setResults([])
-          return
-        }
 
         const [localFoods, usdaFoods] = await Promise.all([
-          loadUserFoods(user.id),
+          loadUserFoods(userId),
           (() => {
             const cachedUsda = getCached(usdaCacheKey)
             if (cachedUsda) return Promise.resolve(cachedUsda)
 
             return searchUsdaFoods(search, { signal: controller.signal, pageSize: 30 })
               .then(foods => {
-                setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS)
+                setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS, { bucket: 'search' })
                 return foods
               })
           })(),
@@ -159,14 +182,48 @@ export default function NutritionFoodPicker({
       clearTimeout(searchTimer.current)
       controller.abort()
     }
-  }, [search])
+  }, [search, userId])
 
   function selectFood(food) {
     setSelected(food)
+    setEditingSelectedFood(false)
+    setSelectedFoodForm(foodToFormValues(food))
+    setSelectedFoodError('')
     setServings('1')
     const servingSize = Number(food?.serving_size) || 0
     setGrams(servingSize > 0 ? String(servingSize) : '100')
     setAmountMode((food?.serving_unit || '').toLowerCase() === 'g' ? 'grams' : 'servings')
+  }
+
+  function updateSelectedFoodField(key, value) {
+    setSelectedFoodForm(current => ({ ...current, [key]: value }))
+    setSelectedFoodError('')
+  }
+
+  function openSelectedFoodEditor() {
+    if (!selected) return
+    setSelectedFoodForm(foodToFormValues(selected))
+    setSelectedFoodError('')
+    setEditingSelectedFood(true)
+  }
+
+  function saveSelectedFoodEdits() {
+    if (!selected) return
+    const formError = getFoodFormError(selectedFoodForm)
+    if (formError) {
+      setSelectedFoodError(formError)
+      return
+    }
+
+    const currentForm = foodToFormValues(selected)
+    const didChange = JSON.stringify(currentForm) !== JSON.stringify(selectedFoodForm)
+    if (!didChange) {
+      setEditingSelectedFood(false)
+      return
+    }
+
+    setSelected(foodFromFormValues(selectedFoodForm, selected, { persistAsNew: true }))
+    setEditingSelectedFood(false)
   }
 
   function getAmountMultiplier(food) {
@@ -182,42 +239,24 @@ export default function NutritionFoodPicker({
   }
 
   async function ensureFoodRecord(food) {
-    if (food?.id) return food
+    if (food?.id && !food?.persistAsNew) return food
+    if (!userId) throw new Error('You need to be signed in to add foods.')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data: existingRows, error: existingError } = await supabase
-      .from('foods')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('name', String(food?.name || '').trim())
-      .limit(20)
+    if (!food?.persistAsNew) {
+      const { data: existingRows, error: existingError } = await supabase
+        .from('foods')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('name', String(food?.name || '').trim())
+        .limit(20)
 
-    if (!existingError) {
-      const existingMatch = (existingRows || []).find(row => matchesStoredFood(row, food))
-      if (existingMatch) return existingMatch
+      if (!existingError) {
+        const existingMatch = (existingRows || []).find(row => matchesStoredFood(row, food))
+        if (existingMatch) return existingMatch
+      }
     }
 
-    const payload = {
-      user_id: user.id,
-      name: String(food?.name || '').trim(),
-      brand: String(food?.brand || '').trim() || null,
-      serving_size: Number(food?.serving_size) || 100,
-      serving_unit: String(food?.serving_unit || 'g').trim() || 'g',
-      calories: Number(food?.calories) || 0,
-      protein: Number(food?.protein) || 0,
-      carbs: Number(food?.carbs) || 0,
-      fat: Number(food?.fat) || 0,
-      fiber: Number(food?.fiber) || 0,
-      sugar: Number(food?.sugar) || 0,
-      saturated_fat: Number(food?.saturated_fat) || 0,
-      sodium: Number(food?.sodium) || 0,
-      potassium: Number(food?.potassium) || 0,
-      cholesterol: Number(food?.cholesterol) || 0,
-      calcium: Number(food?.calcium) || 0,
-      iron: Number(food?.iron) || 0,
-      vitamin_a: Number(food?.vitamin_a) || 0,
-      vitamin_c: Number(food?.vitamin_c) || 0,
-    }
+    const payload = buildFoodPayload(foodToFormValues(food), userId)
 
     const { data, error } = await supabase
       .from('foods')
@@ -226,20 +265,31 @@ export default function NutritionFoodPicker({
       .single()
 
     if (error) throw error
-    invalidateCache(`user_foods:${user.id}`)
+    invalidateCache(`user_foods:${userId}`)
     return data
   }
 
   async function handleAdd() {
+    const amountError = amountMode === 'grams'
+      ? validateNumber(grams, { label: 'Grams', min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, required: true, decimals: 2 })
+      : validateNumber(servings, { label: 'Servings', min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, required: true, decimals: 2 })
+    if (amountError) {
+      setSelectedFoodError(amountError)
+      return
+    }
     const amountMultiplier = getAmountMultiplier(selected)
-    if (!selected || amountMultiplier <= 0) return
+    if (!selected || amountMultiplier <= 0 || adding) return
 
+    setAdding(true)
     try {
       const storedFood = await ensureFoodRecord(selected)
-      onAdd({ ...selected, ...storedFood, id: storedFood.id }, amountMultiplier, mealType)
+      onAdd({ ...selected, ...storedFood, id: storedFood.id }, amountMultiplier)
     } catch (error) {
       console.error('Could not persist selected food before logging:', error)
-      onAdd(selected, amountMultiplier, mealType)
+      const fallbackFood = selected?.persistAsNew
+        ? { ...selected, id: null }
+        : selected
+      onAdd(fallbackFood, amountMultiplier)
     }
   }
 
@@ -260,6 +310,27 @@ export default function NutritionFoodPicker({
           onBack={() => setScanning(false)}
         />
       </Suspense>
+    )
+  }
+
+  if (selected && editingSelectedFood) {
+    return (
+      <div className="nut-picker-screen">
+        <div className="nut-picker-header">
+          <button className="back-btn" onClick={() => { setEditingSelectedFood(false); setSelectedFoodError('') }}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+          <span className="picker-title">Edit Nutrition</span>
+        </div>
+        <div className="bs-verify-note">
+          Adjust the food details before adding it to your log. Your edited version will be saved as a custom food when you add it.
+        </div>
+        {selectedFoodError && <div className="bs-not-found-note">{selectedFoodError}</div>}
+        <FoodEditorFields form={selectedFoodForm} onFieldChange={updateSelectedFoodField} />
+        <button className="nut-add-to-log-btn" onClick={saveSelectedFoodEdits}>
+          Save Changes
+        </button>
+      </div>
     )
   }
 
@@ -333,8 +404,10 @@ export default function NutritionFoodPicker({
                 className="nut-serving-input"
                 type="number"
                 value={grams}
-                min="1"
-                step="1"
+                min="0.01"
+                max={VALIDATION_LIMITS.nutritionAmountMax}
+                step="0.01"
+                inputMode="decimal"
                 onChange={e => setGrams(e.target.value)}
               />
               <button
@@ -358,8 +431,10 @@ export default function NutritionFoodPicker({
                 className="nut-serving-input"
                 type="number"
                 value={servings}
-                min="0.25"
-                step="0.25"
+                min="0.01"
+                max={VALIDATION_LIMITS.nutritionAmountMax}
+                step="0.01"
+                inputMode="decimal"
                 onChange={e => setServings(e.target.value)}
                 onBlur={e => {
                   const n = Number.parseFloat(e.target.value)
@@ -406,9 +481,21 @@ export default function NutritionFoodPicker({
           </div>
         )}
 
-        <button className="nut-add-to-log-btn" onClick={handleAdd}>
-          {pickerSubmitLabel}
-        </button>
+        {selected.persistAsNew && (
+          <div className="nut-edited-note">
+            This edited version will be saved as a custom food when you add it.
+          </div>
+        )}
+        {selectedFoodError && <div className="bs-not-found-note">{selectedFoodError}</div>}
+
+        <div className="nut-detail-actions">
+          <button className="nut-detail-edit-btn" onClick={openSelectedFoodEditor}>
+            Edit Nutrition
+          </button>
+          <button className="nut-add-to-log-btn" onClick={handleAdd} disabled={adding} style={adding ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}>
+            {pickerSubmitLabel}
+          </button>
+        </div>
       </div>
     )
   }
@@ -435,6 +522,7 @@ export default function NutritionFoodPicker({
         placeholder="Search foods..."
         value={search}
         onChange={e => setSearch(e.target.value)}
+        maxLength={VALIDATION_LIMITS.searchMaxLength}
         autoFocus
       />
 

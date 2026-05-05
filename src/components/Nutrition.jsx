@@ -1,8 +1,10 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useEffectEvent } from 'react'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
+import { useCurrentUserId } from '../context/UserContext'
 import NutritionFoodPicker from './nutrition/NutritionFoodPicker'
 import LoadingSpinner from './LoadingSpinner'
+import { NUTRITION_FIELD_LIMITS, validateNumber } from '../lib/inputValidation'
 import '../styles/Nutrition.css'
 
 const FEED_FILTERS = [
@@ -21,6 +23,59 @@ const DEFAULT_GOALS = {
   vitamin_a: 900, vitamin_c: 90, vitamin_d: 15,
 }
 
+const NUTRITION_LOG_SELECT = [
+  'id',
+  'created_at',
+  'food_name',
+  'servings',
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'saturated_fat',
+  'sodium',
+  'potassium',
+  'cholesterol',
+  'calcium',
+  'iron',
+  'magnesium',
+  'zinc',
+  'vitamin_a',
+  'vitamin_c',
+  'vitamin_d',
+].join(', ')
+
+const GOAL_FIELD_RULES = {
+  calories_goal: { ...NUTRITION_FIELD_LIMITS.calories, min: 1, label: 'Calories goal' },
+  protein_goal: { ...NUTRITION_FIELD_LIMITS.protein, min: 1, label: 'Protein goal' },
+  carbs_goal: { ...NUTRITION_FIELD_LIMITS.carbs, min: 1, label: 'Carbs goal' },
+  fat_goal: { ...NUTRITION_FIELD_LIMITS.fat, min: 1, label: 'Fat goal' },
+  fiber_goal: { ...NUTRITION_FIELD_LIMITS.fiber, label: 'Fiber goal' },
+  sugar_goal: { ...NUTRITION_FIELD_LIMITS.sugar, label: 'Sugar goal' },
+  saturated_fat_goal: { ...NUTRITION_FIELD_LIMITS.saturated_fat, label: 'Saturated fat goal' },
+  sodium_goal: { ...NUTRITION_FIELD_LIMITS.sodium, label: 'Sodium goal' },
+  potassium_goal: { ...NUTRITION_FIELD_LIMITS.potassium, label: 'Potassium goal' },
+  cholesterol_goal: { ...NUTRITION_FIELD_LIMITS.cholesterol, label: 'Cholesterol goal' },
+  calcium_goal: { ...NUTRITION_FIELD_LIMITS.calcium, label: 'Calcium goal' },
+  iron_goal: { ...NUTRITION_FIELD_LIMITS.iron, label: 'Iron goal' },
+  magnesium_goal: { ...NUTRITION_FIELD_LIMITS.magnesium, label: 'Magnesium goal' },
+  zinc_goal: { ...NUTRITION_FIELD_LIMITS.zinc, label: 'Zinc goal' },
+  vitamin_a_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_a, label: 'Vitamin A goal' },
+  vitamin_c_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_c, label: 'Vitamin C goal' },
+  vitamin_d_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_d, label: 'Vitamin D goal' },
+}
+
+function goalInputProps(key) {
+  const rules = GOAL_FIELD_RULES[key] || {}
+  return {
+    min: rules.min ?? 0,
+    max: rules.max,
+    step: rules.decimals === 0 ? 1 : 0.01,
+    inputMode: 'decimal',
+  }
+}
 
 function localDate(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
@@ -54,85 +109,146 @@ function formatFoodLogTime(timestamp) {
   })
 }
 
+let _animIdx = 0
+const DETAIL_RENDER_SECTIONS = [
+  {
+    title: 'Macros',
+    items: [
+      { label: 'Calories', key: 'calories', unit: 'kcal', color: 'var(--blue)' },
+      { label: 'Protein', key: 'protein', unit: 'g', color: 'var(--blue)' },
+      { label: 'Carbohydrates', key: 'carbs', unit: 'g', color: 'var(--blue)' },
+      { label: 'Fat', key: 'fat', unit: 'g', color: 'var(--blue)' },
+      { label: 'Fiber', key: 'fiber', unit: 'g', color: '#22c55e', type: 'target' },
+      { label: 'Sugar', key: 'sugar', unit: 'g', color: '#f43f5e', type: 'max' },
+      { label: 'Saturated Fat', key: 'saturated_fat', unit: 'g', color: '#f43f5e', type: 'max' },
+    ],
+  },
+  {
+    title: 'Electrolytes & Minerals',
+    items: [
+      { label: 'Sodium', key: 'sodium', unit: 'mg', type: 'max' },
+      { label: 'Potassium', key: 'potassium', unit: 'mg', type: 'target' },
+      { label: 'Calcium', key: 'calcium', unit: 'mg', type: 'target' },
+      { label: 'Iron', key: 'iron', unit: 'mg', type: 'target' },
+      { label: 'Magnesium', key: 'magnesium', unit: 'mg', type: 'target' },
+      { label: 'Zinc', key: 'zinc', unit: 'mg', type: 'target' },
+      { label: 'Cholesterol', key: 'cholesterol', unit: 'mg', type: 'max' },
+    ],
+  },
+  {
+    title: 'Vitamins',
+    items: [
+      { label: 'Vitamin A', key: 'vitamin_a', unit: 'mcg' },
+      { label: 'Vitamin C', key: 'vitamin_c', unit: 'mg' },
+      { label: 'Vitamin D', key: 'vitamin_d', unit: 'mcg' },
+    ],
+  },
+].map(section => ({
+  ...section,
+  animationIndex: _animIdx++,
+  items: section.items.map(item => ({ ...item, animationIndex: _animIdx++ })),
+}))
+
 export default function Nutrition({ openAddFoodTick = 0 }) {
+  const userId = useCurrentUserId()
   const [date, setDate] = useState(today)
   const [logs, setLogs] = useState([])
   const [goals, setGoals] = useState(DEFAULT_GOALS)
   const [exerciseCalories, setExerciseCalories] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [addingToMeal, setAddingToMeal] = useState(null)
+  const [addingFood, setAddingFood] = useState(false)
   const [showDetail, setShowDetail] = useState(false)
   const [editingGoals, setEditingGoals] = useState(false)
   const [goalsForm, setGoalsForm] = useState(null)
+  const [goalsError, setGoalsError] = useState('')
   const [savingGoals, setSavingGoals] = useState(false)
   const [feedFilter, setFeedFilter] = useState('all')
   const [feedSortDirection, setFeedSortDirection] = useState('desc')
   const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [viewingLog, setViewingLog] = useState(null)
-
-  useEffect(() => { load() }, [date])
+  const [logError, setLogError] = useState('')
 
   useEffect(() => {
     if (openAddFoodTick === 0) return
-    setAddingToMeal('breakfast')
+    setAddingFood(true)
   }, [openAddFoodTick])
 
   async function load() {
+    if (!userId) return
     setLoading(true)
+    setLogError('')
     const cacheKey = `nut_${date}`
-    const cached = getCached(cacheKey)
-    if (cached) {
-      setLogs(cached.logs)
-      setGoals(cached.goals)
-      setExerciseCalories(cached.exerciseCalories || 0)
+    try {
+      const cached = getCached(cacheKey)
+      if (cached) {
+        setLogs(cached.logs)
+        setGoals(cached.goals)
+        setExerciseCalories(cached.exerciseCalories || 0)
+        return
+      }
+
+      const dayStart = new Date(date + 'T00:00:00').toISOString()
+      const dayEnd   = new Date(date + 'T23:59:59.999').toISOString()
+      const [{ data: logData, error: logsError }, { data: prof, error: profileError }, { data: sessionRows, error: sessionsError }] = await Promise.all([
+        supabase
+          .from('nutrition_logs')
+          .select(NUTRITION_LOG_SELECT)
+          .eq('user_id', userId)
+          .eq('log_date', date)
+          .order('created_at'),
+        supabase.from('profiles').select('calories_goal,protein_goal,carbs_goal,fat_goal,fiber_goal,sugar_goal,saturated_fat_goal,sodium_goal,potassium_goal,cholesterol_goal,calcium_goal,iron_goal,magnesium_goal,zinc_goal,vitamin_a_goal,vitamin_c_goal,vitamin_d_goal').eq('id', userId).single(),
+        supabase.from('workout_sessions').select('calories_burned').eq('user_id', userId).not('finished_at', 'is', null).gte('finished_at', dayStart).lte('finished_at', dayEnd),
+      ])
+      const loadError = logsError || profileError || sessionsError
+      if (loadError) throw loadError
+
+      const resolvedGoals = prof ? {
+        calories:      prof.calories_goal      || DEFAULT_GOALS.calories,
+        protein:       prof.protein_goal       || DEFAULT_GOALS.protein,
+        carbs:         prof.carbs_goal         || DEFAULT_GOALS.carbs,
+        fat:           prof.fat_goal           || DEFAULT_GOALS.fat,
+        fiber:         prof.fiber_goal         || DEFAULT_GOALS.fiber,
+        sugar:         prof.sugar_goal         || DEFAULT_GOALS.sugar,
+        saturated_fat: prof.saturated_fat_goal || DEFAULT_GOALS.saturated_fat,
+        sodium:        prof.sodium_goal        || DEFAULT_GOALS.sodium,
+        potassium:     prof.potassium_goal     || DEFAULT_GOALS.potassium,
+        cholesterol:   prof.cholesterol_goal   || DEFAULT_GOALS.cholesterol,
+        calcium:       prof.calcium_goal       || DEFAULT_GOALS.calcium,
+        iron:          prof.iron_goal          || DEFAULT_GOALS.iron,
+        magnesium:     prof.magnesium_goal     || DEFAULT_GOALS.magnesium,
+        zinc:          prof.zinc_goal          || DEFAULT_GOALS.zinc,
+        vitamin_a:     prof.vitamin_a_goal     || DEFAULT_GOALS.vitamin_a,
+        vitamin_c:     prof.vitamin_c_goal     || DEFAULT_GOALS.vitamin_c,
+        vitamin_d:     prof.vitamin_d_goal     || DEFAULT_GOALS.vitamin_d,
+      } : DEFAULT_GOALS
+
+      const burnedKcal = (sessionRows || []).reduce((sum, s) => sum + (s.calories_burned || 0), 0)
+      setCached(cacheKey, { logs: logData || [], goals: resolvedGoals, exerciseCalories: burnedKcal })
+      setLogs(logData || [])
+      setGoals(resolvedGoals)
+      setExerciseCalories(burnedKcal)
+    } catch (error) {
+      setLogError(error?.message || 'Could not load nutrition. Check your connection and try again.')
+    } finally {
       setLoading(false)
-      return
     }
-
-    const { data: { user } } = await supabase.auth.getUser()
-    const dayStart = new Date(date + 'T00:00:00').toISOString()
-    const dayEnd   = new Date(date + 'T23:59:59.999').toISOString()
-    const [{ data: logData }, { data: prof }, { data: sessionRows }] = await Promise.all([
-      supabase.from('nutrition_logs').select('*').eq('user_id', user.id).eq('log_date', date).order('created_at'),
-      supabase.from('profiles').select('calories_goal,protein_goal,carbs_goal,fat_goal,fiber_goal,sugar_goal,saturated_fat_goal,sodium_goal,potassium_goal,cholesterol_goal,calcium_goal,iron_goal,magnesium_goal,zinc_goal,vitamin_a_goal,vitamin_c_goal,vitamin_d_goal').eq('id', user.id).single(),
-      supabase.from('workout_sessions').select('calories_burned').eq('user_id', user.id).not('finished_at', 'is', null).gte('finished_at', dayStart).lte('finished_at', dayEnd),
-    ])
-
-    const resolvedGoals = prof ? {
-      calories:      prof.calories_goal      || DEFAULT_GOALS.calories,
-      protein:       prof.protein_goal       || DEFAULT_GOALS.protein,
-      carbs:         prof.carbs_goal         || DEFAULT_GOALS.carbs,
-      fat:           prof.fat_goal           || DEFAULT_GOALS.fat,
-      fiber:         prof.fiber_goal         || DEFAULT_GOALS.fiber,
-      sugar:         prof.sugar_goal         || DEFAULT_GOALS.sugar,
-      saturated_fat: prof.saturated_fat_goal || DEFAULT_GOALS.saturated_fat,
-      sodium:        prof.sodium_goal        || DEFAULT_GOALS.sodium,
-      potassium:     prof.potassium_goal     || DEFAULT_GOALS.potassium,
-      cholesterol:   prof.cholesterol_goal   || DEFAULT_GOALS.cholesterol,
-      calcium:       prof.calcium_goal       || DEFAULT_GOALS.calcium,
-      iron:          prof.iron_goal          || DEFAULT_GOALS.iron,
-      magnesium:     prof.magnesium_goal     || DEFAULT_GOALS.magnesium,
-      zinc:          prof.zinc_goal          || DEFAULT_GOALS.zinc,
-      vitamin_a:     prof.vitamin_a_goal     || DEFAULT_GOALS.vitamin_a,
-      vitamin_c:     prof.vitamin_c_goal     || DEFAULT_GOALS.vitamin_c,
-      vitamin_d:     prof.vitamin_d_goal     || DEFAULT_GOALS.vitamin_d,
-    } : DEFAULT_GOALS
-
-    const burnedKcal = (sessionRows || []).reduce((sum, s) => sum + (s.calories_burned || 0), 0)
-    setCached(cacheKey, { logs: logData || [], goals: resolvedGoals, exerciseCalories: burnedKcal })
-    setLogs(logData || [])
-    setGoals(resolvedGoals)
-    setExerciseCalories(burnedKcal)
-    setLoading(false)
   }
 
-  async function addLog(food, servings, mealType) {
-    const { data: { user } } = await supabase.auth.getUser()
+  const loadLatest = useEffectEvent(() => { load() })
+
+  useEffect(() => {
+    const timer = setTimeout(() => { loadLatest() }, 0)
+    return () => clearTimeout(timer)
+  }, [date, userId])
+
+  async function addLog(food, servings) {
+    if (!userId) return
+    setLogError('')
     const m = servings
     const n = k => +((food[k] || 0) * m).toFixed(2)
     const entry = {
-      user_id: user.id, food_id: food.id || null,
-      log_date: date, meal_type: mealType, servings: m, food_name: food.name,
+      user_id: userId, food_id: food.id || null,
+      log_date: date, servings: m, food_name: food.name,
       calories: Math.round(food.calories * m),
       protein: n('protein'), carbs: n('carbs'), fat: n('fat'),
       fiber: n('fiber'), sugar: n('sugar'), saturated_fat: n('saturated_fat'),
@@ -144,16 +260,21 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       zinc: n('zinc'), vitamin_a: Math.round((food.vitamin_a || 0) * m),
       vitamin_c: n('vitamin_c'), vitamin_d: n('vitamin_d'),
     }
-    const { data, error } = await supabase.from('nutrition_logs').insert(entry).select().single()
-    if (error) { console.error('addLog failed:', error.message); return }
+    const { data, error } = await supabase
+      .from('nutrition_logs')
+      .insert(entry)
+      .select(NUTRITION_LOG_SELECT)
+      .single()
+    if (error) { setAddingFood(false); setLogError('Failed to add food. Please try again.'); return }
     if (data) setLogs(prev => [...prev, data])
-    invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`, `recent_foods:${user.id}`)
-    setAddingToMeal(null)
+    invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`, `recent_foods:${userId}`)
+    setAddingFood(false)
   }
 
   async function removeLog(id) {
+    setLogError('')
     const { error } = await supabase.from('nutrition_logs').delete().eq('id', id)
-    if (error) { console.error('removeLog failed:', error.message); return }
+    if (error) { setLogError('Failed to remove food. Please try again.'); return }
     setLogs(prev => prev.filter(l => l.id !== id))
     invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`)
   }
@@ -184,9 +305,16 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   }
 
   async function saveGoals() {
-    if (!goalsForm) return
+    if (!goalsForm || !userId) return
+    for (const [key, rules] of Object.entries(GOAL_FIELD_RULES)) {
+      const error = validateNumber(goalsForm[key], { ...rules, required: true })
+      if (error) {
+        setGoalsError(error)
+        return
+      }
+    }
     setSavingGoals(true)
-    const { data: { user } } = await supabase.auth.getUser()
+    setGoalsError('')
     const n = k => +goalsForm[k] || 0
     const nMacro = k => Math.max(1, +goalsForm[k] || 0)
     const updates = {
@@ -200,69 +328,32 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       vitamin_a_goal: n('vitamin_a_goal'), vitamin_c_goal: n('vitamin_c_goal'),
       vitamin_d_goal: n('vitamin_d_goal'),
     }
-    const { error } = await supabase.from('profiles').update(updates).eq('id', user.id)
-    if (error) {
+    try {
+      const { error } = await supabase.from('profiles').update(updates).eq('id', userId)
+      if (error) throw error
+      setGoals({
+        calories: updates.calories_goal, protein: updates.protein_goal,
+        carbs: updates.carbs_goal, fat: updates.fat_goal,
+        fiber: updates.fiber_goal, sugar: updates.sugar_goal,
+        saturated_fat: updates.saturated_fat_goal, sodium: updates.sodium_goal,
+        potassium: updates.potassium_goal, cholesterol: updates.cholesterol_goal,
+        calcium: updates.calcium_goal, iron: updates.iron_goal,
+        magnesium: updates.magnesium_goal, zinc: updates.zinc_goal,
+        vitamin_a: updates.vitamin_a_goal, vitamin_c: updates.vitamin_c_goal,
+        vitamin_d: updates.vitamin_d_goal,
+      })
+      invalidateCache('profile', 'home', `nut_${date}`)
+      setEditingGoals(false)
+    } catch (error) {
+      setGoalsError(error?.message || 'Could not save nutrition goals.')
+    } finally {
       setSavingGoals(false)
-      return
     }
-    setGoals({
-      calories: updates.calories_goal, protein: updates.protein_goal,
-      carbs: updates.carbs_goal, fat: updates.fat_goal,
-      fiber: updates.fiber_goal, sugar: updates.sugar_goal,
-      saturated_fat: updates.saturated_fat_goal, sodium: updates.sodium_goal,
-      potassium: updates.potassium_goal, cholesterol: updates.cholesterol_goal,
-      calcium: updates.calcium_goal, iron: updates.iron_goal,
-      magnesium: updates.magnesium_goal, zinc: updates.zinc_goal,
-      vitamin_a: updates.vitamin_a_goal, vitamin_c: updates.vitamin_c_goal,
-      vitamin_d: updates.vitamin_d_goal,
-    })
-    setSavingGoals(false)
-    setEditingGoals(false)
   }
 
   const remaining = goals.calories - Math.round(totals.calories) + exerciseCalories
   const R = 52, C = 2 * Math.PI * R
   const dash = (Math.min(1, totals.calories / goals.calories)) * C
-  const detailSections = [
-    {
-      title: 'Macros',
-      items: [
-        { label: 'Calories', key: 'calories', unit: 'kcal', color: 'var(--blue)' },
-        { label: 'Protein', key: 'protein', unit: 'g', color: 'var(--blue)' },
-        { label: 'Carbohydrates', key: 'carbs', unit: 'g', color: 'var(--blue)' },
-        { label: 'Fat', key: 'fat', unit: 'g', color: 'var(--blue)' },
-        { label: 'Fiber', key: 'fiber', unit: 'g', color: '#22c55e', type: 'target' },
-        { label: 'Sugar', key: 'sugar', unit: 'g', color: '#f43f5e', type: 'max' },
-        { label: 'Saturated Fat', key: 'saturated_fat', unit: 'g', color: '#f43f5e', type: 'max' },
-      ],
-    },
-    {
-      title: 'Electrolytes & Minerals',
-      items: [
-        { label: 'Sodium', key: 'sodium', unit: 'mg', type: 'max' },
-        { label: 'Potassium', key: 'potassium', unit: 'mg', type: 'target' },
-        { label: 'Calcium', key: 'calcium', unit: 'mg', type: 'target' },
-        { label: 'Iron', key: 'iron', unit: 'mg', type: 'target' },
-        { label: 'Magnesium', key: 'magnesium', unit: 'mg', type: 'target' },
-        { label: 'Zinc', key: 'zinc', unit: 'mg', type: 'target' },
-        { label: 'Cholesterol', key: 'cholesterol', unit: 'mg', type: 'max' },
-      ],
-    },
-    {
-      title: 'Vitamins',
-      items: [
-        { label: 'Vitamin A', key: 'vitamin_a', unit: 'mcg' },
-        { label: 'Vitamin C', key: 'vitamin_c', unit: 'mg' },
-        { label: 'Vitamin D', key: 'vitamin_d', unit: 'mcg' },
-      ],
-    },
-  ]
-  let detailAnimationIndex = 0
-  const detailRenderSections = detailSections.map(section => ({
-    ...section,
-    animationIndex: detailAnimationIndex++,
-    items: section.items.map(item => ({ ...item, animationIndex: detailAnimationIndex++ })),
-  }))
   const feedLogs = useMemo(() => {
     const items = [...logs]
     const directionMultiplier = feedSortDirection === 'asc' ? 1 : -1
@@ -347,12 +438,11 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     )
   }
 
-  if (addingToMeal) {
+  if (addingFood) {
     return (
       <NutritionFoodPicker
-        mealType={addingToMeal}
         onAdd={addLog}
-        onClose={() => setAddingToMeal(null)}
+        onClose={() => setAddingFood(false)}
         heading="Add Food"
         submitLabel="Add to Log"
       />
@@ -375,6 +465,12 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
         </button>
       </div>
 
+      {logError && (
+        <div style={{ margin: '8px 16px 0', padding: '10px 14px', background: 'rgba(255,107,107,0.12)', border: '1px solid rgba(255,107,107,0.3)', borderRadius: 8, color: '#ff6b6b', fontSize: 13 }}>
+          {logError}
+        </div>
+      )}
+
       {/* Goals editor */}
       {editingGoals && goalsForm && (
         <div className="nut-goals-panel">
@@ -389,8 +485,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
               <div key={key} className="nut-goals-field">
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
-                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
+                  <input className="nut-goals-input" type="number" value={goalsForm[key]}
+                    {...goalInputProps(key)}
+                    onChange={e => { setGoalsError(''); setGoalsForm(f => ({ ...f, [key]: e.target.value })) }} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -408,8 +505,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
               <div key={key} className="nut-goals-field">
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
-                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
+                  <input className="nut-goals-input" type="number" value={goalsForm[key]}
+                    {...goalInputProps(key)}
+                    onChange={e => { setGoalsError(''); setGoalsForm(f => ({ ...f, [key]: e.target.value })) }} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -429,8 +527,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
               <div key={key} className="nut-goals-field">
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
-                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
+                  <input className="nut-goals-input" type="number" value={goalsForm[key]}
+                    {...goalInputProps(key)}
+                    onChange={e => { setGoalsError(''); setGoalsForm(f => ({ ...f, [key]: e.target.value })) }} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -447,8 +546,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
               <div key={key} className="nut-goals-field">
                 <label className="nut-goals-label">{label}</label>
                 <div className="nut-goals-input-wrap">
-                  <input className="nut-goals-input" type="number" min="0" value={goalsForm[key]}
-                    onChange={e => setGoalsForm(f => ({ ...f, [key]: e.target.value }))} />
+                  <input className="nut-goals-input" type="number" value={goalsForm[key]}
+                    {...goalInputProps(key)}
+                    onChange={e => { setGoalsError(''); setGoalsForm(f => ({ ...f, [key]: e.target.value })) }} />
                   <span className="nut-goals-unit">{unit}</span>
                 </div>
               </div>
@@ -456,6 +556,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
           </div>
 
           <div className="nut-goals-actions">
+            {goalsError && <div className="cf-error">{goalsError}</div>}
             <button className="nut-goals-cancel" onClick={() => setEditingGoals(false)}>Cancel</button>
             <button className="nut-goals-save" onClick={saveGoals} disabled={savingGoals}>
               {savingGoals ? 'Saving...' : 'Save Goals'}
@@ -517,7 +618,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       <div className={`nut-detail-wrap ${showDetail ? 'expanded' : ''}`}>
         <div className="nut-detail-wrap-inner">
           <div className="nut-detail-card">
-            {detailRenderSections.map(section => (
+            {DETAIL_RENDER_SECTIONS.map(section => (
               <div key={section.title} className="nut-detail-section">
                 <div className="nut-detail-section-title" style={{ '--detail-index': section.animationIndex }}>
                   {section.title}
@@ -563,7 +664,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
                 : 'Track everything you eat in one running feed.'}
             </div>
           </div>
-          <button className="nut-feed-add-btn" onClick={() => setAddingToMeal('snacks')}>
+          <button className="nut-feed-add-btn" onClick={() => setAddingFood(true)}>
             <span>+</span>
             <span>Add Food</span>
           </button>
@@ -648,10 +749,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
         ) : (
           <div className="nut-feed-empty">
             <div className="nut-feed-empty-title">No food tracked yet</div>
-            <div className="nut-feed-empty-text">
-              Keep things simple with one daily food feed instead of separate breakfast, lunch, dinner, and snack sections.
-            </div>
-            <button className="nut-feed-add-btn nut-feed-add-btn-inline" onClick={() => setAddingToMeal('snacks')}>
+            <button className="nut-feed-add-btn nut-feed-add-btn-inline" onClick={() => setAddingFood(true)}>
               <span>+</span>
               <span>Add your first food</span>
             </button>

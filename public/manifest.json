@@ -1,0 +1,12 @@
+{
+  "name": "Microload",
+  "short_name": "Microload",
+  "description": "Microload — track workouts, get automatic progression suggestions, and rank your strength across 190+ exercises. Free for iOS and Android.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#3b9eff",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

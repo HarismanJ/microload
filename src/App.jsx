@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef, lazy, Suspense } from 'react'
 import { App as CapApp } from '@capacitor/app'
 import { supabase } from './lib/supabase'
 import { clearCache, getCalendarMonthCacheKey, invalidateCache } from './lib/cache'
@@ -6,6 +6,7 @@ import LoadingSpinner from './components/LoadingSpinner'
 import RestTimePicker from './components/RestWheelPicker'
 import {
   createBattleInvite,
+  getBattleModeLabel,
   loadActiveBattleRoom,
   loadBattleRecap,
   loadLatestDeclinedBattleInvite,
@@ -15,8 +16,11 @@ import {
   respondToBattleInvite,
 } from './lib/battles'
 import { cancelRestNotification, scheduleRestEndNotification } from './lib/restNotification'
-import { convertWeight } from './lib/liftMath'
+import { validateBodyweight } from './lib/inputValidation'
 import { useNetworkStatus } from './hooks/useNetworkStatus'
+import { useTheme } from './context/ThemeContext'
+import { UserProvider } from './context/UserContext'
+import { clearCachedTheme, getCachedThemeForUser, saveThemeForUser } from './lib/theme'
 import './App.css'
 
 const Home = lazy(() => import('./components/Home'))
@@ -172,6 +176,7 @@ function AppIntroSplash({ exiting = false, ready = false }) {
 
 export default function App() {
   const { isOnline, justCameOnline } = useNetworkStatus()
+  const { switchTheme } = useTheme()
   const [tab, setTab] = useState('home')
   const [tabTransitionDirection, setTabTransitionDirection] = useState('forward')
   const [tabTransitionTick, setTabTransitionTick] = useState(0)
@@ -287,11 +292,11 @@ export default function App() {
 
   const handleQuickWeightSave = useCallback(async () => {
     const value = Number.parseFloat(quickWeightInput)
-    if (!session?.user?.id || !Number.isFinite(value) || value <= 0 || quickWeightSaving) return
-
     const unit = quickWeightUnit || 'kg'
-    if (convertWeight(value, unit, 'kg') > 600) {
-      setQuickWeightError('Weight cannot exceed 600 kg.')
+    if (!session?.user?.id || quickWeightSaving) return
+    const weightError = validateBodyweight(quickWeightInput, unit)
+    if (weightError) {
+      setQuickWeightError(weightError)
       return
     }
 
@@ -299,37 +304,39 @@ export default function App() {
     setQuickWeightError('')
     const timestamp = new Date().toISOString()
 
-    const { data: profileData, error: profileFetchError } = await supabase
-      .from('profiles')
-      .select('unit_preference')
-      .eq('id', session.user.id)
-      .single()
-
-    const unit2 = profileData?.unit_preference || quickWeightUnit || 'kg'
-
-    const [{ error: insertError }, { error: profileUpdateError }] = await Promise.all([
-      supabase
-        .from('body_weight_logs')
-        .insert({ user_id: session.user.id, weight: value, unit: unit2, logged_at: timestamp }),
-      supabase
+    try {
+      const { data: profileData, error: profileFetchError } = await supabase
         .from('profiles')
-        .update({ bodyweight: value })
-        .eq('id', session.user.id),
-    ])
+        .select('unit_preference')
+        .eq('id', session.user.id)
+        .single()
 
-    if (profileFetchError || insertError || profileUpdateError) {
+      const unit2 = profileData?.unit_preference || quickWeightUnit || 'kg'
+
+      const [{ error: insertError }, { error: profileUpdateError }] = await Promise.all([
+        supabase
+          .from('body_weight_logs')
+          .insert({ user_id: session.user.id, weight: value, unit: unit2, logged_at: timestamp }),
+        supabase
+          .from('profiles')
+          .update({ bodyweight: value })
+          .eq('id', session.user.id),
+      ])
+
+      const saveError = profileFetchError || insertError || profileUpdateError
+      if (saveError) throw saveError
+
+      setQuickWeightUnit(unit2)
+      invalidateCache('home', 'profile', 'ranks', getCalendarMonthCacheKey(timestamp))
+      setWeightRefreshTick(t => t + 1)
+      setQuickWeightInput('')
+      setShowQuickWeight(false)
+      setQuickActionSheetOpen(false)
+    } catch (error) {
+      setQuickWeightError(error?.message || 'Could not save your weight.')
+    } finally {
       setQuickWeightSaving(false)
-      setQuickWeightError(profileFetchError?.message || insertError?.message || profileUpdateError?.message || 'Could not save your weight.')
-      return
     }
-
-    setQuickWeightUnit(unit2)
-    invalidateCache('home', 'profile', 'ranks', getCalendarMonthCacheKey(timestamp))
-    setWeightRefreshTick(t => t + 1)
-    setQuickWeightInput('')
-    setShowQuickWeight(false)
-    setQuickActionSheetOpen(false)
-    setQuickWeightSaving(false)
   }, [quickWeightInput, quickWeightSaving, quickWeightUnit, session?.user?.id])
 
   // Drive the quick timer display with a 250ms interval reading from endTime.
@@ -471,6 +478,27 @@ export default function App() {
     setRestDoneToast(null)
   }, [quickTimerDisplay, restDoneToast])
 
+  const hydratePreferredTheme = useCallback(async (userId, { force = false } = {}) => {
+    if (!userId) return
+
+    const cachedTheme = getCachedThemeForUser(userId)
+    if (cachedTheme && !force) {
+      switchTheme(cachedTheme)
+      return
+    }
+
+    const { data } = await supabase
+      .from('profiles')
+      .select('theme')
+      .eq('id', userId)
+      .single()
+
+    if (data?.theme) {
+      saveThemeForUser(data.theme, userId)
+      switchTheme(data.theme)
+    }
+  }, [switchTheme])
+
   useEffect(() => {
     tabRef.current = tab
   }, [tab])
@@ -503,22 +531,10 @@ export default function App() {
         return
       }
       authUserIdRef.current = session?.user?.id ?? null
-      // Apply theme from localStorage instantly — no await, no blocking
-      const { applyTheme } = await import('./lib/theme')
-      applyTheme(localStorage.getItem('theme') || 'obsidian')
-      // Fire-and-forget DB fetch to correct theme if localStorage was empty (e.g. after sign-out)
-      if (session?.user?.id) {
-        supabase.from('profiles').select('theme').eq('id', session.user.id).single()
-          .then(({ data }) => {
-            if (data?.theme) {
-              localStorage.setItem('theme', data.theme)
-              applyTheme(data.theme)
-            }
-          })
-      }
+      await hydratePreferredTheme(session?.user?.id)
       setSession(session)
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'PASSWORD_RECOVERY') {
         setRecoveryMode(true)
         setSession(session)
@@ -540,6 +556,7 @@ export default function App() {
       }
       if (event === 'SIGNED_OUT') {
         localStorage.removeItem('microload:pendingRecovery')
+        clearCachedTheme()
         setRecoveryMode(false)
       }
       const nextUserId = session?.user?.id ?? null
@@ -547,16 +564,7 @@ export default function App() {
       if (prevUserId !== nextUserId) {
         clearCache()
         authUserIdRef.current = nextUserId
-        // Fire-and-forget theme fetch on sign-in — never blocks setSession
-        if (nextUserId && !prevUserId) {
-          supabase.from('profiles').select('theme').eq('id', nextUserId).single()
-            .then(({ data }) => {
-              if (data?.theme) {
-                localStorage.setItem('theme', data.theme)
-                import('./lib/theme').then(({ applyTheme }) => applyTheme(data.theme))
-              }
-            })
-        }
+        await hydratePreferredTheme(nextUserId, { force: Boolean(nextUserId && prevUserId) })
       }
       setSession(session)
     })
@@ -596,7 +604,7 @@ export default function App() {
       subscription.unsubscribe()
       deepLinkListener?.remove()
     }
-  }, [])
+  }, [hydratePreferredTheme])
 
   useEffect(() => {
     if (session === undefined || !initialScreenReady) return
@@ -715,7 +723,7 @@ export default function App() {
     }
   }, [refreshBattleState])
 
-  runBattleRefreshRef.current = runBattleRefresh
+  useLayoutEffect(() => { runBattleRefreshRef.current = runBattleRefresh })
 
   const scheduleBattleRefresh = useCallback((userId, { delayMs = 0 } = {}) => {
     if (!userId) return
@@ -723,13 +731,13 @@ export default function App() {
     clearBattleRefreshTimer()
 
     if (delayMs <= 0) {
-      runBattleRefresh(userId)
+      runBattleRefresh(userId).catch(err => console.error('battle refresh failed:', err))
       return
     }
 
     battleRefreshTimerRef.current = setTimeout(() => {
       battleRefreshTimerRef.current = null
-      runBattleRefresh(userId)
+      runBattleRefresh(userId).catch(err => console.error('battle refresh failed:', err))
     }, delayMs)
   }, [clearBattleRefreshTimer, runBattleRefresh])
 
@@ -840,17 +848,17 @@ export default function App() {
     scheduleBattleRefresh(userId)
   }, [justCameOnline, scheduleBattleRefresh, session?.user?.id])
 
-  async function handleChallengeFriend(friendship) {
+  const handleChallengeFriend = useCallback(async (friendship, battleMode = 'hybrid') => {
     const userId = session?.user?.id
     if (!userId) return
 
-    const invite = await createBattleInvite(userId, friendship.otherUserId)
+    const invite = await createBattleInvite(userId, friendship.otherUserId, battleMode)
     setBattleToast(
       invite?.reused
         ? `A challenge with ${displayName(friendship.otherProfile)} is already pending.`
-        : `Challenge sent to ${displayName(friendship.otherProfile)}.`
+        : `${getBattleModeLabel(battleMode)} challenge sent to ${displayName(friendship.otherProfile)}.`
     )
-  }
+  }, [session])
 
   const handleNavigate = useCallback((nextTarget) => {
     if (typeof nextTarget !== 'string') return
@@ -904,7 +912,7 @@ export default function App() {
     tabSwipeRef.current = { active: false, ignore: false, startX: 0, startY: 0 }
   }, [])
 
-  async function handleBattleInviteResponse(action) {
+  const handleBattleInviteResponse = useCallback(async (action) => {
     if (!incomingBattleInvite || !session?.user?.id) return
 
     setBattleDecisionBusy(true)
@@ -917,10 +925,21 @@ export default function App() {
     } finally {
       setBattleDecisionBusy(false)
     }
-  }
+  }, [incomingBattleInvite, session, refreshBattleState])
 
   const introSplash = showIntroSplash ? <AppIntroSplash exiting={introSplashExiting} ready={initialScreenReady} /> : null
   const appFallback = showIntroSplash ? null : <LoadingSpinner fullPage />
+
+  const handleWorkoutDeleted = useCallback(() => setRanksRefreshTick(t => t + 1), [])
+  const otherScreens = useMemo(() => {
+    if (!session?.user?.id) return {}
+    return {
+      home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} onWorkoutDeleted={handleWorkoutDeleted} />,
+      ranks: <Ranks refreshTick={ranksRefreshTick} />,
+      nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
+      profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={handleWorkoutDeleted} workoutActive={workoutStatus.active} />,
+    }
+  }, [session, showIntroSplash, homeIntroMotionReady, initialScreenReady, handleNavigate, setHomeWorkoutStreak, markInitialScreenReady, weightRefreshTick, workoutRefreshTick, handleWorkoutDeleted, ranksRefreshTick, openAddFoodTick, handleChallengeFriend, workoutStatus.active])
 
   if (session === undefined) return introSplash || <LoadingSpinner fullPage />
   if (!session || recoveryMode) {
@@ -934,38 +953,34 @@ export default function App() {
       </>
     )
   }
+
   const profileButtonLabel = displayName(session?.user?.user_metadata) || session?.user?.email || 'Profile'
   const tabs = [
-  {
-    id: 'home', label: 'Home',
-    icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-  },
-  {
-  id: 'workout', label: 'Workout',
-  icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8h12M6 16h12"/><rect x="2" y="10" width="4" height="4" rx="1"/><rect x="18" y="10" width="4" height="4" rx="1"/><rect x="6" y="6" width="3" height="12" rx="1"/><rect x="15" y="6" width="3" height="12" rx="1"/></svg>
-  },
-  {
-    id: 'ranks', label: 'Ranks',
-    icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-  },
-  {
-  id: 'nutrition', label: 'Nutrition',
-  icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="12" rx="10" ry="4"/><path d="M2 12c0 4.42 4.48 8 10 8s10-3.58 10-8"/><path d="M2 12c0-1.5 1.5-3 4-4"/></svg>
-  },
-]
+    {
+      id: 'home', label: 'Home',
+      icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+    },
+    {
+      id: 'workout', label: 'Workout',
+      icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 8h12M6 16h12"/><rect x="2" y="10" width="4" height="4" rx="1"/><rect x="18" y="10" width="4" height="4" rx="1"/><rect x="6" y="6" width="3" height="12" rx="1"/><rect x="15" y="6" width="3" height="12" rx="1"/></svg>
+    },
+    {
+      id: 'ranks', label: 'Ranks',
+      icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+    },
+    {
+      id: 'nutrition', label: 'Nutrition',
+      icon: <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="12" rx="10" ry="4"/><path d="M2 12c0 4.42 4.48 8 10 8s10-3.58 10-8"/><path d="M2 12c0-1.5 1.5-3 4-4"/></svg>
+    },
+  ]
   const leftTabs = tabs.slice(0, 2)
   const rightTabs = tabs.slice(2)
-  const otherScreens = {
-    home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} />,
-    ranks: <Ranks refreshTick={ranksRefreshTick} />,
-    nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
-    profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={() => setRanksRefreshTick(t => t + 1)} workoutActive={workoutStatus.active} />,
-  }
   const contentScreenClassName = `content-screen content-screen-${tabTransitionDirection} content-screen-${tabTransitionTick % 2}`
 
   return (
-    <>
-      <div className="app">
+    <UserProvider user={session.user}>
+      <>
+        <div className="app">
         <header className="topbar">
           <div className="topbar-inner">
             <button className="topbar-brand" onClick={() => handleNavigate('home')} aria-label="Go to Home">
@@ -1091,7 +1106,7 @@ export default function App() {
               <div className="battle-invite-pill">Battle Invite</div>
               <div className="battle-invite-title">{`${displayName(incomingBattleInvite.challengerProfile)} challenged you`}</div>
               <div className="battle-invite-body">
-                Accept to jump into a shared battle workout. You will both start in a new empty workout, and completed sets will update live.
+                {`${getBattleModeLabel(incomingBattleInvite.battle_mode)} battle. Accept to jump into a shared workout. You will both start in a new empty workout, and completed sets will update live.`}
               </div>
               <div className="battle-invite-actions">
                 <button
@@ -1183,7 +1198,7 @@ export default function App() {
                   <path d="M17 6c1.7 1.4 3 3.7 3 7 0 4.4-3.6 8-8 8S4 17.4 4 13c0-3.3 1.3-5.6 3-7"/>
                   <path d="M12 6v4"/>
                 </svg>
-                <span>Log Meal</span>
+                <span>Log Food</span>
               </button>
               <button
                 className={`quick-action-btn quick-action-btn-secondary ${showQuickWeight ? 'quick-action-btn-timer-active' : ''}`}
@@ -1292,6 +1307,9 @@ export default function App() {
                       className="quick-weight-input"
                       type="number"
                       inputMode="decimal"
+                      min={quickWeightUnit === 'lbs' ? '44.1' : '20'}
+                      max={quickWeightUnit === 'lbs' ? '1322.8' : '600'}
+                      step="0.1"
                       placeholder={`Enter weight (${quickWeightUnit})`}
                       value={quickWeightInput}
                       onChange={(event) => setQuickWeightInput(event.target.value)}
@@ -1361,8 +1379,9 @@ export default function App() {
             ))}
           </div>
         </nav>
-      </div>
-      {introSplash}
-    </>
+        </div>
+        {introSplash}
+      </>
+    </UserProvider>
   )
 }

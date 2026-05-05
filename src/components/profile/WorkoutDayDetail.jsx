@@ -1,6 +1,7 @@
 import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
+import { useCurrentUserId } from '../../context/UserContext'
 import { calculateORM } from '../../lib/orm'
 import {
   DEFAULT_BODYWEIGHT_KG,
@@ -14,6 +15,7 @@ import {
   isRepsWithinInputRange,
   isWeightWithinInputRange,
 } from '../../lib/liftMath'
+import { VALIDATION_LIMITS, validateLength, validateNumber } from '../../lib/inputValidation'
 import '../../styles/Profile.css'
 
 function formatDuration(start, end) {
@@ -41,7 +43,32 @@ function dayBounds(dateStr) {
   }
 }
 
-const MEAL_ORDER = ['Breakfast', 'Lunch', 'Dinner', 'Snacks']
+const NUTRITION_LOG_SELECT = [
+  'id',
+  'created_at',
+  'food_name',
+  'servings',
+  'calories',
+  'protein',
+  'carbs',
+  'fat',
+  'fiber',
+  'sugar',
+  'saturated_fat',
+  'sodium',
+  'potassium',
+  'cholesterol',
+  'calcium',
+  'iron',
+  'vitamin_a',
+  'vitamin_c',
+  'vitamin_d',
+  'magnesium',
+  'zinc',
+  'folate',
+  'vitamin_b12',
+  'vitamin_b6',
+].join(', ')
 const NUTRIENT_FIELDS = [
   'calories', 'protein', 'carbs', 'fat', 'fiber', 'sugar', 'saturated_fat',
   'sodium', 'potassium', 'cholesterol', 'calcium', 'iron', 'vitamin_a',
@@ -53,13 +80,12 @@ function sumNut(logs, key) {
   return logs.reduce((s, l) => s + (l[key] || 0), 0)
 }
 
-function buildUpdatedNutritionLog(log, foodName, mealType, servings) {
+function buildUpdatedNutritionLog(log, foodName, servings) {
   const nextServings = Number(servings)
   const currentServings = Number(log.servings) || 1
   const ratio = nextServings / currentServings
   const updated = {
     food_name: foodName.trim(),
-    meal_type: mealType,
     servings: nextServings,
   }
 
@@ -74,6 +100,7 @@ function buildUpdatedNutritionLog(log, foodName, mealType, servings) {
 }
 
 export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], dateStr, onBack, onDeleteWorkout, onRefresh }) {
+  const userId = useCurrentUserId()
   const mountedRef = useRef(true)
   useEffect(() => () => { mountedRef.current = false }, [])
 
@@ -93,7 +120,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
   const [deletingId, setDeletingId] = useState(null)
   const [deleteError, setDeleteError] = useState('')
   const [editingFoodLogId, setEditingFoodLogId] = useState(null)
-  const [foodEditDraft, setFoodEditDraft] = useState({ foodName: '', mealType: 'snacks', servings: '' })
+  const [foodEditDraft, setFoodEditDraft] = useState({ foodName: '', servings: '' })
   const [foodEditError, setFoodEditError] = useState('')
   const [savingFoodLogId, setSavingFoodLogId] = useState(null)
   const [nutritionDeleteTargetId, setNutritionDeleteTargetId] = useState(null)
@@ -102,9 +129,12 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
   const [weightDeleteTargetId, setWeightDeleteTargetId] = useState(null)
   const [deletingWeightId, setDeletingWeightId] = useState(null)
   const [weightDeleteError, setWeightDeleteError] = useState('')
+  const [loadError, setLoadError] = useState('')
 
   async function load() {
+    if (!userId) return
     setLoading(true)
+    setLoadError('')
     setWorkoutSessions([])
     setEditingSetId(null)
     setSetEditError('')
@@ -119,83 +149,89 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setWeightDeleteTargetId(null)
     setWeightDeleteError('')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const activeSessionIds = sessionIds.length ? sessionIds : (sessionId ? [sessionId] : [])
-    const { startIso, endIso } = dayBounds(dateStr)
-    const promises = [
-      supabase
-        .from('nutrition_logs')
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('log_date', dateStr)
-        .order('created_at'),
-      supabase
-        .from('body_weight_logs')
-        .select('id, weight, unit, logged_at')
-        .eq('user_id', user.id)
-        .gte('logged_at', startIso)
-        .lte('logged_at', endIso)
-        .order('logged_at', { ascending: false }),
-      supabase
-        .from('profiles')
-        .select('bodyweight, unit_preference')
-        .eq('id', user.id)
-        .single(),
-    ]
-
-    if (activeSessionIds.length) {
-      promises.push(
+    try {
+      const activeSessionIds = sessionIds.length ? sessionIds : (sessionId ? [sessionId] : [])
+      const { startIso, endIso } = dayBounds(dateStr)
+      const promises = [
         supabase
-          .from('workout_sessions')
-          .select('id, started_at, finished_at, notes, exercise_notes, calories_burned')
-          .eq('user_id', user.id)
-          .in('id', activeSessionIds)
-          .order('started_at'),
+          .from('nutrition_logs')
+          .select(NUTRITION_LOG_SELECT)
+          .eq('user_id', userId)
+          .eq('log_date', dateStr)
+          .order('created_at'),
         supabase
-          .from('workout_sets')
-          .select('id, session_id, exercise_id, set_number, reps, weight, unit, estimated_1rm, duration_seconds, exercises(name, category, equipment)')
-          .eq('user_id', user.id)
-          .in('session_id', activeSessionIds)
-          .order('session_id')
-          .order('exercise_id')
-          .order('set_number'),
-      )
-    }
+          .from('body_weight_logs')
+          .select('id, weight, unit, logged_at')
+          .eq('user_id', userId)
+          .gte('logged_at', startIso)
+          .lte('logged_at', endIso)
+          .order('logged_at', { ascending: false }),
+        supabase
+          .from('profiles')
+          .select('bodyweight, unit_preference')
+          .eq('id', userId)
+          .single(),
+      ]
 
-    const results = await Promise.all(promises)
-    const nutData = results[0].data || []
-    const weightData = results[1].data || []
-    const profileData = results[2].data || null
-    setNutLogs(nutData)
-    setWeightLogs(weightData)
-    setProfileMeta(profileData)
+      if (activeSessionIds.length) {
+        promises.push(
+          supabase
+            .from('workout_sessions')
+            .select('id, started_at, finished_at, notes, exercise_notes, calories_burned')
+            .eq('user_id', userId)
+            .in('id', activeSessionIds)
+            .order('started_at'),
+          supabase
+            .from('workout_sets')
+            .select('id, session_id, exercise_id, set_number, reps, weight, unit, estimated_1rm, duration_seconds, exercises(name, category, equipment)')
+            .eq('user_id', userId)
+            .in('session_id', activeSessionIds)
+            .order('session_id')
+            .order('exercise_id')
+            .order('set_number'),
+        )
+      }
 
-    if (activeSessionIds.length) {
-      const sessions = results[3].data || []
-      const sets = results[4].data || []
-      const groupMap = {}
+      const results = await Promise.all(promises)
+      const queryError = results.find(result => result?.error)?.error
+      if (queryError) throw queryError
 
-      sets.forEach(set => {
-        if (!groupMap[set.session_id]) groupMap[set.session_id] = {}
-        if (!groupMap[set.session_id][set.exercise_id]) {
-          groupMap[set.session_id][set.exercise_id] = {
-            exerciseId: set.exercise_id,
-            name: set.exercises.name,
-            category: set.exercises.category,
-            equipment: set.exercises.equipment,
-            sets: [],
+      const nutData = results[0].data || []
+      const weightData = results[1].data || []
+      const profileData = results[2].data || null
+      setNutLogs(nutData)
+      setWeightLogs(weightData)
+      setProfileMeta(profileData)
+
+      if (activeSessionIds.length) {
+        const sessions = results[3].data || []
+        const sets = results[4].data || []
+        const groupMap = {}
+
+        sets.forEach(set => {
+          if (!groupMap[set.session_id]) groupMap[set.session_id] = {}
+          if (!groupMap[set.session_id][set.exercise_id]) {
+            groupMap[set.session_id][set.exercise_id] = {
+              exerciseId: set.exercise_id,
+              name: set.exercises.name,
+              category: set.exercises.category,
+              equipment: set.exercises.equipment,
+              sets: [],
+            }
           }
-        }
-        groupMap[set.session_id][set.exercise_id].sets.push(set)
-      })
+          groupMap[set.session_id][set.exercise_id].sets.push(set)
+        })
 
-      setWorkoutSessions(sessions.map(sess => ({
-        ...sess,
-        groups: Object.values(groupMap[sess.id] || {}),
-      })))
+        setWorkoutSessions(sessions.map(sess => ({
+          ...sess,
+          groups: Object.values(groupMap[sess.id] || {}),
+        })))
+      }
+    } catch (error) {
+      setLoadError(error?.message || 'Could not load this day. Check your connection and try again.')
+    } finally {
+      setLoading(false)
     }
-
-    setLoading(false)
   }
 
   const loadLatest = useEffectEvent(() => { load() })
@@ -203,7 +239,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
   useEffect(() => {
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [sessionId, sessionIds, dateStr])
+  }, [sessionId, sessionIds, dateStr, userId])
 
   function startSetEdit(set) {
     setEditingSetId(set.id)
@@ -233,31 +269,32 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setSavingSetId(set.id)
     setSetEditError('')
 
-    const estimatedOrm = calculateORM(weight, reps)
-    const { error } = await supabase
-      .from('workout_sets')
-      .update({ weight, reps, estimated_1rm: estimatedOrm })
-      .eq('id', set.id)
+    try {
+      const estimatedOrm = calculateORM(weight, reps)
+      const { error } = await supabase
+        .from('workout_sets')
+        .update({ weight, reps, estimated_1rm: estimatedOrm })
+        .eq('id', set.id)
 
-    if (error) {
-      setSavingSetId(null)
-      setSetEditError(error.message || 'Could not update this set.')
-      return
+      if (error) throw error
+
+      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`)
+      setWorkoutSessions(prev => prev.map(sess => ({
+        ...sess,
+        groups: sess.groups.map(group => ({
+          ...group,
+          sets: group.sets.map(existing => existing.id === set.id
+            ? { ...existing, weight, reps, estimated_1rm: estimatedOrm }
+            : existing),
+        })),
+      })))
+      setEditingSetId(null)
+      onRefresh?.()
+    } catch (error) {
+      setSetEditError(error?.message || 'Could not update this set.')
+    } finally {
+      if (mountedRef.current) setSavingSetId(null)
     }
-
-    invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`)
-    setWorkoutSessions(prev => prev.map(sess => ({
-      ...sess,
-      groups: sess.groups.map(group => ({
-        ...group,
-        sets: group.sets.map(existing => existing.id === set.id
-          ? { ...existing, weight, reps, estimated_1rm: estimatedOrm }
-          : existing),
-      })),
-    })))
-    setSavingSetId(null)
-    setEditingSetId(null)
-    onRefresh?.()
   }
 
   async function handleDeleteSet(sessionId, group, set) {
@@ -280,69 +317,68 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       bodyweightKg: bwKg,
     })
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const [{ error: deleteError }, { data: profileVol }] = await Promise.all([
-      supabase.from('workout_sets').delete().eq('id', set.id),
-      supabase.from('profiles').select('lifetime_volume_kg').eq('id', user.id).single(),
-    ])
+    try {
+      const [{ error: deleteError }, { data: profileVol }] = await Promise.all([
+        supabase.from('workout_sets').delete().eq('id', set.id),
+        supabase.from('profiles').select('lifetime_volume_kg').eq('id', userId).single(),
+      ])
 
-    if (!mountedRef.current) return
+      if (!mountedRef.current) return
+      if (deleteError) throw deleteError
 
-    if (deleteError) {
-      setDeletingSetId(null)
-      setDeleteSetError(deleteError.message || 'Could not delete this set.')
-      return
-    }
+      const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - setVolumeKg)
+      const { error: profileUpdateError } = await supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', userId)
+      if (profileUpdateError) throw profileUpdateError
 
-    const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - setVolumeKg)
-    supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', user.id)
+      if (renumberTargets.length) {
+        const renumberResults = await Promise.all(
+          renumberTargets.map(existing => (
+            supabase
+              .from('workout_sets')
+              .update({ set_number: existing.nextSetNumber })
+              .eq('id', existing.id)
+          ))
+        )
 
-    if (renumberTargets.length) {
-      const renumberResults = await Promise.all(
-        renumberTargets.map(existing => (
-          supabase
-            .from('workout_sets')
-            .update({ set_number: existing.nextSetNumber })
-            .eq('id', existing.id)
-        ))
-      )
-
-      const renumberError = renumberResults.find(result => result.error)?.error
-      if (renumberError) {
-        setDeletingSetId(null)
-        setDeleteSetError(renumberError.message || 'This set was deleted, but the remaining set order could not be updated cleanly.')
-        await load()
-        return
+        const renumberError = renumberResults.find(result => result.error)?.error
+        if (renumberError) {
+          setDeleteSetError(renumberError.message || 'This set was deleted, but the remaining set order could not be updated cleanly.')
+          await load()
+          return
+        }
       }
-    }
 
-    invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`)
-    setWorkoutSessions(prev => prev.map(sess => (
-      sess.id !== sessionId
-        ? sess
-        : {
-            ...sess,
-            groups: sess.groups
-              .map(existingGroup => (
-                existingGroup.exerciseId !== group.exerciseId
-                  ? existingGroup
-                  : {
-                      ...existingGroup,
-                      sets: existingGroup.sets
-                        .filter(existingSet => existingSet.id !== set.id)
-                        .map((existingSet, index) => ({ ...existingSet, set_number: index + 1 })),
-                    }
-              ))
-              .filter(existingGroup => existingGroup.sets.length > 0),
-          }
-    )))
-    setDeletingSetId(null)
-    setDeleteSetTargetId(null)
-    if (editingSetId === set.id) {
-      setEditingSetId(null)
-      setSetEditError('')
+      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`)
+      setWorkoutSessions(prev => prev.map(sess => (
+        sess.id !== sessionId
+          ? sess
+          : {
+              ...sess,
+              groups: sess.groups
+                .map(existingGroup => (
+                  existingGroup.exerciseId !== group.exerciseId
+                    ? existingGroup
+                    : {
+                        ...existingGroup,
+                        sets: existingGroup.sets
+                          .filter(existingSet => existingSet.id !== set.id)
+                          .map((existingSet, index) => ({ ...existingSet, set_number: index + 1 })),
+                      }
+                ))
+                .filter(existingGroup => existingGroup.sets.length > 0),
+            }
+      )))
+      setDeleteSetTargetId(null)
+      if (editingSetId === set.id) {
+        setEditingSetId(null)
+        setSetEditError('')
+      }
+      onRefresh?.()
+    } catch (error) {
+      if (mountedRef.current) setDeleteSetError(error?.message || 'Could not delete this set.')
+    } finally {
+      if (mountedRef.current) setDeletingSetId(null)
     }
-    onRefresh?.()
   }
 
   function startFoodLogEdit(item) {
@@ -350,7 +386,6 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setNutritionDeleteTargetId(null)
     setFoodEditDraft({
       foodName: item.food_name || '',
-      mealType: item.meal_type || 'snacks',
       servings: String(item.servings ?? 1),
     })
     setFoodEditError('')
@@ -362,36 +397,50 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     const servings = parseFloat(foodEditDraft.servings)
     const foodName = foodEditDraft.foodName.trim()
 
-    if (!foodName) {
-      setFoodEditError('Enter a food name before confirming.')
+    const nameError = validateLength(foodName, {
+      label: 'Food name',
+      min: 1,
+      max: VALIDATION_LIMITS.foodNameMaxLength,
+      required: true,
+    })
+    if (nameError) {
+      setFoodEditError(nameError)
       return
     }
 
-    if (Number.isNaN(servings) || servings <= 0) {
-      setFoodEditError('Enter a valid serving amount greater than 0.')
+    const servingsError = validateNumber(foodEditDraft.servings, {
+      label: 'Servings',
+      min: 0.01,
+      max: VALIDATION_LIMITS.nutritionAmountMax,
+      required: true,
+      decimals: 2,
+    })
+    if (servingsError) {
+      setFoodEditError(servingsError)
       return
     }
 
     setSavingFoodLogId(item.id)
     setFoodEditError('')
 
-    const updates = buildUpdatedNutritionLog(item, foodName, foodEditDraft.mealType, servings)
-    const { error } = await supabase
-      .from('nutrition_logs')
-      .update(updates)
-      .eq('id', item.id)
+    try {
+      const updates = buildUpdatedNutritionLog(item, foodName, servings)
+      const { error } = await supabase
+        .from('nutrition_logs')
+        .update(updates)
+        .eq('id', item.id)
 
-    if (error) {
-      setSavingFoodLogId(null)
-      setFoodEditError(error.message || 'Could not update this food log.')
-      return
+      if (error) throw error
+
+      invalidateCache('home', `nut_${dateStr}`, `cal_${dateStr.slice(0, 7)}`)
+      setNutLogs(prev => prev.map(log => log.id === item.id ? { ...log, ...updates } : log))
+      setEditingFoodLogId(null)
+      onRefresh?.()
+    } catch (error) {
+      setFoodEditError(error?.message || 'Could not update this food log.')
+    } finally {
+      if (mountedRef.current) setSavingFoodLogId(null)
     }
-
-    invalidateCache('home', `nut_${dateStr}`, `cal_${dateStr.slice(0, 7)}`)
-    setNutLogs(prev => prev.map(log => log.id === item.id ? { ...log, ...updates } : log))
-    setSavingFoodLogId(null)
-    setEditingFoodLogId(null)
-    onRefresh?.()
   }
 
   async function handleDeleteWorkout(targetSessionId) {
@@ -415,65 +464,68 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       ), 0)
     ), 0)
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const { data: profileVol } = await supabase.from('profiles').select('lifetime_volume_kg').eq('id', user.id).single()
-    const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - sessionVolumeKg)
+    try {
+      const { data: profileVol, error: profileFetchError } = await supabase.from('profiles').select('lifetime_volume_kg').eq('id', userId).single()
+      if (profileFetchError) throw profileFetchError
+      const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - sessionVolumeKg)
 
-    const affectedExerciseIds = [...new Set((targetSession?.groups || []).map(g => g.exerciseId).filter(Boolean))]
+      const affectedExerciseIds = [...new Set((targetSession?.groups || []).map(g => g.exerciseId).filter(Boolean))]
 
-    const [{ error }, { error: profileError }] = await Promise.all([
-      supabase.from('workout_sessions').delete().eq('id', targetSessionId),
-      supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', user.id),
-    ])
+      const [{ error }, { error: profileError }] = await Promise.all([
+        supabase.from('workout_sessions').delete().eq('id', targetSessionId),
+        supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', userId),
+      ])
 
-    if (error || profileError) {
-      setDeletingId(null)
-      setDeleteError(error?.message || profileError?.message || 'Could not delete this workout.')
-      return
-    }
+      if (error || profileError) throw (error || profileError)
 
-    // Recalculate cached PRs for exercises that were in the deleted session
-    if (affectedExerciseIds.length > 0) {
-      const { data: remainingBests } = await supabase
-        .from('workout_sets')
-        .select('exercise_id, estimated_1rm, unit')
-        .eq('user_id', user.id)
-        .in('exercise_id', affectedExerciseIds)
-        .not('estimated_1rm', 'is', null)
+      // Recalculate cached PRs for exercises that were in the deleted session.
+      if (affectedExerciseIds.length > 0) {
+        const { data: remainingBests, error: remainingBestsError } = await supabase
+          .from('workout_sets')
+          .select('exercise_id, estimated_1rm, unit')
+          .eq('user_id', userId)
+          .in('exercise_id', affectedExerciseIds)
+          .not('estimated_1rm', 'is', null)
 
-      const newBestByExercise = {}
-      for (const s of remainingBests || []) {
-        const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
-        newBestByExercise[s.exercise_id] = Math.max(newBestByExercise[s.exercise_id] || 0, kg)
+        if (remainingBestsError) throw remainingBestsError
+
+        const newBestByExercise = {}
+        for (const s of remainingBests || []) {
+          const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
+          newBestByExercise[s.exercise_id] = Math.max(newBestByExercise[s.exercise_id] || 0, kg)
+        }
+
+        try {
+          await Promise.all(affectedExerciseIds.map(exId =>
+            newBestByExercise[exId]
+              ? supabase.from('exercise_prs').upsert({
+                  user_id: userId,
+                  exercise_id: exId,
+                  best_1rm_kg: newBestByExercise[exId],
+                  updated_at: new Date().toISOString(),
+                }, { onConflict: 'user_id,exercise_id' })
+              : supabase.from('exercise_prs').delete().eq('user_id', userId).eq('exercise_id', exId)
+          ))
+        } catch (err) {
+          console.error('PR cache update failed after workout deletion:', err)
+        }
       }
 
-      try {
-        await Promise.all(affectedExerciseIds.map(exId =>
-          newBestByExercise[exId]
-            ? supabase.from('exercise_prs').upsert({
-                user_id: user.id,
-                exercise_id: exId,
-                best_1rm_kg: newBestByExercise[exId],
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'user_id,exercise_id' })
-            : supabase.from('exercise_prs').delete().eq('user_id', user.id).eq('exercise_id', exId)
-        ))
-      } catch (err) {
-        console.error('PR cache update failed after workout deletion:', err)
-      }
+      const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)
+      invalidateCache('home', 'profile', 'ranks', 'achievements', calKey)
+      setWorkoutSessions(remainingSessions)
+      setDeleteTargetId(null)
+      onDeleteWorkout?.({
+        sessionId: targetSessionId,
+        remainingSessionIds: remainingSessions.map(sess => sess.id),
+        dateStr,
+      })
+      onRefresh?.()
+    } catch (error) {
+      setDeleteError(error?.message || 'Could not delete this workout.')
+    } finally {
+      if (mountedRef.current) setDeletingId(null)
     }
-
-    const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)
-    invalidateCache('home', 'profile', 'ranks', 'achievements', calKey)
-    setWorkoutSessions(remainingSessions)
-    setDeletingId(null)
-    setDeleteTargetId(null)
-    onDeleteWorkout?.({
-      sessionId: targetSessionId,
-      remainingSessionIds: remainingSessions.map(sess => sess.id),
-      dateStr,
-    })
-    onRefresh?.()
   }
 
   async function handleDeleteNutritionLog(logId) {
@@ -481,19 +533,19 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setDeletingNutritionId(logId)
     setNutritionDeleteError('')
 
-    const { error } = await supabase.from('nutrition_logs').delete().eq('id', logId)
+    try {
+      const { error } = await supabase.from('nutrition_logs').delete().eq('id', logId)
+      if (error) throw error
 
-    if (error) {
-      setDeletingNutritionId(null)
-      setNutritionDeleteError(error.message || 'Could not delete this nutrition log.')
-      return
+      invalidateCache('home', `nut_${dateStr}`, `cal_${dateStr.slice(0, 7)}`)
+      setNutLogs(prev => prev.filter(log => log.id !== logId))
+      setNutritionDeleteTargetId(null)
+      onRefresh?.()
+    } catch (error) {
+      setNutritionDeleteError(error?.message || 'Could not delete this nutrition log.')
+    } finally {
+      if (mountedRef.current) setDeletingNutritionId(null)
     }
-
-    invalidateCache('home', `nut_${dateStr}`, `cal_${dateStr.slice(0, 7)}`)
-    setNutLogs(prev => prev.filter(log => log.id !== logId))
-    setDeletingNutritionId(null)
-    setNutritionDeleteTargetId(null)
-    onRefresh?.()
   }
 
   async function handleDeleteWeightLog(logId) {
@@ -501,44 +553,40 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setDeletingWeightId(logId)
     setWeightDeleteError('')
 
-    const { data: { user } } = await supabase.auth.getUser()
-    const [{ error: deleteError }, { data: latestLog, error: latestError }] = await Promise.all([
-      supabase.from('body_weight_logs').delete().eq('id', logId),
-      supabase
-        .from('body_weight_logs')
-        .select('weight, unit')
-        .eq('user_id', user.id)
-        .order('logged_at', { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ])
+    try {
+      const [{ error: deleteError }, { data: latestLog, error: latestError }] = await Promise.all([
+        supabase.from('body_weight_logs').delete().eq('id', logId),
+        supabase
+          .from('body_weight_logs')
+          .select('weight, unit')
+          .eq('user_id', userId)
+          .order('logged_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ])
 
-    if (deleteError || latestError) {
-      setDeletingWeightId(null)
-      setWeightDeleteError(deleteError?.message || latestError?.message || 'Could not delete this weight log.')
-      return
+      if (deleteError || latestError) throw (deleteError || latestError)
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({
+          bodyweight: latestLog
+            ? convertWeight(latestLog.weight, latestLog.unit || profileMeta?.unit_preference || 'kg', profileMeta?.unit_preference || 'kg')
+            : null,
+        })
+        .eq('id', userId)
+
+      if (profileError) throw profileError
+
+      invalidateCache('profile', 'ranks', 'home', `cal_${dateStr.slice(0, 7)}`)
+      setWeightLogs(prev => prev.filter(log => log.id !== logId))
+      setWeightDeleteTargetId(null)
+      onRefresh?.()
+    } catch (error) {
+      setWeightDeleteError(error?.message || 'Could not delete this weight log.')
+    } finally {
+      if (mountedRef.current) setDeletingWeightId(null)
     }
-
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .update({
-        bodyweight: latestLog
-          ? convertWeight(latestLog.weight, latestLog.unit || profileMeta?.unit_preference || 'kg', profileMeta?.unit_preference || 'kg')
-          : null,
-      })
-      .eq('id', user.id)
-
-    if (profileError) {
-      setDeletingWeightId(null)
-      setWeightDeleteError(profileError.message || 'Could not update current bodyweight.')
-      return
-    }
-
-    invalidateCache('profile', 'ranks', 'home', `cal_${dateStr.slice(0, 7)}`)
-    setWeightLogs(prev => prev.filter(log => log.id !== logId))
-    setDeletingWeightId(null)
-    setWeightDeleteTargetId(null)
-    onRefresh?.()
   }
 
   const singleSession = workoutSessions.length === 1 ? workoutSessions[0] : null
@@ -566,11 +614,6 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
   const totalProtein = sumNut(nutLogs, 'protein')
   const totalCarbs = sumNut(nutLogs, 'carbs')
   const totalFat = sumNut(nutLogs, 'fat')
-
-  const mealGroups = MEAL_ORDER.map(meal => ({
-    meal,
-    items: nutLogs.filter(l => l.meal_type.toLowerCase() === meal.toLowerCase()),
-  })).filter(g => g.items.length > 0)
 
   return (
     <div className="day-detail">
@@ -604,6 +647,15 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                 <span key={index} className={`day-detail-calendar-cell day-detail-calendar-cell-${index + 1}`} />
               ))}
             </div>
+          </div>
+        </div>
+      ) : loadError ? (
+        <div className="day-detail-content">
+          <div className="day-empty-state">
+            <p>{loadError}</p>
+            <button className="day-detail-retry-btn" onClick={load}>
+              Retry
+            </button>
           </div>
         </div>
       ) : (
@@ -859,13 +911,8 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
 
               {nutritionDeleteError && <div className="day-delete-error">{nutritionDeleteError}</div>}
 
-              {mealGroups.map(({ meal, items }) => (
-                <div key={meal} className="day-meal-block">
-                  <div className="day-meal-header">
-                    <span className="day-meal-name">{meal}</span>
-                    <span className="day-meal-cals">{Math.round(items.reduce((sum, item) => sum + item.calories, 0))} kcal</span>
-                  </div>
-                  {items.map(item => (
+              <div className="day-meal-block">
+                {nutLogs.map(item => (
                     <div key={item.id} className="day-meal-item">
                       <div className="day-meal-row">
                         <span className="day-meal-food">{item.food_name}</span>
@@ -905,29 +952,19 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                               <input
                                 className="day-edit-input"
                                 value={foodEditDraft.foodName}
+                                maxLength={VALIDATION_LIMITS.foodNameMaxLength}
                                 onChange={e => setFoodEditDraft(draft => ({ ...draft, foodName: e.target.value }))}
                               />
-                            </label>
-                            <label className="day-edit-field">
-                              <span className="day-edit-label">Meal</span>
-                              <select
-                                className="day-edit-input day-edit-select"
-                                value={foodEditDraft.mealType}
-                                onChange={e => setFoodEditDraft(draft => ({ ...draft, mealType: e.target.value }))}
-                              >
-                                {MEAL_ORDER.map(meal => {
-                                  const value = meal.toLowerCase()
-                                  return <option key={value} value={value}>{meal}</option>
-                                })}
-                              </select>
                             </label>
                             <label className="day-edit-field">
                               <span className="day-edit-label">Servings</span>
                               <input
                                 className="day-edit-input"
                                 type="number"
-                                min="0.1"
-                                step="0.1"
+                                min="0.01"
+                                max={VALIDATION_LIMITS.nutritionAmountMax}
+                                step="0.01"
+                                inputMode="decimal"
                                 value={foodEditDraft.servings}
                                 onChange={e => setFoodEditDraft(draft => ({ ...draft, servings: e.target.value }))}
                               />
@@ -985,8 +1022,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                       )}
                     </div>
                   ))}
-                </div>
-              ))}
+              </div>
 
               <div className="day-micros-block">
                 <div className="day-micros-title">Micronutrients</div>

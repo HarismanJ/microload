@@ -24,10 +24,11 @@
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  transition: border-color 0.15s, color 0.15s;
+  transition: border-color 0.15s, color 0.15s, transform 0.15s;
 }
 
 .ach-back:hover { border-color: var(--blue); color: var(--blue); }
+.ach-back:active { transform: scale(0.90); }
 
 .ach-title {
   font-size: 20px;

@@ -149,6 +149,7 @@
 .ranks-mode-btn:hover {
   color: var(--text);
 }
+.ranks-mode-btn:active { transform: scale(0.93); }
 
 .ranks-mode-btn.active {
   background: var(--blue-dim);
@@ -199,6 +200,7 @@
 .ranks-dropdown-summary:hover {
   background: color-mix(in srgb, var(--surface) 88%, white 12%);
 }
+.ranks-dropdown-summary:active { background: color-mix(in srgb, var(--blue) 8%, var(--surface)); transform: scale(0.995); }
 
 .ranks-dropdown-label {
   font-size: 13px;
@@ -644,6 +646,7 @@
   transform: translateY(-1px);
   box-shadow: 0 12px 22px color-mix(in srgb, var(--blue) 22%, transparent);
 }
+.ranks-bw-save:not(:disabled):active { transform: scale(0.97); box-shadow: none; }
 .ranks-bw-save:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .ranks-empty {
@@ -867,6 +870,7 @@
   color: var(--blue);
   transform: scale(1.08);
 }
+.tier-swiper-arrow:active { transform: scale(0.88); }
 
 .tier-swiper-stage {
   width: 100%;
@@ -947,6 +951,7 @@
   transform: translateY(-1px);
   box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
 }
+.lift-import-btn:active { transform: scale(0.98); box-shadow: none; }
 
 .lift-import-panel {
   background: var(--surface2);
@@ -1205,6 +1210,7 @@
     animation: none;
   }
 
+  .ranks-mode-btn,
   .ranks-dropdown,
   .ranks-dropdown-summary,
   .ranks-dropdown-summary::after,

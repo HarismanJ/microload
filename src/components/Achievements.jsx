@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useEffectEvent } from 'react'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached } from '../lib/cache'
+import { useCurrentUserId } from '../context/UserContext'
+import { fetchProfileWithWorkoutCount } from '../lib/workoutCount'
 import { ACHIEVEMENTS, CATEGORIES } from '../data/achievements'
-import { DEFAULT_BODYWEIGHT_KG, getProfileBodyweightKg, getSetVolumeKg } from '../lib/liftMath'
 import LoadingSpinner from './LoadingSpinner'
 import '../styles/Achievements.css'
 
@@ -65,93 +66,84 @@ const CAT_ICONS = {
 }
 
 export default function Achievements({ onBack }) {
+  const userId = useCurrentUserId()
   const [unlocked, setUnlocked] = useState(new Set())
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
 
   async function load() {
-    const cached = getCached('achievements')
-    if (cached) {
-      setUnlocked(new Set(cached))
+    setLoading(true)
+    setLoadError('')
+    try {
+      const cached = getCached('achievements')
+      if (cached) {
+        setUnlocked(new Set(cached))
+        return
+      }
+
+      const [
+        { data: profileData, error: profileError },
+        { data: prs, error: prsError },
+        { data: nutData, error: nutritionError },
+      ] = await Promise.all([
+        fetchProfileWithWorkoutCount(userId, ['lifetime_volume_kg']),
+        supabase
+          .from('exercise_prs')
+          .select('best_1rm_kg, exercises!inner(name)')
+          .eq('user_id', userId),
+        supabase
+          .from('nutrition_logs')
+          .select('log_date')
+          .eq('user_id', userId)
+          .limit(1000),
+      ])
+      const error = profileError || prsError || nutritionError
+      if (error) throw error
+
+      // Max ORM in kg per exercise name — best_1rm_kg is already in kg
+      const maxOrmKg = {}
+      for (const pr of prs || []) {
+        const name = pr.exercises.name.toLowerCase()
+        if ((pr.best_1rm_kg || 0) > 0) {
+          maxOrmKg[name] = Math.max(maxOrmKg[name] || 0, pr.best_1rm_kg)
+        }
+      }
+      const totalVolumeKg = profileData?.lifetime_volume_kg ?? 0
+      const sessionCount = Math.max(0, Number(profileData?.workout_count) || 0)
+
+      const nutDayCount = new Set((nutData || []).map(n => n.log_date)).size
+
+      const unlockedIds = new Set()
+      for (const a of ACHIEVEMENTS) {
+        if (a.match) {
+          const best = Object.entries(maxOrmKg)
+            .filter(([name]) => name.includes(a.match))
+            .reduce((max, [, orm]) => Math.max(max, orm), 0)
+          if (best >= a.kgTarget) unlockedIds.add(a.id)
+        } else if (a.sessions !== undefined) {
+          if ((sessionCount || 0) >= a.sessions) unlockedIds.add(a.id)
+        } else if (a.nutDays !== undefined) {
+          if (nutDayCount >= a.nutDays) unlockedIds.add(a.id)
+        } else if (a.totalVolumeKg !== undefined) {
+          if (totalVolumeKg >= a.totalVolumeKg) unlockedIds.add(a.id)
+        }
+      }
+
+      setCached('achievements', [...unlockedIds], 10 * 60 * 1000) // 10 min TTL
+      setUnlocked(unlockedIds)
+    } catch (error) {
+      setLoadError(error?.message || 'Could not load achievements. Check your connection and try again.')
+    } finally {
       setLoading(false)
-      return
     }
-
-    const { data: { user } } = await supabase.auth.getUser()
-
-    const [
-      { data: profileData },
-      { data: sets },
-      { count: sessionCount },
-      { data: nutData },
-    ] = await Promise.all([
-      supabase
-        .from('profiles')
-        .select('bodyweight, unit_preference')
-        .eq('id', user.id)
-        .single(),
-      supabase
-        .from('workout_sets')
-        .select('estimated_1rm, weight, reps, unit, exercises!inner(name, equipment)')
-        .eq('user_id', user.id),
-      supabase
-        .from('workout_sessions')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', user.id)
-        .not('finished_at', 'is', null),
-      supabase
-        .from('nutrition_logs')
-        .select('log_date')
-        .eq('user_id', user.id),
-    ])
-
-    // Max ORM in kg per exercise name
-    const maxOrmKg = {}
-    const bodyweightKg = getProfileBodyweightKg(profileData, DEFAULT_BODYWEIGHT_KG)
-    let totalVolumeKg = 0
-    for (const s of sets || []) {
-      const name = s.exercises.name.toLowerCase()
-      if (s.estimated_1rm > 0) {
-        const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
-        maxOrmKg[name] = Math.max(maxOrmKg[name] || 0, kg)
-      }
-      if (s.reps > 0) {
-        totalVolumeKg += getSetVolumeKg({
-          weight: s.weight,
-          reps: s.reps,
-          unit: s.unit,
-          equipment: s.exercises?.equipment,
-          bodyweightKg,
-        })
-      }
-    }
-
-    const nutDayCount = new Set((nutData || []).map(n => n.log_date)).size
-
-    const unlockedIds = new Set()
-    for (const a of ACHIEVEMENTS) {
-      if (a.match) {
-        const best = Object.entries(maxOrmKg)
-          .filter(([name]) => name.includes(a.match))
-          .reduce((max, [, orm]) => Math.max(max, orm), 0)
-        if (best >= a.kgTarget) unlockedIds.add(a.id)
-      } else if (a.sessions !== undefined) {
-        if ((sessionCount || 0) >= a.sessions) unlockedIds.add(a.id)
-      } else if (a.nutDays !== undefined) {
-        if (nutDayCount >= a.nutDays) unlockedIds.add(a.id)
-      } else if (a.totalVolumeKg !== undefined) {
-        if (totalVolumeKg >= a.totalVolumeKg) unlockedIds.add(a.id)
-      }
-    }
-
-    setCached('achievements', [...unlockedIds], 10 * 60 * 1000) // 10 min TTL
-    setUnlocked(unlockedIds)
-    setLoading(false)
   }
 
+  const loadLatest = useEffectEvent(() => { load() })
+
   useEffect(() => {
-    const timer = setTimeout(() => { load() }, 0)
+    const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [])
+  }, [userId])
 
   const total = ACHIEVEMENTS.length
   const count = unlocked.size
@@ -172,6 +164,11 @@ export default function Achievements({ onBack }) {
 
       {loading ? (
         <div className="ach-loading"><LoadingSpinner size="lg" /></div>
+      ) : loadError ? (
+        <div className="ach-loading">
+          <p style={{ color: 'var(--muted)', textAlign: 'center', margin: 0 }}>{loadError}</p>
+          <button className="ach-back" onClick={load} style={{ width: 'auto', padding: '0 14px' }}>Retry</button>
+        </div>
       ) : (
         CATEGORIES.map(cat => {
           const items = ACHIEVEMENTS.filter(a => a.cat === cat)
