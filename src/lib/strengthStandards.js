@@ -1,8 +1,3 @@
-import {
-  LEGACY_STRENGTH_STANDARD_ALIASES,
-  STRENGTHLEVEL_EXERCISES,
-} from '../data/strengthLevelCatalog'
-
 export const TIER_GROUPS = ['Iron', 'Bronze', 'Silver', 'Gold', 'Platinum', 'Diamond', 'Master', 'Grandmaster', 'Elite']
 export const TIERS = TIER_GROUPS.flatMap(group => [`${group} I`, `${group} II`, `${group} III`])
 
@@ -61,10 +56,10 @@ function scaleBodyweightAnchors(anchors, factor) {
   return anchors.map((value, index) => index === 0 ? 0 : round(1 + (value - 1) * factor))
 }
 
-function buildCanonicalAnchors(gender) {
+function buildCanonicalAnchors(gender, exercises) {
   const entries = {}
 
-  for (const exercise of STRENGTHLEVEL_EXERCISES) {
+  for (const exercise of exercises) {
     const maleAnchors = levelsToAnchors(exercise.maleLevels)
     entries[exercise.name] = gender === 'female'
       ? exercise.equipment === 'Bodyweight'
@@ -76,10 +71,10 @@ function buildCanonicalAnchors(gender) {
   return entries
 }
 
-function applyLegacyAliases(anchorMap) {
+function applyLegacyAliases(anchorMap, aliases) {
   const withAliases = { ...anchorMap }
 
-  for (const [legacyName, canonicalName] of Object.entries(LEGACY_STRENGTH_STANDARD_ALIASES)) {
+  for (const [legacyName, canonicalName] of Object.entries(aliases)) {
     if (!withAliases[legacyName] && anchorMap[canonicalName]) {
       withAliases[legacyName] = anchorMap[canonicalName]
     }
@@ -88,9 +83,27 @@ function applyLegacyAliases(anchorMap) {
   return withAliases
 }
 
-export const ANCHORS = {
-  male: applyLegacyAliases(buildCanonicalAnchors('male')),
-  female: applyLegacyAliases(buildCanonicalAnchors('female')),
+let _anchors = null
+let _anchorsPromise = null
+
+export function getAnchors() {
+  if (_anchors) return Promise.resolve(_anchors)
+  if (!_anchorsPromise) {
+    _anchorsPromise = import('../data/strengthLevelCatalog').then(
+      ({ STRENGTHLEVEL_EXERCISES, LEGACY_STRENGTH_STANDARD_ALIASES }) => {
+        _anchors = {
+          male: applyLegacyAliases(buildCanonicalAnchors('male', STRENGTHLEVEL_EXERCISES), LEGACY_STRENGTH_STANDARD_ALIASES),
+          female: applyLegacyAliases(buildCanonicalAnchors('female', STRENGTHLEVEL_EXERCISES), LEGACY_STRENGTH_STANDARD_ALIASES),
+        }
+        return _anchors
+      }
+    )
+  }
+  return _anchorsPromise
+}
+
+export function anchorsOrNull() {
+  return _anchors
 }
 
 export function expandAnchors(anchors) {

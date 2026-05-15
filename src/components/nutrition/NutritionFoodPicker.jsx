@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react'
 import { supabase } from '../../lib/supabase'
 import { getCached, invalidateCache, setCached } from '../../lib/cache'
 import { useCurrentUserId } from '../../context/UserContext'
@@ -71,7 +71,7 @@ export default function NutritionFoodPicker({
     return foods
   }
 
-  async function loadRecent(isCancelled) {
+  const loadRecent = useCallback(async (isCancelled) => {
     if (!userId) {
       if (!isCancelled()) setLoadingRecent(false)
       return
@@ -107,7 +107,7 @@ export default function NutritionFoodPicker({
     setCached(cacheKey, recent, 5 * 60 * 1000)
     setRecent(recent)
     setLoadingRecent(false)
-  }
+  }, [userId])
 
   useEffect(() => {
     setLoadingRecent(true)
@@ -115,7 +115,7 @@ export default function NutritionFoodPicker({
     const isCancelled = () => cancelled
     const timer = setTimeout(() => { loadRecent(isCancelled) }, 0)
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [userId])
+  }, [loadRecent])
 
   // Scroll to top whenever the active view changes
   useEffect(() => {

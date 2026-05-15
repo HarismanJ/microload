@@ -182,7 +182,7 @@
 
 .nut-macro-track {
   height: 5px;
-  background: var(--surface2);
+  background: rgba(255,255,255,0.16);
   border-radius: 99px;
   overflow: hidden;
 }
@@ -1365,7 +1365,7 @@
 
 .nut-micro-track {
   height: 4px;
-  background: var(--surface2);
+  background: rgba(255,255,255,0.16);
   border-radius: 99px;
   overflow: hidden;
 }

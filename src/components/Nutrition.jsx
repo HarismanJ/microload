@@ -5,6 +5,7 @@ import { useCurrentUserId } from '../context/UserContext'
 import NutritionFoodPicker from './nutrition/NutritionFoodPicker'
 import LoadingSpinner from './LoadingSpinner'
 import { NUTRITION_FIELD_LIMITS, validateNumber } from '../lib/inputValidation'
+import { fmtCompact } from '../lib/liftMath'
 import '../styles/Nutrition.css'
 
 const FEED_FILTERS = [
@@ -569,14 +570,14 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       <div className="nut-summary" onClick={() => setShowDetail(s => !s)} style={{ cursor: 'pointer' }}>
         <div className="nut-ring-wrap">
           <svg width="120" height="120" viewBox="0 0 120 120">
-            <circle cx="60" cy="60" r={R} fill="none" stroke="var(--surface2)" strokeWidth="9"/>
+            <circle cx="60" cy="60" r={R} fill="none" stroke="rgba(255,255,255,0.16)" strokeWidth="9"/>
             <circle cx="60" cy="60" r={R} fill="none" stroke="var(--blue)" strokeWidth="9"
               strokeDasharray={`${dash} ${C}`} strokeLinecap="round" transform="rotate(-90 60 60)"
               style={{ transition: 'stroke-dasharray 0.5s ease' }}
             />
           </svg>
           <div className="nut-ring-center">
-            <div className="nut-ring-cal">{Math.round(totals.calories)}</div>
+            <div className="nut-ring-cal">{fmtCompact(Math.round(totals.calories))}</div>
             <div className="nut-ring-label">kcal</div>
           </div>
         </div>

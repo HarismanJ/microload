@@ -1,6 +1,5 @@
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
-import { STRENGTHLEVEL_EXERCISES } from './strengthLevelCatalog'
 
 const EXERCISES_CACHE_KEY = 'exercises'
 const CUSTOM_EXERCISE_SELECT = [
@@ -59,16 +58,26 @@ try {
   Object.keys(localStorage).filter(k => k.startsWith(prefix)).forEach(k => localStorage.removeItem(k))
 } catch { /* ignore */ }
 
-// Pre-build default exercise objects from catalog (metadata only, no id yet)
-const CATALOG_DEFAULTS = STRENGTHLEVEL_EXERCISES.map(ex => ({
-  id: undefined,
-  name: ex.name,
-  category: ex.category,
-  equipment: ex.equipment,
-  user_id: null,
-  primary_muscles: ex.primaryMuscles,
-  secondary_muscles: ex.secondaryMuscles,
-}))
+// Lazily load the catalog the first time fetchExercises runs.
+// Promise singleton ensures the import fires once and is shared across concurrent callers.
+let catalogDefaultsPromise = null
+
+function loadCatalogDefaults() {
+  if (!catalogDefaultsPromise) {
+    catalogDefaultsPromise = import('./strengthLevelCatalog').then(({ STRENGTHLEVEL_EXERCISES }) =>
+      STRENGTHLEVEL_EXERCISES.map(ex => ({
+        id: undefined,
+        name: ex.name,
+        category: ex.category,
+        equipment: ex.equipment,
+        user_id: null,
+        primary_muscles: ex.primaryMuscles,
+        secondary_muscles: ex.secondaryMuscles,
+      }))
+    )
+  }
+  return catalogDefaultsPromise
+}
 
 function isMissingExerciseUserColumn(error) {
   const message = error?.message?.toLowerCase?.() || ''
@@ -85,16 +94,16 @@ export async function fetchExercises(userId) {
   const cached = getCached(cacheKey)
   if (cached) return cached
 
-  // Fetch only IDs for default exercises — metadata comes from catalog
-  const { data: idRows, error: idError } = await supabase
-    .from('exercises')
-    .select('id, name')
-    .is('user_id', null)
+  // Fetch IDs and catalog defaults in parallel — catalog metadata never changes
+  const [catalogDefaults, { data: idRows, error: idError }] = await Promise.all([
+    loadCatalogDefaults(),
+    supabase.from('exercises').select('id, name').is('user_id', null),
+  ])
 
   if (idError) throw idError
 
   const idByName = new Map((idRows ?? []).map(r => [r.name, r.id]))
-  const defaultExercises = CATALOG_DEFAULTS.map(ex => ({ ...ex, id: idByName.get(ex.name) }))
+  const defaultExercises = catalogDefaults.map(ex => ({ ...ex, id: idByName.get(ex.name) }))
 
   // Extract cardio exercises from the same system rows — metadata comes from CARDIO_EXERCISES
   const cardioExercises = (idRows ?? [])
@@ -120,7 +129,7 @@ export async function fetchExercises(userId) {
     if (customError) {
       if (!isMissingExerciseUserColumn(customError)) throw customError
     } else if (custom?.length) {
-      result = [...defaultExercises, ...custom]
+      result = [...defaultExercises, ...cardioExercises, ...custom]
     }
   }
 
@@ -182,16 +191,4 @@ export async function fetchStandardExercisesByNames(names) {
     }
   }
   return [...byName.values()]
-}
-
-export async function fetchPreviousSets(exerciseId, userId) {
-  const { data, error } = await supabase
-    .from('workout_sets')
-    .select('*, workout_sessions(started_at)')
-    .eq('exercise_id', exerciseId)
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(10)
-  if (error) throw error
-  return data
 }

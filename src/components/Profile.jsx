@@ -27,10 +27,8 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   const currentUser = useCurrentUser()
   const { themeId, switchTheme, previewTheme, themes } = useTheme()
   const profileIdRef = useRef(null)
-  const themeToastRef = useRef(null)
   const bugReportRef = useRef(null)
   const deleteConfirmRef = useRef(null)
-  const [themeToast, setThemeToast] = useState(null)
   const [themeError, setThemeError] = useState('')
 
   async function savePreferredTheme() {
@@ -61,8 +59,6 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
     setCached('profile', { email: currentUser.email || email, profile: data })
     saveThemeForUser(data.theme || themeId, profileId)
     switchTheme(data.theme || themeId)
-    const name = themes.find(t => t.id === (data.theme || themeId))?.name || data.theme || themeId
-    setThemeToast(name)
   }
 
   const [profile, setProfile] = useState(null)
@@ -83,7 +79,6 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
-  useFocusTrap(themeToastRef, { active: !!themeToast, onEscape: () => setThemeToast(null) })
   useFocusTrap(bugReportRef, { active: showBugReport, onEscape: () => setShowBugReport(false) })
   useFocusTrap(deleteConfirmRef, { active: showDeleteConfirm, onEscape: () => !deleting && setShowDeleteConfirm(false) })
 
@@ -403,15 +398,6 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         </button>
       </div>
 
-      {themeToast && (
-        <div className="theme-toast-overlay" onClick={() => setThemeToast(null)}>
-          <div className="theme-toast-modal" onClick={e => e.stopPropagation()} ref={themeToastRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Theme confirmation">
-            <div className="theme-toast-msg">Preferred colour set to <strong>{themeToast}</strong></div>
-            <button className="theme-toast-ok" onClick={() => setThemeToast(null)}>OK</button>
-          </div>
-        </div>
-      )}
-
       {showBugReport && (
         <div className="bug-report-overlay" onClick={() => setShowBugReport(false)}>
           <div className="bug-report-modal" onClick={e => e.stopPropagation()} ref={bugReportRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="bug-report-title">
@@ -499,6 +485,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
               value={deleteConfirmText}
               onChange={e => setDeleteConfirmText(e.target.value)}
               placeholder="DELETE"
+              maxLength={6}
               disabled={deleting}
               style={{
                 width: '100%', background: 'var(--bg)', border: '1px solid var(--border)',

@@ -145,10 +145,18 @@
   color: var(--text);
 }
 
+.profile-header > div:not(.avatar) {
+  min-width: 0;
+  overflow: hidden;
+}
+
 .profile-email {
   font-size: 13px;
   color: var(--muted);
   margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-stats {
@@ -652,6 +660,35 @@
   min-width: 0;
 }
 
+.bw-chart-loading {
+  position: relative;
+}
+
+.bw-chart-spinner-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  border-radius: 8px;
+  z-index: 1;
+}
+
+.bw-period-spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border: 2.5px solid var(--border);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: bw-spin 0.7s linear infinite;
+}
+
+@keyframes bw-spin {
+  to { transform: rotate(360deg); }
+}
+
 .body-stats-goal-row {
   display: flex;
   align-items: center;
@@ -691,6 +728,144 @@
 .body-stats-pace-rate-input {
   width: 72px !important;
   flex-shrink: 0;
+}
+
+.bw-eta-block {
+  margin: 6px 0 4px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border-radius: 10px;
+}
+
+.bw-eta-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 7px;
+}
+
+.bw-eta-stats {
+  display: flex;
+  gap: 12px;
+}
+
+.bw-eta-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bw-eta-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.bw-eta-value {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bw-eta-value--pace {
+  color: #fb923c;
+}
+
+.bw-eta-value--trend {
+  color: var(--blue);
+}
+
+.bw-eta-value--past {
+  color: var(--muted);
+}
+
+.bw-coach-card {
+  margin: 2px 0 6px;
+  padding: 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.bw-coach-card--success {
+  border-color: rgba(34, 197, 94, 0.22);
+  background: rgba(34, 197, 94, 0.08);
+}
+
+.bw-coach-card--deficit {
+  border-color: rgba(251, 146, 60, 0.24);
+  background: rgba(251, 146, 60, 0.08);
+}
+
+.bw-coach-card--surplus {
+  border-color: color-mix(in srgb, var(--blue) 24%, var(--border));
+  background: color-mix(in srgb, var(--blue) 8%, var(--surface2));
+}
+
+.bw-coach-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.bw-coach-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bw-coach-summary {
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.bw-coach-target {
+  flex-shrink: 0;
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  line-height: 1;
+  text-align: right;
+}
+
+.bw-coach-target span {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.bw-coach-instruction {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.35;
+}
+
+.bw-coach-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bw-coach-metrics span {
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 7px;
 }
 
 .body-stats-chart-wrap {
@@ -1988,6 +2163,9 @@
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .day-exercise-category {

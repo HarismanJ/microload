@@ -1,6 +1,6 @@
 // SVG line chart — shows estimated 1RM over time
 
-export default function ExerciseChart({ data, unit = 'kg' }) {
+export default function ExerciseChart({ data, unit = 'kg', showTrendLine = false }) {
   if (!data || data.length === 0) {
     return <div className="chart-empty">No history yet</div>
   }
@@ -19,6 +19,21 @@ export default function ExerciseChart({ data, unit = 'kg' }) {
 
   const xAt = (i) => padL + (data.length === 1 ? plotW / 2 : (i / (data.length - 1)) * plotW)
   const yAt = (v) => padT + plotH - ((v - minVal) / (maxVal - minVal)) * plotH
+
+  // Linear regression for trend line
+  let trendY1 = null, trendY2 = null
+  if (showTrendLine && data.length >= 2) {
+    const n = data.length
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0
+    for (let i = 0; i < n; i++) {
+      sumX += i; sumY += data[i].orm; sumXY += i * data[i].orm; sumX2 += i * i
+    }
+    const denom = n * sumX2 - sumX * sumX
+    const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0
+    const intercept = (sumY - slope * sumX) / n
+    trendY1 = intercept
+    trendY2 = slope * (n - 1) + intercept
+  }
 
   const pts = data.map((d, i) => `${xAt(i)},${yAt(d.orm)}`).join(' ')
   const areaBase = padT + plotH
@@ -40,6 +55,9 @@ export default function ExerciseChart({ data, unit = 'kg' }) {
           <stop offset="0%"   stopColor="var(--blue)" stopOpacity="0.28" />
           <stop offset="100%" stopColor="var(--blue)" stopOpacity="0" />
         </linearGradient>
+        <clipPath id="orm-clip">
+          <rect x={padL} y={padT} width={plotW} height={plotH} />
+        </clipPath>
       </defs>
 
       {/* Grid + Y labels */}
@@ -59,6 +77,19 @@ export default function ExerciseChart({ data, unit = 'kg' }) {
       {/* Line */}
       {data.length > 1 && (
         <polyline points={pts} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      )}
+
+      {/* Trend line */}
+      {trendY1 !== null && (
+        <line
+          x1={xAt(0)} y1={yAt(trendY1)}
+          x2={xAt(data.length - 1)} y2={yAt(trendY2)}
+          stroke="#a78bfa"
+          strokeWidth="1.5"
+          strokeDasharray="5 3"
+          strokeLinecap="round"
+          clipPath="url(#orm-clip)"
+        />
       )}
 
       {/* Dots */}

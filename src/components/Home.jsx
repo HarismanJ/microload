@@ -1,16 +1,20 @@
 import { useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useMemo } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
+import Model from 'react-body-highlighter'
 import { supabase } from '../lib/supabase'
 import { getCached, getCalendarMonthCacheKey, getStartupSnapshot, invalidateCache, setCached, setStartupSnapshot } from '../lib/cache'
 import { DEFAULT_HOME_WEIGHT_PERIOD, filterByChartPeriod } from '../lib/chartPeriods'
 import { WEIGHT_TREND_PRESETS, getPresetRate } from '../lib/weightTrend'
+import { applyMuscleWorkloadGoal, fetchWeeklyMuscleWorkload, getLocalTrainingWeekRange, MUSCLE_WORKLOAD_GROUPS } from '../lib/muscleWorkload'
+import { SECONDARY_MUSCLE_CREDIT } from '../lib/muscleStimulus'
+import { detectOvertrain } from '../lib/overtrain'
 import LoadingSpinner from './LoadingSpinner'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import BodyWeightDetail from './profile/BodyWeightDetail'
 import WorkoutCalendar from './profile/WorkoutCalendar'
 import WeightChart from './profile/WeightChart'
-import { convertWeight } from '../lib/liftMath'
+import { convertWeight, fmtCompact } from '../lib/liftMath'
 import { VALIDATION_LIMITS, validateBodyweight, validateNumber } from '../lib/inputValidation'
 import '../styles/Home.css'
 
@@ -48,13 +52,27 @@ function loadStoredBodyWeightChartUnit() {
 
 const BURN_R = 40
 const BURN_C = 2 * Math.PI * BURN_R
+const MUSCLE_REVEAL_STEP_MS = 80
+const MUSCLE_HEAT_COLORS = [
+  '#94a3b8',
+  '#f59e0b',
+  '#22c55e',
+  '#f97316',
+  '#ef4444',
+]
+
+const CHART_MUSCLE_TO_GROUP_KEY = new Map()
+MUSCLE_WORKLOAD_GROUPS.forEach(group => {
+  group.chartMuscles.forEach(m => CHART_MUSCLE_TO_GROUP_KEY.set(m, group.key))
+})
 
 let ghostChartHasPlayed = false
 let nutGlowHasPlayed = false
 let burnGlowHasPlayed = false
+let muscleRevealHasPlayed = false
 let lastHomeUserId = null
 
-export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted }) {
+export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted, workoutActive = false, onOvertrain, isVisible = true, appForegroundTick = 0 }) {
   const [profile, setProfile]         = useState(null)
   const [todayNut, setTodayNut]       = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 })
   const [workoutStreak, setWorkoutStreak] = useState(0)
@@ -69,6 +87,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [bwSaving, setBwSaving] = useState(false)
   const [bwError, setBwError] = useState('')
   const [weightPeriod, setWeightPeriod] = useState(DEFAULT_HOME_WEIGHT_PERIOD)
+  const [weightAllLoading, setWeightAllLoading] = useState(false)
   const [showTrendLine, setShowTrendLine] = useState(() => {
     try { return localStorage.getItem('bw_trend_line') === 'true' } catch { return false }
   })
@@ -95,9 +114,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [weightDeletingId, setWeightDeletingId] = useState(null)
   const [weightDeleteError, setWeightDeleteError] = useState('')
   const [selectedDay, setSelectedDay] = useState(null) // { sessionIds, dateStr }
-  const appWasBackgroundedRef = useRef(false)
   const burnSheetJustOpenedRef = useRef(false)
-  const [, setCalendarInitialReady] = useState(false)
+  const [calendarInitialReady, setCalendarInitialReady] = useState(false)
   const [isPhoneWidth, setIsPhoneWidth] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ))
@@ -107,15 +125,65 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [burnGoalInput, setBurnGoalInput] = useState('')
   const [burnGoalError, setBurnGoalError] = useState('')
   const [burnGoalSaving, setBurnGoalSaving] = useState(false)
+  const [burnWidgetSide, setBurnWidgetSide] = useState(() => {
+    const saved = localStorage.getItem('liftlog:burnWidgetSide')
+    return saved === 'muscle-front' || saved === 'muscle-back' ? saved : 'calories'
+  })
+  const [weeklyMuscleWorkload, setWeeklyMuscleWorkload] = useState(null)
+  const [priorWeekMuscleWorkload, setPriorWeekMuscleWorkload] = useState(null)
+  const [muscleRevealStep, setMuscleRevealStep] = useState(0)
+  const [muscleDetailOpen, setMuscleDetailOpen] = useState(false)
+  const [muscleDetailSelectedKey, setMuscleDetailSelectedKey] = useState(null)
+  const [expandedMuscleRows, setExpandedMuscleRows] = useState(new Set())
+  const [muscleWorkloadGoal, setMuscleWorkloadGoal] = useState(() => {
+    try { return localStorage.getItem('muscle_workload_goal') || 'hypertrophy' } catch { return 'hypertrophy' }
+  })
   const burnGoalModalRef = useRef(null)
+  const muscleDetailModalRef = useRef(null)
+  const muscleTouchRef = useRef({ startY: null, dragging: false })
+  const prevBurnWidgetSideRef = useRef(burnWidgetSide)
+  const muscleRevealStepRef = useRef(0)
+
+  const handleMuscleTouchStart = (e) => {
+    if (muscleDetailModalRef.current?.scrollTop !== 0) return
+    muscleTouchRef.current = { startY: e.touches[0].clientY, dragging: true }
+  }
+
+  const handleMuscleTouchMove = (e) => {
+    if (!muscleTouchRef.current.dragging) return
+    const deltaY = e.touches[0].clientY - muscleTouchRef.current.startY
+    if (deltaY <= 0) return
+    if (muscleDetailModalRef.current) {
+      muscleDetailModalRef.current.style.transition = 'none'
+      muscleDetailModalRef.current.style.transform = `translateY(${deltaY}px)`
+    }
+  }
+
+  const handleMuscleTouchEnd = () => {
+    if (!muscleTouchRef.current.dragging) return
+    const el = muscleDetailModalRef.current
+    const raw = el?.style.transform ?? ''
+    const deltaY = raw ? parseFloat(raw.replace('translateY(', '')) : 0
+    muscleTouchRef.current = { startY: null, dragging: false }
+    if (deltaY > 80) {
+      setMuscleDetailOpen(false)
+      setMuscleDetailSelectedKey(null)
+      if (el) el.style.transform = ''
+    } else if (el) {
+      el.style.transition = 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1)'
+      el.style.transform = ''
+    }
+  }
   useFocusTrap(burnGoalModalRef, { active: burnGoalSheetOpen, onEscape: () => setBurnGoalSheetOpen(false) })
+  useFocusTrap(muscleDetailModalRef, { active: muscleDetailOpen, onEscape: () => setMuscleDetailOpen(false) })
   const nutEmpty = todayNut.calories === 0 && todayNut.protein === 0 && todayNut.carbs === 0 && todayNut.fat === 0
   const [barsAnimatedIn, setBarsAnimatedIn] = useState(false)
+  const [burnRingAnimatedIn, setBurnRingAnimatedIn] = useState(false)
   const [nutGlowActive, setNutGlowActive] = useState(false)
   const [burnGlowActive, setBurnGlowActive] = useState(false)
   const [animReady, setAnimReady] = useState(false)
-  const firstEntryWidgetHold = splashDone && !introMotionReady
-  const widgetAnimationReady = animReady && !firstEntryWidgetHold
+  const entryAnimationReady = !loading && calendarInitialReady && splashDone && introMotionReady && isVisible
+  const widgetAnimationReady = animReady
 
   useLayoutEffect(() => {
     if (lastHomeUserId !== userId) {
@@ -123,6 +191,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       ghostChartHasPlayed = false
       nutGlowHasPlayed = false
       burnGlowHasPlayed = false
+      muscleRevealHasPlayed = false
+      muscleRevealStepRef.current = 0
+      setMuscleRevealStep(0)
     }
   }, [userId])
 
@@ -136,14 +207,14 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     const contentNode = document.querySelector('.content')
     if (!(contentNode instanceof HTMLElement)) return undefined
 
-    const shouldLockHomeScroll = isPhoneWidth && !selectedDay && !showWeightDetail
+    const shouldLockHomeScroll = isPhoneWidth && !selectedDay && !showWeightDetail && !workoutActive
     contentNode.classList.toggle('content-home-locked', shouldLockHomeScroll)
     if (shouldLockHomeScroll) contentNode.scrollTop = 0
 
     return () => {
       contentNode.classList.remove('content-home-locked')
     }
-  }, [isPhoneWidth, selectedDay, showWeightDetail])
+  }, [isPhoneWidth, selectedDay, showWeightDetail, workoutActive])
 
   function handleDeletedWorkout({ remainingSessionIds = [], dateStr }) {
     setSelectedDay({ sessionIds: remainingSessionIds, dateStr })
@@ -152,10 +223,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     onWorkoutDeleted?.()
   }
 
-  function applyData({ prof, nutLogs, allSessions, weightLogs: logs }) {
+  function applyData({ prof, nutLogs, allSessions, weightLogs: logs, weeklyMuscleWorkload: muscleWorkload, priorWeekMuscleWorkload }) {
     setProfile(prof)
     setWeightLogs(logs || [])
     setBurnGoal(prof?.calories_burned_goal || null)
+    setWeeklyMuscleWorkload(muscleWorkload || null)
+    setPriorWeekMuscleWorkload(priorWeekMuscleWorkload || null)
 
     const goalKg = prof?.weight_goal_kg ?? null
     setGoalWeightKg(goalKg)
@@ -243,34 +316,45 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   async function load() {
     const today = todayStr()
     const cacheKey = 'home'
-    const cacheVersion = 7
+    const cacheVersion = 9
+    const requireFreshInitialData = useStartupSnapshot
+    let hasWarmData = false
     setLoadError(false)
 
     try {
       const cached = getCached(cacheKey)
       if (cached?.version === cacheVersion && cached?.userId === userId) {
         applyData(cached)
-        setLoading(false)
-        return
+        hasWarmData = true
+        if (!requireFreshInitialData) {
+          setLoading(false)
+          return
+        }
       }
 
-      if (useStartupSnapshot) {
+      if (!hasWarmData && useStartupSnapshot) {
         const storedSnapshot = getStartupSnapshot(cacheKey, userId)
         if (storedSnapshot?.version === cacheVersion && storedSnapshot?.userId === userId) {
           setCached(cacheKey, storedSnapshot)
           applyData(storedSnapshot)
-          setLoading(false)
+          hasWarmData = true
         }
       }
 
       const oneYearAgo = new Date()
       oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
 
+      const priorWeekDate = new Date(Date.now() - 7 * 86400000)
+      const priorWeekMuscleKey = `muscle-workload:prior:${getLocalTrainingWeekRange(priorWeekDate).startIso.slice(0, 10)}`
+      const cachedPriorWeekMuscle = getCached(priorWeekMuscleKey)
+
       const [
         profileResponse,
         nutritionResponse,
         sessionsResponse,
         weightResponse,
+        weeklyMuscleWorkloadResult,
+        priorWeekMuscleWorkloadResult,
       ] = await Promise.all([
         supabase.from('profiles')
           .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight, calories_burned_goal, gender, weight_goal_kg, weight_trend_mode, weight_trend_rate_kg_per_week, weight_trend_anchor_date, weight_trend_anchor_weight_kg')
@@ -286,8 +370,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         supabase.from('body_weight_logs')
           .select('id, weight, unit, logged_at')
           .eq('user_id', userId)
+          .gte('logged_at', oneYearAgo.toISOString())
           .order('logged_at', { ascending: true }),
+        fetchWeeklyMuscleWorkload(userId),
+        cachedPriorWeekMuscle ?? fetchWeeklyMuscleWorkload(userId, priorWeekDate),
       ])
+      if (!cachedPriorWeekMuscle) setCached(priorWeekMuscleKey, priorWeekMuscleWorkloadResult, 7 * 24 * 60 * 60 * 1000)
 
       const loadError = profileResponse.error
         || nutritionResponse.error
@@ -301,6 +389,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         prof: profileResponse.data,
         nutLogs: nutritionResponse.data,
         allSessions: sessionsResponse.data,
+        weeklyMuscleWorkload: weeklyMuscleWorkloadResult,
+        priorWeekMuscleWorkload: priorWeekMuscleWorkloadResult,
         weightLogs: weightResponse.data?.map(log => ({
           id: log.id,
           weight: log.weight,
@@ -340,19 +430,51 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [workoutRefreshTick])
 
   useEffect(() => {
+    if (weightPeriod !== 'all') return
+    setWeightAllLoading(true)
+    supabase.from('body_weight_logs')
+      .select('id, weight, unit, logged_at')
+      .eq('user_id', userId)
+      .order('logged_at', { ascending: true })
+      .then(({ data }) => {
+        if (!data) return
+        setWeightLogs(data.map(log => ({
+          id: log.id,
+          weight: log.weight,
+          unit: log.unit,
+          date: log.logged_at.slice(0, 10),
+          loggedAt: log.logged_at,
+        })))
+      })
+      .finally(() => setWeightAllLoading(false))
+  }, [weightPeriod, userId])
+
+  useEffect(() => {
     onWorkoutStreakChange?.(workoutStreak)
   }, [onWorkoutStreakChange, workoutStreak])
 
   useEffect(() => {
-    if (loading) return
+    if (loading || !calendarInitialReady) return
     onInitialReady?.()
-  }, [loading, onInitialReady])
+  }, [calendarInitialReady, loading, onInitialReady])
 
   useEffect(() => {
-    if (!splashDone) return
-    const t = setTimeout(() => setAnimReady(true), 80)
-    return () => clearTimeout(t)
-  }, [splashDone])
+    if (!entryAnimationReady) {
+      setAnimReady(false)
+      return undefined
+    }
+
+    setAnimReady(false)
+    let timer = null
+    const frame = requestAnimationFrame(() => {
+      timer = setTimeout(() => setAnimReady(true), 80)
+    })
+
+    return () => {
+      cancelAnimationFrame(frame)
+      if (timer !== null) clearTimeout(timer)
+    }
+  }, [entryAnimationReady])
 
   useEffect(() => {
     if (loading || !widgetAnimationReady || selectedDay || showWeightDetail) {
@@ -366,23 +488,32 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [loading, widgetAnimationReady, selectedDay, showWeightDetail, todayNut.calories, todayNut.protein, todayNut.carbs, todayNut.fat, appReturnTick])
 
   useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        appWasBackgroundedRef.current = true
-        return
-      }
-
-      if (document.visibilityState === 'visible' && appWasBackgroundedRef.current) {
-        appWasBackgroundedRef.current = false
-        ghostChartHasPlayed = false
-        nutGlowHasPlayed = false
-        burnGlowHasPlayed = false
-        setAppReturnTick(t => t + 1)
-      }
+    if (loading || !widgetAnimationReady || selectedDay || showWeightDetail || burnWidgetSide !== 'calories') {
+      setBurnRingAnimatedIn(false)
+      return undefined
     }
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }, [])
+
+    setBurnRingAnimatedIn(false)
+    const timer = setTimeout(() => setBurnRingAnimatedIn(true), 120)
+    return () => clearTimeout(timer)
+  }, [loading, widgetAnimationReady, selectedDay, showWeightDetail, burnWidgetSide, burnedToday, burnGoal, appReturnTick])
+
+  useEffect(() => {
+    if (!isVisible) return
+    nutGlowHasPlayed = false
+    burnGlowHasPlayed = false
+    muscleRevealHasPlayed = false
+    setAppReturnTick(t => t + 1)
+  }, [isVisible])
+
+  useEffect(() => {
+    if (!appForegroundTick || !isVisible) return
+    ghostChartHasPlayed = false
+    nutGlowHasPlayed = false
+    burnGlowHasPlayed = false
+    muscleRevealHasPlayed = false
+    setAppReturnTick(t => t + 1)
+  }, [appForegroundTick, isVisible])
 
   useEffect(() => {
     if (loading || !widgetAnimationReady || weightLogs.length > 0 || ghostChartHasPlayed) return
@@ -397,7 +528,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     if (loading || !widgetAnimationReady || !nutEmpty || nutGlowHasPlayed) return
     nutGlowHasPlayed = true
     setNutGlowActive(true)
-    const t = setTimeout(() => setNutGlowActive(false), 1500)
+    const t = setTimeout(() => setNutGlowActive(false), 2800)
     return () => clearTimeout(t)
   }, [loading, widgetAnimationReady, nutEmpty, appReturnTick])
 
@@ -405,9 +536,60 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     if (loading || !widgetAnimationReady || burnedToday !== 0 || burnGlowHasPlayed) return
     burnGlowHasPlayed = true
     setBurnGlowActive(true)
-    const t = setTimeout(() => setBurnGlowActive(false), 1500)
+    const t = setTimeout(() => setBurnGlowActive(false), 2800)
     return () => clearTimeout(t)
   }, [loading, widgetAnimationReady, burnedToday, appReturnTick])
+
+  const goalAdjustedWeeklyMuscleWorkload = useMemo(
+    () => applyMuscleWorkloadGoal(weeklyMuscleWorkload, muscleWorkloadGoal),
+    [weeklyMuscleWorkload, muscleWorkloadGoal]
+  )
+  const goalAdjustedPriorMuscleWorkload = useMemo(
+    () => applyMuscleWorkloadGoal(priorWeekMuscleWorkload, muscleWorkloadGoal),
+    [priorWeekMuscleWorkload, muscleWorkloadGoal]
+  )
+  const muscleWorkloadGroups = goalAdjustedWeeklyMuscleWorkload?.groups || []
+  const goalChartData = muscleWorkloadGroups
+    .filter(g => g.heatBucket > 0)
+    .map(g => ({ name: g.label, muscles: g.chartMuscles, frequency: g.heatBucket }))
+  const muscleDetailRows = [...muscleWorkloadGroups]
+    .filter(group => group.effectiveSets > 0)
+    .sort((a, b) => b.targetRatio - a.targetRatio || b.effectiveSets - a.effectiveSets || a.label.localeCompare(b.label))
+  const muscleDetailSelectedGroup = muscleDetailSelectedKey
+    ? (muscleWorkloadGroups.find(g => g.key === muscleDetailSelectedKey) ?? null)
+    : null
+  const hasWeeklyMuscleWork = (goalAdjustedWeeklyMuscleWorkload?.trainedGroupCount || 0) > 0
+  const formatMuscleDate = (timestamp) => timestamp
+    ? new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : 'Not this week'
+
+  useEffect(() => {
+    const sideChanged = prevBurnWidgetSideRef.current !== burnWidgetSide
+    prevBurnWidgetSideRef.current = burnWidgetSide
+    if (sideChanged && burnWidgetSide !== 'calories') {
+      muscleRevealHasPlayed = false
+      muscleRevealStepRef.current = 0
+      setMuscleRevealStep(0)
+    }
+    if (loading || !widgetAnimationReady || !goalChartData.length || muscleRevealHasPlayed) return
+    const total = goalChartData.length
+    if (muscleRevealStepRef.current >= total) {
+      muscleRevealHasPlayed = true
+      return
+    }
+    let step = muscleRevealStepRef.current
+    const id = setInterval(() => {
+      step++
+      muscleRevealStepRef.current = step
+      setMuscleRevealStep(step)
+      if (step >= total) {
+        clearInterval(id)
+        muscleRevealHasPlayed = true
+      }
+    }, MUSCLE_REVEAL_STEP_MS)
+    return () => clearInterval(id)
+  }, [loading, widgetAnimationReady, appReturnTick, burnWidgetSide, goalChartData.length])
+
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -656,8 +838,10 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
   const calPct = Math.min(1, todayNut.calories / todayNut.goal)
   const effectiveBurnGoal = burnGoal ?? 0
-  const burnPct = effectiveBurnGoal > 0 ? Math.min(1, burnedToday / effectiveBurnGoal) : 0
-  const burnComplete = burnedToday >= effectiveBurnGoal
+  const noGoalSet = effectiveBurnGoal === 0
+  const burnEmpty = burnedToday === 0
+  const burnPct = noGoalSet ? (burnEmpty ? 0 : 1) : Math.min(1, burnedToday / effectiveBurnGoal)
+  const burnComplete = !noGoalSet && burnedToday >= effectiveBurnGoal
   const burnDash = burnPct * BURN_C
   const calBarWidth = `${barsAnimatedIn ? calPct * 100 : 0}%`
   const activeWeightUnit = weightSheetUnit || profile?.unit_preference || 'kg'
@@ -679,6 +863,15 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     ? Math.round(convertWeight(profile.bodyweight, profile?.unit_preference || activeWeightUnit, activeWeightUnit) * 10) / 10
     : null
   const calendarRefreshKey = `${weightLogs.length}:${weightLogs.at(-1)?.loggedAt || ''}:${todayNut.calories}:${todayNut.protein}:${todayNut.carbs}:${todayNut.fat}`
+  const burnWidgetIsMuscle = burnWidgetSide === 'muscle-front' || burnWidgetSide === 'muscle-back'
+
+  useEffect(() => {
+    if (!goalAdjustedWeeklyMuscleWorkload) return
+    onOvertrain?.(detectOvertrain({
+      currentWorkload: goalAdjustedWeeklyMuscleWorkload,
+      priorWorkload: goalAdjustedPriorMuscleWorkload,
+    }))
+  }, [goalAdjustedWeeklyMuscleWorkload, goalAdjustedPriorMuscleWorkload, onOvertrain])
 
   if (loading) return <LoadingSpinner fullPage />
 
@@ -730,7 +923,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         error={bwError}
         weightPeriod={weightPeriod}
         onPeriodChange={setWeightPeriod}
+        weightAllLoading={weightAllLoading}
         hasWeightLogs={weightLogs.length > 0}
+        weightLogs={weightLogs}
         filteredWeightLogs={filteredWeightLogs}
         chartHeight={isPhoneWidth ? 232 : 260}
         recentWeightLogs={recentWeightLogs}
@@ -781,6 +976,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
         onTrendDateChange={setTrendDatePickerValue}
         onTrendDateConfirm={confirmTrendMode}
         onTrendDateCancel={() => { setTrendDatePickerOpen(false); setPendingTrendRate(null) }}
+        dailyCalorieGoal={todayNut.goal}
         showTrendMode={showTrendMode}
         onToggleTrendMode={() => {
           const next = !showTrendMode
@@ -815,7 +1011,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
             </div>
             <div className="home-nut-top">
               <div>
-                <div className="home-today-val">{Math.round(todayNut.calories)}</div>
+                <div className="home-today-val">{fmtCompact(Math.round(todayNut.calories))}</div>
                 <div className="home-today-sub">of {todayNut.goal} kcal</div>
               </div>
             </div>
@@ -849,44 +1045,107 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
           {/* Burned (right) */}
           <div
-            className="home-today-card home-today-card-clickable home-burned-widget"
+            className={`home-today-card home-today-card-clickable home-burned-widget home-burned-widget-${burnWidgetSide}`}
             onClick={() => {
+              if (burnWidgetIsMuscle) {
+                setMuscleDetailSelectedKey(null)
+                setExpandedMuscleRows(new Set())
+                setMuscleDetailOpen(true)
+                return
+              }
               setBurnGoalInput(burnGoal ? String(burnGoal) : '')
               burnSheetJustOpenedRef.current = true
               setBurnGoalSheetOpen(true)
               setTimeout(() => { burnSheetJustOpenedRef.current = false }, 300)
             }}
           >
-            <div className="home-today-card-header">
-              <span>Calories Burned</span>
-            </div>
-            <div className="home-burn-ring-wrap">
-              <svg width="100" height="100" viewBox="0 0 100 100" aria-hidden="true" className={burnGlowActive ? 'home-burn-ring-glow' : undefined}>
-                <defs>
-                  <linearGradient id="blg" x1="0" y1="0" x2="1" y2="1">
-                    {!burnComplete && (
-                      <animateTransform attributeName="gradientTransform" type="rotate" from="0 0.5 0.5" to="360 0.5 0.5" dur="4s" repeatCount="indefinite" />
-                    )}
-                    <stop offset="0%"   stopColor={burnComplete ? '#4ade80' : '#fbbf24'} />
-                    <stop offset="40%"  stopColor={burnComplete ? '#22c55e' : '#f97316'} />
-                    <stop offset="80%"  stopColor={burnComplete ? '#16a34a' : '#dc2626'} />
-                    <stop offset="100%" stopColor={burnComplete ? '#4ade80' : '#fbbf24'} />
-                  </linearGradient>
-                </defs>
-                <circle cx="50" cy="50" r={BURN_R} fill="none" stroke="var(--surface2)" strokeWidth="8" />
-                <circle cx="50" cy="50" r={BURN_R} fill="none"
-                  stroke="url(#blg)"
-                  strokeWidth="8"
-                  strokeDasharray={`${barsAnimatedIn ? burnDash : 0} ${BURN_C}`}
-                  strokeLinecap="round"
-                  transform="rotate(-90 50 50)"
-                  style={{ transition: 'stroke-dasharray 0.88s cubic-bezier(0.22, 1, 0.36, 1) 80ms' }}
-                />
-                <text x="50" y="47" textAnchor="middle" dominantBaseline="middle" fill="var(--text)" fontSize="18" fontWeight="800" fontFamily="inherit">{burnedToday}</text>
-                <text x="50" y="62" textAnchor="middle" fill="var(--muted)" fontSize="9" fontFamily="inherit">kcal</text>
+            <button
+              type="button"
+              className="home-widget-flip-btn"
+              aria-label={
+                burnWidgetSide === 'calories'
+                  ? 'Show front muscles worked'
+                  : burnWidgetSide === 'muscle-front'
+                    ? 'Show back muscles worked'
+                    : 'Show calories burned'
+              }
+              onClick={(event) => {
+                event.stopPropagation()
+                const next = burnWidgetSide === 'calories' ? 'muscle-front' : burnWidgetSide === 'muscle-front' ? 'muscle-back' : 'calories'
+                localStorage.setItem('liftlog:burnWidgetSide', next)
+                setBurnWidgetSide(next)
+                if (next === 'calories') {
+                  burnGlowHasPlayed = true
+                  setBurnGlowActive(true)
+                  setTimeout(() => setBurnGlowActive(false), 2800)
+                }
+              }}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M7 7h11l-3-3" />
+                <path d="M18 7l-3 3" />
+                <path d="M17 17H6l3 3" />
+                <path d="M6 17l3-3" />
               </svg>
-            </div>
-            <div className="home-burn-update-btn">Update Goal</div>
+            </button>
+            {burnWidgetSide === 'calories' ? (
+              <>
+                <div className="home-today-card-header">
+                  <span>Calories Burned</span>
+                </div>
+                <div className="home-burn-ring-wrap">
+                  <svg width="100" height="100" viewBox="0 0 100 100" aria-hidden="true">
+                    <defs>
+                      <linearGradient id="blg" x1="0" y1="0" x2="1" y2="1">
+                        {!burnComplete && (
+                          <animateTransform attributeName="gradientTransform" type="rotate" from="0 0.5 0.5" to="360 0.5 0.5" dur="4s" repeatCount="indefinite" />
+                        )}
+                        <stop offset="0%"   stopColor={burnComplete ? '#4ade80' : '#fbbf24'} />
+                        <stop offset="40%"  stopColor={burnComplete ? '#22c55e' : '#f97316'} />
+                        <stop offset="80%"  stopColor={burnComplete ? '#16a34a' : '#dc2626'} />
+                        <stop offset="100%" stopColor={burnComplete ? '#4ade80' : '#fbbf24'} />
+                      </linearGradient>
+                    </defs>
+                    <circle
+                      className={burnGlowActive && burnEmpty ? 'home-burn-track-pulse' : undefined}
+                      cx="50"
+                      cy="50"
+                      r={BURN_R}
+                      fill="none"
+                      stroke="rgba(255,255,255,0.16)"
+                      strokeWidth="8"
+                    />
+                    <circle cx="50" cy="50" r={BURN_R} fill="none"
+                      stroke="url(#blg)"
+                      strokeWidth="8"
+                      strokeDasharray={`${burnRingAnimatedIn ? burnDash : 0} ${BURN_C}`}
+                      strokeLinecap="round"
+                      transform="rotate(-90 50 50)"
+                      style={{ transition: 'stroke-dasharray 0.88s cubic-bezier(0.22, 1, 0.36, 1) 80ms' }}
+                    />
+                    <text x="50" y="47" textAnchor="middle" dominantBaseline="middle" fill="var(--text)" fontSize="18" fontWeight="800" fontFamily="inherit">{fmtCompact(burnedToday)}</text>
+                    <text x="50" y="62" textAnchor="middle" fill="var(--muted)" fontSize="9" fontFamily="inherit">kcal</text>
+                  </svg>
+                </div>
+                <div className="home-burn-update-btn">Update Goal</div>
+              </>
+            ) : (
+              <>
+                <div className="home-today-card-header home-muscle-card-header">
+                  <span>Muscles Worked</span>
+                </div>
+                <div className={`home-muscle-mini-models${hasWeeklyMuscleWork ? '' : ' home-muscle-mini-models-empty'}`} aria-hidden="true">
+                  <Model
+                    data={goalChartData.slice(0, muscleRevealStep)}
+                    type={burnWidgetSide === 'muscle-front' ? 'anterior' : 'posterior'}
+                    bodyColor="rgba(255, 255, 255, 0.14)"
+                    highlightedColors={MUSCLE_HEAT_COLORS}
+                    style={{ width: '100%', height: '100%' }}
+                    svgStyle={{ display: 'block', width: '100%', height: '100%' }}
+                  />
+                </div>
+              </>
+            )}
           </div>
 
         </div>
@@ -960,7 +1219,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
           <WorkoutCalendar
             compact
             variant="hybrid"
-            visualLoading={firstEntryWidgetHold}
+            visualLoading={!widgetAnimationReady}
             refreshKey={calendarRefreshKey}
             onInitialLoadComplete={() => setCalendarInitialReady(true)}
             onDayClick={(sessionIds, dateStr) => setSelectedDay({ sessionIds, dateStr })}
@@ -997,6 +1256,159 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
             </button>
           </div>
           {burnGoalError && <div className="quick-weight-error">{burnGoalError}</div>}
+        </div>
+      </div>,
+      document.body
+    )}
+    {muscleDetailOpen && createPortal(
+      <div className="home-weight-modal-overlay" onClick={() => setMuscleDetailOpen(false)}>
+        <div
+          className="home-weight-modal home-muscle-detail-modal"
+          onClick={e => e.stopPropagation()}
+          ref={muscleDetailModalRef}
+          tabIndex={-1}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Weekly Muscle Work"
+          onTouchStart={handleMuscleTouchStart}
+          onTouchMove={handleMuscleTouchMove}
+          onTouchEnd={handleMuscleTouchEnd}
+        >
+          <div className="home-weight-sheet-handle" />
+          <div className="home-weight-panel-header">
+            <div>
+              <div className="home-weight-modal-title">Weekly Muscle Work</div>
+              <div className="home-muscle-detail-subtitle">{weeklyMuscleWorkload?.week?.label || 'This week'}</div>
+            </div>
+            <button className="home-weight-panel-close" onClick={() => { setMuscleDetailOpen(false); setMuscleDetailSelectedKey(null) }} aria-label="Close muscle work details">×</button>
+          </div>
+          <div className="home-muscle-detail-stats">
+            <div>
+              <strong>{weeklyMuscleWorkload?.totalEffectiveSets || 0}</strong>
+              <span>Effective Sets</span>
+            </div>
+            <div>
+              <strong>{weeklyMuscleWorkload?.trainedDays?.length || 0}</strong>
+              <span>Training Days</span>
+            </div>
+            <div>
+              <strong>{formatMuscleDate(weeklyMuscleWorkload?.lastTrainedAt)}</strong>
+              <span>Last Trained</span>
+            </div>
+          </div>
+          <div className="home-muscle-goal-toggle" role="group" aria-label="Training goal">
+            {[
+              { key: 'strength',     label: 'Strength' },
+              { key: 'hypertrophy',  label: 'Hypertrophy' },
+              { key: 'endurance',    label: 'Endurance' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                className={`home-muscle-goal-btn${muscleWorkloadGoal === key ? ' active' : ''}`}
+	                onClick={() => {
+	                  setMuscleWorkloadGoal(key)
+	                  try { localStorage.setItem('muscle_workload_goal', key) } catch { /* best-effort */ }
+	                }}
+              >{label}</button>
+            ))}
+          </div>
+          <div className="home-muscle-detail-models" aria-hidden="true">
+            {['anterior', 'posterior'].map(type => (
+              <div key={type} className="home-muscle-detail-model">
+                <Model
+                  data={goalChartData}
+                  type={type}
+                  bodyColor="rgba(255, 255, 255, 0.14)"
+                  highlightedColors={MUSCLE_HEAT_COLORS}
+                  onClick={({ muscle }) => {
+                    const groupKey = CHART_MUSCLE_TO_GROUP_KEY.get(muscle)
+                    if (!groupKey) return
+                    setMuscleDetailSelectedKey(prev => prev === groupKey ? null : groupKey)
+                  }}
+                  style={{ width: '100%', height: '100%' }}
+                  svgStyle={{ display: 'block', width: '100%', height: '100%' }}
+                />
+              </div>
+            ))}
+          </div>
+          {muscleDetailSelectedGroup ? (
+            <div className="home-muscle-detail-selected">
+              <div className="home-muscle-detail-row-top">
+                <strong>{muscleDetailSelectedGroup.label}</strong>
+                <span>{muscleDetailSelectedGroup.effectiveSets} / {muscleDetailSelectedGroup.weeklyTarget} sets</span>
+              </div>
+              {muscleDetailSelectedGroup.effectiveSets > 0 ? (
+                <>
+                  <div className="home-muscle-detail-track">
+                    <div className={`home-muscle-detail-fill heat-${muscleDetailSelectedGroup.heatBucket}`} style={{ width: `${Math.min(100, muscleDetailSelectedGroup.targetRatio * 100)}%` }} />
+                  </div>
+                  {muscleDetailSelectedGroup.contributors.length > 0 && (
+                    <div className="home-muscle-detail-contributors-list">
+                      {muscleDetailSelectedGroup.contributors.map(c => (
+                        <div key={c.name} className="home-muscle-detail-contributor-item">
+                          <span>{c.rawSets} sets from {c.name}</span>
+                          <span className={`home-muscle-detail-contributor-credit ${c.creditPerSet === 1 ? 'credit-primary' : 'credit-secondary'}`}>{c.rawSets} (↑ {c.creditPerSet})</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="home-muscle-detail-contributors">Not trained this week</div>
+              )}
+            </div>
+          ) : (
+            <div className="home-muscle-detail-model-hint">Tap a muscle to see set details</div>
+          )}
+          <div className="home-muscle-detail-note">
+            <div><span className="home-muscle-detail-note-credit credit-primary">↑ 1.0</span> Sets where muscle group is primary</div>
+            <div><span className="home-muscle-detail-note-credit credit-secondary">↑ {SECONDARY_MUSCLE_CREDIT}</span> Sets where muscle group is secondary</div>
+          </div>
+          {muscleDetailRows.length > 0 ? (
+            <div className="home-muscle-detail-list">
+              {muscleDetailRows.map(group => {
+                const isExpanded = expandedMuscleRows.has(group.key)
+                return (
+                  <div key={group.key} className="home-muscle-detail-row">
+                    <div
+                      className="home-muscle-detail-row-top home-muscle-detail-row-toggle"
+                      onClick={() => setExpandedMuscleRows(prev => {
+                        const next = new Set(prev)
+                        isExpanded ? next.delete(group.key) : next.add(group.key)
+                        return next
+                      })}
+                    >
+                      <strong>{group.label}</strong>
+                      <div className="home-muscle-detail-row-top-right">
+                        <span>{group.effectiveSets} / {group.weeklyTarget} sets</span>
+                        <span className={`home-muscle-detail-chevron${isExpanded ? ' expanded' : ''}`}>›</span>
+                      </div>
+                    </div>
+                    <div className="home-muscle-detail-track">
+                      <div className={`home-muscle-detail-fill heat-${group.heatBucket}`} style={{ width: `${Math.min(100, group.targetRatio * 100)}%` }} />
+                    </div>
+                    <div className="home-muscle-detail-meta">
+                      <span>{group.trainedDayCount} day{group.trainedDayCount === 1 ? '' : 's'}</span>
+                      <span>Last: {formatMuscleDate(group.lastTrainedAt)}</span>
+                    </div>
+                    {isExpanded && group.contributors.length > 0 && (
+                      <div className="home-muscle-detail-contributors-list">
+                        {group.contributors.map(c => (
+                          <div key={c.name} className="home-muscle-detail-contributor-item">
+                            <span>{c.rawSets} sets from {c.name}</span>
+                            <span className="home-muscle-detail-contributor-right"><span className="home-muscle-detail-contributor-count">{c.rawSets} ×</span> <span className={`home-muscle-detail-contributor-credit ${c.creditPerSet === 1 ? 'credit-primary' : 'credit-secondary'}`}>(↑ {c.creditPerSet})</span></span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="home-muscle-detail-empty">No completed strength sets are logged for this week yet.</div>
+          )}
         </div>
       </div>,
       document.body

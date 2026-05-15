@@ -51,7 +51,11 @@ export function useFocusTrap(ref, { active = true, onEscape } = {}) {
     el.addEventListener('keydown', handleKeyDown)
     return () => {
       el.removeEventListener('keydown', handleKeyDown)
-      try { prevFocused?.focus() } catch {}
+      try {
+        prevFocused?.focus()
+      } catch {
+        // Ignore focus restoration failures after the trapped element unmounts.
+      }
     }
-  }, [active])
+  }, [active, ref])
 }

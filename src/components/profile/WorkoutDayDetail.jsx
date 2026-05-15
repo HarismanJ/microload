@@ -1,12 +1,14 @@
 import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
+import { getLocalTrainingWeekRange } from '../../lib/muscleWorkload'
 import { useCurrentUserId } from '../../context/UserContext'
-import { calculateORM } from '../../lib/orm'
+import { calculateSetEstimatedOrm } from '../../lib/orm'
 import {
   DEFAULT_BODYWEIGHT_KG,
   MAX_REPS,
   convertWeight,
+  fmtCompact,
   getProfileBodyweightKg,
   getSetVolumeKg,
   getSetVolumeInUnit,
@@ -23,6 +25,11 @@ function formatDuration(start, end) {
   const mins = Math.round((new Date(end) - new Date(start)) / 60000)
   if (mins < 60) return `${mins}m`
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
+function priorWeekMuscleKey() {
+  const d = new Date(Date.now() - 7 * 86400000)
+  return `muscle-workload:prior:${getLocalTrainingWeekRange(d).startIso.slice(0, 10)}`
 }
 
 function formatDate(dateStr) {
@@ -270,7 +277,13 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setSetEditError('')
 
     try {
-      const estimatedOrm = calculateORM(weight, reps)
+      const estimatedOrm = calculateSetEstimatedOrm({
+        weight,
+        reps,
+        unit: set.unit,
+        equipment: group?.equipment,
+        bodyweightKg,
+      })
       const { error } = await supabase
         .from('workout_sets')
         .update({ weight, reps, estimated_1rm: estimatedOrm })
@@ -278,7 +291,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
 
       if (error) throw error
 
-      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`)
+      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`, priorWeekMuscleKey())
       setWorkoutSessions(prev => prev.map(sess => ({
         ...sess,
         groups: sess.groups.map(group => ({
@@ -348,7 +361,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
         }
       }
 
-      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`)
+      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`, priorWeekMuscleKey())
       setWorkoutSessions(prev => prev.map(sess => (
         sess.id !== sessionId
           ? sess
@@ -491,7 +504,9 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
 
         const newBestByExercise = {}
         for (const s of remainingBests || []) {
-          const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
+          const estimatedOrm = Number(s.estimated_1rm)
+          if (!Number.isFinite(estimatedOrm)) continue
+          const kg = s.unit === 'lbs' ? estimatedOrm * 0.453592 : estimatedOrm
           newBestByExercise[s.exercise_id] = Math.max(newBestByExercise[s.exercise_id] || 0, kg)
         }
 
@@ -512,7 +527,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       }
 
       const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)
-      invalidateCache('home', 'profile', 'ranks', 'achievements', calKey)
+      invalidateCache('home', 'profile', 'ranks', 'achievements', calKey, priorWeekMuscleKey())
       setWorkoutSessions(remainingSessions)
       setDeleteTargetId(null)
       onDeleteWorkout?.({
@@ -680,7 +695,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                 </div>
                 {totalCaloriesBurned > 0 && (
                   <div className="day-summary-stat">
-                    <div className="day-summary-value">~{totalCaloriesBurned}</div>
+                    <div className="day-summary-value">~{fmtCompact(totalCaloriesBurned)}</div>
                     <div className="day-summary-label">kcal</div>
                   </div>
                 )}
@@ -892,7 +907,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
 
               <div className="day-nut-summary">
                 <div className="day-nut-cal">
-                  <span className="day-nut-cal-val">{Math.round(totalCals)}</span>
+                  <span className="day-nut-cal-val">{fmtCompact(Math.round(totalCals))}</span>
                   <span className="day-nut-cal-unit">kcal</span>
                 </div>
                 <div className="day-nut-macros">

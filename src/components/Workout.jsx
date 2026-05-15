@@ -1,13 +1,13 @@
-import { useState, useEffect, useRef, useEffectEvent, lazy, Suspense, useMemo, useCallback } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useEffectEvent, lazy, Suspense, useMemo, useCallback } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { createCustomExercise, fetchExercises } from '../data/exercises'
 import { fetchExerciseRankStates, mapExerciseRankStates, upsertExerciseRankStates } from '../data/rankStates'
-import { calculateORM } from '../lib/orm'
+import { calculateSetEstimatedOrm } from '../lib/orm'
 import { TEMPLATES } from '../data/templates'
 import { invalidateCache } from '../lib/cache'
-import { ANCHORS, TIERS, expandAnchors, getTierIdx, getProgress, tierColor } from '../lib/strengthStandards'
+import { getAnchors, TIERS, expandAnchors, getTierIdx, getProgress, tierColor } from '../lib/strengthStandards'
 import { ACHIEVEMENTS } from '../data/achievements'
 import LoadingSpinner from './LoadingSpinner'
 import RestWheelPicker from './RestWheelPicker'
@@ -25,6 +25,7 @@ import { normalizeSearchValue, matchesSearchQuery, scoreExerciseMatch } from '..
 import {
   DEFAULT_BODYWEIGHT_KG,
   MAX_REPS,
+  fromKg,
   getProfileBodyweightKg,
   getSetVolumeInUnit,
   getSetVolumeKg,
@@ -36,6 +37,7 @@ import {
 import ProgressionSuggestion from './ProgressionSuggestion'
 import PlateCalculator from './PlateCalculator'
 import { fetchRecentSessions, buildCurrentSetSuggestion } from '../lib/progressiveOverload'
+import { getCustomIncrements, setCustomIncrementKg, getCustomStartingWeights, setCustomStartingWeightKg } from '../lib/incrementSettings'
 import { PLATE_EQUIPMENT } from '../lib/plateUtils'
 import {
   getBattleModeLabel,
@@ -84,6 +86,12 @@ import {
   validateTrainingPlanForm,
 } from '../lib/trainingPlanGenerator'
 import { applyPlanAdaptation, buildPlanAdaptation } from '../lib/trainingPlanAdaptation'
+import {
+  applyScheduledDeloadToPlanDay,
+  applyScheduledDeloadToSuggestion,
+  getActivePlanWeek,
+  isScheduledDeloadWeek,
+} from '../lib/planDeload'
 import '../styles/Workout.css'
 
 const ExerciseDetail = lazy(() => import('./exercise/ExerciseDetail'))
@@ -108,6 +116,22 @@ function formatPlannedRest(restSeconds) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')} rest`
 }
 
+function formatPlanMetaLabel(value) {
+  return String(value || '').replaceAll('_', ' ')
+}
+
+function formatBattleHighlightLoad(kg, unit = 'kg') {
+  const value = fromKg(Number(kg) || 0, unit)
+  return `${Math.round(value * 10) / 10} ${unit}`
+}
+
+function formatBattleHighlightDuration(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0))
+  const minutes = Math.floor(total / 60)
+  const remainder = total % 60
+  return minutes > 0 ? `${minutes}m ${remainder}s` : `${remainder}s`
+}
+
 function formatTrainingDayLabel(dayId) {
   return TRAINING_PLAN_WEEKDAYS.find(day => day.id === dayId)?.label || dayId
 }
@@ -130,9 +154,134 @@ function sanitizePlanWorkoutMetadata(value, maxLength = 80) {
 
 function getPlanTargetLabel(exercise) {
   if (!exercise?.planSource) return ''
+  if (exercise.planDeloadWeek) return `Deload target: ${exercise.planRepRange || exercise.planTargetReps || 'easy'} reps · 3-5 RIR`
   if (exercise.planRepRange) return `Plan target: ${exercise.planRepRange} reps`
   if (exercise.planTargetReps) return `Plan target: ${exercise.planTargetReps} reps`
   return ''
+}
+
+function normalizeStrengthGender(gender) {
+  const normalized = String(gender || '').toLowerCase()
+  if (normalized === 'female') return 'female'
+  if (normalized === 'male') return 'male'
+  return null
+}
+
+const PLAN_BUILDER_HELP = {
+  goal: [
+    'What it means: The main outcome the week is built around.',
+    'Strength: Favors heavier main lifts, lower reps, and longer rest.',
+    'Hypertrophy: Favors more muscle volume.',
+    'Cardio: Prioritizes conditioning.',
+    'Hybrid: Blends lifting and conditioning.',
+    'General Fitness: Keeps the week balanced.',
+    'How to answer: pick the thing you most want this plan to improve first.',
+  ],
+  experience: [
+    'What it means: How much weekly work and complexity the plan assumes you can recover from.',
+    'Beginner: Uses simpler, lower-volume weeks.',
+    'Intermediate: The default for consistent lifters.',
+    'Advanced: Adds more volume and accessory work.',
+    'How to answer: Choose the level you can recover from, not the level you want to be.',
+  ],
+  daysPerWeek: [
+    'What it means: How many training sessions the plan spreads across each week.',
+    'Fewer days means fuller sessions.',
+    'More days lets the plan distribute volume and focus more precisely.',
+    'How to answer: Choose the number you can hit most weeks.',
+  ],
+  sessionLength: [
+    'What it means: the time budget for each workout.',
+    'Short sessions use fewer exercises and tighter volume. Longer sessions allow more accessories or conditioning only when useful.',
+    'How to answer: pick your realistic door-to-door training time.',
+  ],
+  duration: [
+    'What it means: How long you expect to run this plan before reassessing.',
+    'Short blocks are good for experimentation.',
+    'Eight to twelve weeks is a solid default.',
+    'Ongoing keeps the plan available without a fixed end.',
+    'How to answer: Choose the next natural review point.',
+  ],
+  equipment: [
+    'What it means: What equipment the plan generator is allowed to use.',
+    'The plan will avoid unselected equipment. Cardio Machines enables machine-based cardio options.',
+    'How to answer: Select only equipment you reliably have access to.',
+  ],
+  focusAreas: [
+    'What it means: Muscles that should get extra attention.',
+    'Focus areas increase the weekly target for those muscles, but the plan still protects overall balance.',
+    'How to answer: Pick weak points or priorities, not every muscle.',
+  ],
+  schedule: [
+    'What it means: Whether you have a strict schedule or simply a number of days you can workout.',
+    'Flexible days only controls weekly frequency. Exact weekdays pins sessions to selected days.',
+    'How to answer: Choose exact only if your training days are predictable.',
+  ],
+  trainingDays: [
+    'What it means: The days of the week the plan should schedule workouts on.',
+    'These labels appear on plan days. The plan still uses the same weekly structure.',
+    'How to answer: Pick the days you can train with the least friction.',
+  ],
+  split: [
+    'What it means: How training stress is organized across the week.',
+    'Auto: Scores multiple split types and chooses the best fit.',
+    'Full Body: Frequent and simple, with less muscle isolation.',
+    'Upper / Lower: Blanced, higher frequency with decent isolation.',
+    'Push / Pull / Leg: Separates major movement patterns. Allows for much higher isolation',
+    'Strength + Accessories: Prioritizes main lifts, with accessory exercises working to build up your main ones',
+    'Hybrid: Reserves the most room for conditioning.',
+    'How to answer: Use Auto unless you strongly prefer a specific structure.',
+  ],
+  progression: [
+    'What it means: How the plan expects exercise targets to move over time.',
+    'Double Progression: You add reps first. Once you can hit the top of the rep range, you increase weight and build reps back up.',
+    'Linear: You try to add weight in a more direct step-by-step way when the workout is completed successfully.',
+    'Undulating: The plan rotates stress instead of making every workout feel the same, usually by changing reps, load, or intensity across sessions.',
+    'Maintenance: The plan keeps the work mostly steady, useful when you want to hold strength or muscle without pushing hard.',
+    'Deload Aware: The plan progresses normally but stays more conservative when fatigue or repeated difficulty shows up.',
+    'How to answer: Choose Double Progression if you want the safest default for steady progress.',
+  ],
+  deload: [
+    'What it means: When the plan expects easier training.',
+    'Adaptive: Waits for coach signals from completed workouts.',
+    'Every 4 weeks: Plans easier training often, useful for harder blocks or people who fatigue quickly.',
+    'Every 6 weeks: Uses a moderate fixed rhythm for most normal training blocks.',
+    'Every 8 weeks: Deloads less often, useful if your volume is manageable and recovery is strong.',
+    'Off: Removes planned deload timing.',
+    'How to answer: Choose Adaptive unless you already follow a fixed deload schedule.',
+  ],
+  blockGoal: [
+    'What it means: The emphasis inside this training block.',
+    'Accumulation: Builds work capacity and repeatable volume.',
+    'Strength: Shifts the block toward heavier main work.',
+    'Hypertrophy: Emphasizes muscle-building volume.',
+    'Conditioning: Favors aerobic and work-capacity improvements.',
+    'General Fitness: Keeps the block rounded.',
+    'How to answer: Choose the flavor you want for this block, even if your main goal is broader.',
+  ],
+  adaptiveCoach: [
+    'What it means: Whether completed plan workouts can create review suggestions.',
+    'On: Shows coach review cards after plan workouts when the plan may need adjustment.',
+    'Off: Keeps the saved plan more static.',
+    'How to answer: Leave it on if you want the plan to evolve with your training.',
+  ],
+}
+
+function PlanInfoLabel({ label, helpKey, onOpen }) {
+  const items = PLAN_BUILDER_HELP[helpKey] || []
+  return (
+    <div className="plan-info-label">
+      <span className="template-section-label">{label}</span>
+      <button
+        type="button"
+        className="plan-info-btn"
+        aria-label={`${label} info`}
+        onClick={() => onOpen({ title: label, items })}
+      >
+        i
+      </button>
+    </div>
+  )
 }
 
 
@@ -324,6 +473,7 @@ export default function Workout({
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
   )
   const [userBodyweightKg, setUserBodyweightKg] = useState(null)
+  const [userStrengthGender, setUserStrengthGender] = useState(null)
   const [prevSetsMap, setPrevSetsMap] = useState({})
   const [recentSessionsMap, setRecentSessionsMap] = useState({})
   const [plateCalc, setPlateCalc] = useState(null) // { exId, setIndex } | null
@@ -382,6 +532,7 @@ export default function Workout({
   const surfacedRemoteFinishEventIdsRef = useRef(new Set())
   const prefetchedHistoryRef = useRef({}) // { [exerciseId]: { sid, sessions } }
   const prefetchInFlightRef = useRef({})  // { [exerciseId]: Promise }
+  const historyRequestedRef = useRef(new Set()) // Set<"sessionId:exerciseId"> — guards lazy load
 
   // Routine builder state
   const [userRoutines, setUserRoutines] = useState([])
@@ -399,6 +550,7 @@ export default function Workout({
   const [planAdaptations, setPlanAdaptations] = useState([])
   const [viewingTrainingPlanId, setViewingTrainingPlanId] = useState(null)
   const [showPlanBuilder, setShowPlanBuilder] = useState(false)
+  const [planInfoModal, setPlanInfoModal] = useState(null)
   const [planBuilderStep, setPlanBuilderStep] = useState(0)
   const [planForm, setPlanForm] = useState(DEFAULT_TRAINING_PLAN_FORM)
   const [generatedPlan, setGeneratedPlan] = useState(null)
@@ -406,16 +558,37 @@ export default function Workout({
   const [planError, setPlanError] = useState('')
   const [savingPlan, setSavingPlan] = useState(false)
   const [suggestionFlashKey, setSuggestionFlashKey] = useState(null)
+  const [customIncrements, setCustomIncrements] = useState(() => getCustomIncrements())
+  const [startingWeights, setStartingWeights] = useState(() => getCustomStartingWeights())
+  const [openSetType, setOpenSetType] = useState(null) // { key, top, left }
+  useEffect(() => {
+    if (!openSetType) return
+    const close = (e) => { if (!e.target.closest('.set-type-wrap') && !e.target.closest('.set-type-dropdown')) setOpenSetType(null) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [openSetType])
   const viewingTrainingPlan = useMemo(
     () => userTrainingPlans.find(plan => plan.id === viewingTrainingPlanId) || null,
     [userTrainingPlans, viewingTrainingPlanId]
   )
 
+  useLayoutEffect(() => {
+    if (!userId) {
+      setSavedWorkoutDraft(null)
+      setExpiredWorkoutDraftSessionId(null)
+      return
+    }
+
+    const soloDraftState = readStoredWorkoutDraft(userId)
+    setSavedWorkoutDraft(soloDraftState.draft)
+    setExpiredWorkoutDraftSessionId(soloDraftState.expiredSessionId)
+  }, [userId])
+
   const loadPlanAdaptations = useCallback(async (uid) => {
     if (!uid) return
     const { data, error } = await supabase
       .from('user_training_plan_adaptations')
-      .select('*')
+      .select('id, plan_id, plan_day_id, summary, body, created_at, status, adjustments')
       .eq('user_id', uid)
       .eq('status', 'pending')
       .order('created_at', { ascending: false })
@@ -437,9 +610,9 @@ export default function Workout({
       try {
         const [exercises, { data: prof }, { data: routines }, plansResponse, { data: restPrefs }] = await Promise.all([
           fetchExercises(userId),
-          supabase.from('profiles').select('default_rest_seconds, unit_preference, bodyweight').eq('id', userId).single(),
+          supabase.from('profiles').select('default_rest_seconds, unit_preference, bodyweight, gender').eq('id', userId).single(),
           supabase.from('user_routines').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
-          supabase.from('user_training_plans').select('*').eq('user_id', userId).order('created_at', { ascending: false }),
+          supabase.from('user_training_plans').select('id, name, goal, days, duration_weeks, days_per_week, session_minutes, equipment, created_at').eq('user_id', userId).order('created_at', { ascending: false }),
           supabase.from('user_exercise_preferences').select('exercise_id, rest_seconds').eq('user_id', userId),
         ])
         if (cancelled) return
@@ -451,6 +624,7 @@ export default function Workout({
         setDefaultRest(prof?.default_rest_seconds ?? 90)
         setDefaultUnit(prof?.unit_preference || 'kg')
         setUserBodyweightKg(getProfileBodyweightKg(prof))
+        setUserStrengthGender(normalizeStrengthGender(prof?.gender))
         setUserRoutines(routines || [])
         if (plansResponse.error) {
           const message = plansResponse.error.message?.toLowerCase?.() || ''
@@ -676,7 +850,7 @@ export default function Workout({
       const { data: sess, error: sessionError } = await supabase
         .from('workout_sessions')
         .insert({ user_id: userId })
-        .select()
+        .select('id')
         .single()
 
       if (sessionError) throw sessionError
@@ -764,7 +938,7 @@ export default function Workout({
   }
 
   const loadUserTrainingPlans = async (uid) => {
-    const { data, error } = await supabase.from('user_training_plans').select('*').eq('user_id', uid).order('created_at', { ascending: false })
+    const { data, error } = await supabase.from('user_training_plans').select('id, name, goal, days, duration_weeks, days_per_week, session_minutes, equipment, created_at').eq('user_id', uid).order('created_at', { ascending: false })
     if (error) {
       const message = error.message?.toLowerCase?.() || ''
       if (!message.includes('user_training_plans')) setPlanError(error.message || 'Could not load your plans.')
@@ -804,15 +978,17 @@ export default function Workout({
       const exerciseSessions = (cached?.sid === sid)
         ? cached.sessions
         : (fetchedByExercise[ex.id] || [])
-      const latestSession = exerciseSessions.at(-1)
       recentSessionUpdates[ex.id] = exerciseSessions
-      prevSetUpdates[ex.id] = (latestSession?.sets || []).map(set => ({
-        weight: set.weight,
-        reps: set.reps,
-        unit: set.unit,
-        duration_seconds: set.duration_seconds,
-        set_number: set.set_number,
-      }))
+      const prevSets = []
+      for (let j = exerciseSessions.length - 1; j >= 0; j--) {
+        for (let i = 0; i < exerciseSessions[j].sets.length; i++) {
+          if (prevSets[i] === undefined) {
+            const set = exerciseSessions[j].sets[i]
+            prevSets[i] = { weight: set.weight, reps: set.reps, unit: set.unit, duration_seconds: set.duration_seconds, set_number: set.set_number }
+          }
+        }
+      }
+      prevSetUpdates[ex.id] = prevSets
     }
     setPrevSetsMap(prev => ({ ...prev, ...prevSetUpdates }))
     setRecentSessionsMap(prev => ({ ...prev, ...recentSessionUpdates }))
@@ -821,10 +997,21 @@ export default function Workout({
   const progressionMap = useMemo(() => {
     const nextMap = {}
 
-    workoutExercises.forEach(exercise => {
+    workoutExercises.forEach((exercise, exerciseIndex) => {
       if (exercise.category === 'Cardio') return
 
-      const suggestion = buildCurrentSetSuggestion({
+      const priorExercises = workoutExercises
+        .slice(0, exerciseIndex)
+        .reverse()
+        .map(ex => ({
+          doneSets: ex.sets
+            .filter(s => s.done)
+            .map(s => ({ weight: Number(s.weight) || 0, reps: Number(s.reps) || 0, setType: s.setType ?? 'normal' })),
+          primaryMuscles: ex.primary_muscles || [],
+          secondaryMuscles: ex.secondary_muscles || [],
+        }))
+
+      const rawSuggestion = buildCurrentSetSuggestion({
         sessions: recentSessionsMap[exercise.id] || [],
         currentSets: exercise.sets,
         equipment: exercise.equipment,
@@ -832,8 +1019,18 @@ export default function Workout({
         planTargetReps: exercise.planTargetReps,
         planRepRange: exercise.planRepRange,
         userBodyweightKg,
+        userGender: userStrengthGender,
         exerciseName: exercise.name,
+        priorExercises,
+        currentPrimaryMuscles: exercise.primary_muscles || [],
+        currentSecondaryMuscles: exercise.secondary_muscles || [],
+        customIncrementKg: customIncrements[exercise.equipment] ?? null,
+        customStartingWeightKg: startingWeights[exercise.equipment] ?? null,
+        planPeriodizationStyle: exercise.planPeriodizationStyle,
+        planIntensityTag: exercise.planIntensityTag,
+        planProgressionBias: exercise.planProgressionBias,
       })
+      const suggestion = applyScheduledDeloadToSuggestion(rawSuggestion, exercise)
 
       if (suggestion) {
         nextMap[exercise.id] = suggestion
@@ -841,7 +1038,7 @@ export default function Workout({
     })
 
     return nextMap
-  }, [defaultUnit, recentSessionsMap, workoutExercises])
+  }, [defaultUnit, recentSessionsMap, workoutExercises, customIncrements, startingWeights, userBodyweightKg, userStrengthGender])
 
   // Pre-fill blank first sets from previous session when prevSetsMap loads
   useEffect(() => {
@@ -877,6 +1074,19 @@ export default function Workout({
     }, 1000)
     return () => clearInterval(interval)
   }, [activeWorkout])
+
+  useEffect(() => {
+    if (!activeWorkout || !userId || !sessionId) return
+    const unfetched = []
+    for (const ex of workoutExercises) {
+      if (!ex?.id) continue
+      const key = `${sessionId}:${ex.id}`
+      if (historyRequestedRef.current.has(key)) continue
+      historyRequestedRef.current.add(key)
+      unfetched.push(ex)
+    }
+    if (unfetched.length > 0) loadRecentExerciseHistory(unfetched, userId, sessionId)
+  }, [workoutExercises, sessionId, userId, activeWorkout, loadRecentExerciseHistory])
 
   useEffect(() => {
     const roomId = battleRoom?.id
@@ -1038,9 +1248,6 @@ export default function Workout({
         scheduleRestEndNotification(getRemainingRestSeconds(restoredRestTimer), restoredRestTimer.exerciseName)
       }
 
-      if (restoredExercises.length > 0) {
-        loadRecentExerciseHistory(restoredExercises, userId, savedBattleWorkoutDraft.sessionId)
-      }
     } finally {
       setBattleDraftBusy(false)
     }
@@ -1055,10 +1262,11 @@ export default function Workout({
     defaultUnit,
     loadRecentExerciseHistory,
     loading,
-    savedBattleWorkoutDraft,
-    sessionId,
-    userId,
-  ])
+	    savedBattleWorkoutDraft,
+	    setRestTimer,
+	    sessionId,
+	    userId,
+	  ])
 
   const resumeSavedWorkout = useCallback(async () => {
     if (!savedWorkoutDraft || !userId || savedWorkoutDraftBusy) return
@@ -1103,9 +1311,6 @@ export default function Workout({
         scheduleRestEndNotification(getRemainingRestSeconds(restoredRestTimer), restoredRestTimer.exerciseName)
       }
 
-      if (restoredExercises.length > 0) {
-        loadRecentExerciseHistory(restoredExercises, userId, savedWorkoutDraft.sessionId)
-      }
     } finally {
       setSavedWorkoutDraftBusy(false)
     }
@@ -1113,11 +1318,12 @@ export default function Workout({
     clearWorkoutDraft,
     defaultRest,
     defaultUnit,
-    loadRecentExerciseHistory,
-    savedWorkoutDraft,
-    savedWorkoutDraftBusy,
-    userId,
-  ])
+	    loadRecentExerciseHistory,
+	    savedWorkoutDraft,
+	    savedWorkoutDraftBusy,
+	    setRestTimer,
+	    userId,
+	  ])
 
   useEffect(() => {
     if (
@@ -1375,20 +1581,28 @@ export default function Workout({
             weight: meta.weight,
             unit: ex.unit,
             equipment: ex.equipment,
-            estimated_1rm: calculateORM(meta.weight, meta.reps),
+            estimated_1rm: calculateSetEstimatedOrm({
+              weight: meta.weight,
+              reps: meta.reps,
+              unit: ex.unit,
+              equipment: ex.equipment,
+              bodyweightKg: userBodyweightKg,
+            }),
             completed_at: meta.completedAt,
             rest_before_seconds: meta.restBeforeSeconds,
             progression_event: s.progressionEvent ?? null,
+            is_warmup: s.setType === 'warmup',
           })
         }
       })
     })
 
     const exerciseIds = exercisesOverride.map(e => e.id)
-    const [{ data: prevBests }, { data: prof }, rankStatesResult] = await Promise.all([
+    const [{ data: prevBests }, { data: prof }, rankStatesResult, resolvedAnchors] = await Promise.all([
       supabase.from('exercise_prs').select('exercise_id, best_1rm_kg').eq('user_id', userId).in('exercise_id', exerciseIds),
       fetchProfileWithWorkoutCount(userId, ['gender', 'bodyweight', 'unit_preference', 'lifetime_volume_kg']),
       fetchExerciseRankStates(userId, exerciseIds),
+      getAnchors(),
     ])
 
     const prevOrmKg = {}
@@ -1398,16 +1612,19 @@ export default function Workout({
 
     const newOrmKg = { ...prevOrmKg }
     for (const s of setsToInsert) {
-      if (s.estimated_1rm !== null && s.estimated_1rm !== undefined) {
-        const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
+      const estimatedOrm = Number(s.estimated_1rm)
+      if (Number.isFinite(estimatedOrm)) {
+        const kg = s.unit === 'lbs' ? estimatedOrm * 0.453592 : estimatedOrm
         newOrmKg[s.exercise_id] = Math.max(newOrmKg[s.exercise_id] || 0, kg)
       }
     }
 
     const sessionBestOrmKg = {}
     for (const s of setsToInsert) {
-      if (s.estimated_1rm === null || s.estimated_1rm === undefined) continue
-      const kg = s.unit === 'lbs' ? s.estimated_1rm * 0.453592 : s.estimated_1rm
+      if (s.is_warmup) continue
+      const estimatedOrm = Number(s.estimated_1rm)
+      if (!Number.isFinite(estimatedOrm)) continue
+      const kg = s.unit === 'lbs' ? estimatedOrm * 0.453592 : estimatedOrm
       sessionBestOrmKg[s.exercise_id] = Math.max(sessionBestOrmKg[s.exercise_id] || 0, kg)
     }
 
@@ -1415,7 +1632,7 @@ export default function Workout({
     const genderKey = prof?.gender?.toLowerCase() === 'female' ? 'female' : 'male'
     const rankUps = []
     for (const ex of exercisesOverride) {
-      const anchors = ANCHORS[genderKey]?.[ex.name]
+      const anchors = resolvedAnchors[genderKey]?.[ex.name]
       if (!anchors) continue
       const thresholds = expandAnchors(anchors)
       const hadPrevOrm = Object.prototype.hasOwnProperty.call(prevOrmKg, ex.id)
@@ -1504,6 +1721,7 @@ export default function Workout({
         planId: sourcePlanExercise.planId,
         dayId: sourcePlanExercise.planDayId,
         week: Number(sourcePlanExercise.planWeek) || 1,
+        deloadWeek: Boolean(sourcePlanExercise.planDeloadWeek),
       }
       : null
     const completedPlan = sourcePlan
@@ -1512,6 +1730,9 @@ export default function Workout({
     const completedPlanDay = completedPlan
       ? completedPlan.days.find(day => day.id === sourcePlan.dayId)
       : null
+    const completedPlanDayForAdaptation = completedPlanDay && sourcePlan?.deloadWeek
+      ? applyScheduledDeloadToPlanDay(completedPlanDay, sourcePlan.week)
+      : completedPlanDay
     let planCoaching = null
 
     if (sessionId) {
@@ -1537,7 +1758,7 @@ export default function Workout({
           const sessionOrmKg = sessionBestOrmKg[ex.id]
           if (!Number.isFinite(sessionOrmKg)) return null
 
-          const anchors = ANCHORS[genderKey]?.[ex.name]
+          const anchors = resolvedAnchors[genderKey]?.[ex.name]
           if (!anchors) return null
           const thresholds = expandAnchors(anchors)
 
@@ -1592,6 +1813,7 @@ export default function Workout({
           completed_at: set.completed_at,
           rest_before_seconds: set.rest_before_seconds,
           progression_event: set.progression_event ?? null,
+          is_warmup: set.is_warmup ?? false,
         }))))
       }
       if (prUpserts.length > 0) {
@@ -1602,13 +1824,14 @@ export default function Workout({
       }
       await Promise.all(sessionOps)
 
-      if (completedPlan && completedPlanDay) {
+      if (completedPlan && completedPlanDayForAdaptation) {
         const adaptation = buildPlanAdaptation({
           plan: completedPlan,
-          day: completedPlanDay,
+          day: completedPlanDayForAdaptation,
           exercises: exercisesOverride,
           durationSeconds: seconds,
           sessionId,
+          planWeek: sourcePlan.week,
         })
         if (adaptation) {
           planCoaching = adaptation
@@ -1661,6 +1884,39 @@ export default function Workout({
         bodyweightKg: bwKg,
       })
     }, 0)
+    const prHighlights = exercisesOverride
+      .map(ex => {
+        const nextOrm = newOrmKg[ex.id]
+        if (!Number.isFinite(nextOrm)) return null
+        const prevOrm = prevOrmKg[ex.id] || 0
+        if (nextOrm <= prevOrm) return null
+        return {
+          type: 'pr',
+          title: `${ex.name} PR`,
+          body: prevOrm > 0
+            ? `${formatBattleHighlightLoad(prevOrm, unit)} to ${formatBattleHighlightLoad(nextOrm, unit)} estimated 1RM`
+            : `${formatBattleHighlightLoad(nextOrm, unit)} estimated 1RM`,
+        }
+      })
+      .filter(Boolean)
+    const battleHighlights = [
+      ...prHighlights,
+      ...rankUps.map(rank => ({
+        type: 'rank_up',
+        title: `${rank.exercise} rank up`,
+        body: `${rank.from} to ${rank.to}`,
+      })),
+      ...newAchievements.map(achievement => ({
+        type: 'achievement',
+        title: achievement.title,
+        body: achievement.desc,
+      })),
+      {
+        type: 'effort',
+        title: 'Workout effort',
+        body: `${setsToInsert.length} sets, ${exercisesOverride.length} exercises, ${formatBattleHighlightDuration(seconds)}, ${Math.round(totalVolume)} ${unit} volume`,
+      },
+    ].slice(0, 8)
     const summary = {
       durationSeconds: seconds,
       caloriesBurned,
@@ -1703,6 +1959,7 @@ export default function Workout({
           totalVolume,
           totalVolumeKg,
           unit,
+          highlights: battleHighlights,
         })
         summary.battle = await loadCurrentBattleRecap()
         const finished = await resolveCurrentBattleRoom()
@@ -1882,9 +2139,24 @@ export default function Workout({
     setPlanForm(current => normalizeTrainingPlanForm({ ...current, ...patch }))
   }
 
-  const openPlanBuilder = (plan = null) => {
+  const ensurePlanPreferences = async (plan) => {
+    if (!plan?.id || plan.preferences !== undefined) return plan
+    const { data } = await supabase
+      .from('user_training_plans')
+      .select('preferences')
+      .eq('id', plan.id)
+      .single()
+    const resolved = { ...plan, preferences: data?.preferences ?? {} }
+    setUserTrainingPlans(prev =>
+      prev.map(p => p.id === plan.id ? { ...p, preferences: resolved.preferences } : p)
+    )
+    return resolved
+  }
+
+  const openPlanBuilder = async (plan = null) => {
     if (plan) {
-      const normalized = normalizeTrainingPlan(plan)
+      const resolvedPlan = await ensurePlanPreferences(plan)
+      const normalized = normalizeTrainingPlan(resolvedPlan)
       const preferences = normalized.preferences || {}
       const schedule = preferences.schedule || {}
       const periodization = preferences.periodization || {}
@@ -1930,6 +2202,7 @@ export default function Workout({
     setEditingPlanId(null)
     setPlanError('')
     setSavingPlan(false)
+    setPlanInfoModal(null)
   }
 
   const generatePlanPreview = () => {
@@ -2001,6 +2274,7 @@ export default function Workout({
     if (!plan?.id) return
     setPlanError('')
     setViewingTrainingPlanId(plan.id)
+    ensurePlanPreferences(plan)
   }
 
   const closePlanDetails = () => {
@@ -2031,8 +2305,9 @@ export default function Workout({
 
   const applyPendingPlanAdaptation = async (adaptation) => {
     if (!adaptation?.plan_id || !userId) return
-    const plan = userTrainingPlans.find(item => item.id === adaptation.plan_id)
-    if (!plan) return
+    const planFromState = userTrainingPlans.find(item => item.id === adaptation.plan_id)
+    if (!planFromState) return
+    const plan = await ensurePlanPreferences(planFromState)
     const nextPlan = normalizeTrainingPlan(applyPlanAdaptation(plan, adaptation))
     const { error } = await supabase
       .from('user_training_plans')
@@ -2052,9 +2327,9 @@ export default function Workout({
 
   const createWorkoutSession = async (metadata = {}) => {
     const payload = { user_id: userId, ...metadata }
-    const result = await supabase.from('workout_sessions').insert(payload).select().single()
+    const result = await supabase.from('workout_sessions').insert(payload).select('id').single()
     if (!result.error || !isMissingPlanPersistence(result.error)) return result
-    return supabase.from('workout_sessions').insert({ user_id: userId }).select().single()
+    return supabase.from('workout_sessions').insert({ user_id: userId }).select('id').single()
   }
 
   const finishWorkoutSession = async ({ caloriesBurned, sourcePlan }) => {
@@ -2109,6 +2384,10 @@ export default function Workout({
         : 'x'
     return `${Number(value).toFixed(2)}${suffix}`
   }
+  const fmtBattleMetricWeight = (metric) => {
+    const weight = Number(metric.effectiveWeight ?? metric.weight)
+    return Number.isFinite(weight) && weight > 0 ? `${Math.round(weight)} pts` : ''
+  }
 
   const handleAddExercises = () => {
     if (pickerContext === 'routine') {
@@ -2126,7 +2405,6 @@ export default function Workout({
       .map(e => ({ ...e, sets: [e.category === 'Cardio' ? defaultCardioSet() : defaultSet()], unit: defaultUnit, restSeconds: e.default_rest_seconds ?? defaultRest }))
     setWorkoutExercises(prev => [...prev, ...toAdd])
     closePicker()
-    loadRecentExerciseHistory(toAdd, userId, sessionId)
     if (battleModeActive && userId && toAdd.length > 0) {
       publishBattleEvent('exercise_added', {
         exerciseIds: toAdd.map(ex => ex.id),
@@ -2153,7 +2431,7 @@ export default function Workout({
   const startFromTemplate = async (template) => {
     if (!userId) return
     const [{ data, error }, { data: prof }] = await Promise.all([
-      supabase.from('workout_sessions').insert({ user_id: userId }).select().single(),
+      supabase.from('workout_sessions').insert({ user_id: userId }).select('id').single(),
       supabase.from('profiles').select('unit_preference').eq('id', userId).single(),
     ])
     if (!error) setSessionId(data.id)
@@ -2191,19 +2469,23 @@ export default function Workout({
 
     setWorkoutExercises(exercises)
     setActiveWorkout(true)
-    loadRecentExerciseHistory(exercises, userId, data?.id || null)
   }
 
   const startFromPlanDay = async (plan, day) => {
     if (!userId || !day?.exercises?.length) return false
     setPlanError('')
     setBattleSyncError('')
+    const activePlanWeek = getActivePlanWeek(plan, new Date(), day.week)
+    const isDeloadWeek = isScheduledDeloadWeek(plan, activePlanWeek)
+    const workoutDay = isDeloadWeek
+      ? applyScheduledDeloadToPlanDay(day, activePlanWeek)
+      : { ...day, week: activePlanWeek }
 
     const [{ data, error }, { data: prof }] = await Promise.all([
       createWorkoutSession({
         source_plan_id: plan.id,
-        source_plan_day_id: day.id,
-        source_plan_week: Number(day.week) || 1,
+        source_plan_day_id: workoutDay.id,
+        source_plan_week: activePlanWeek,
       }),
       supabase.from('profiles').select('unit_preference').eq('id', userId).single(),
     ])
@@ -2215,6 +2497,10 @@ export default function Workout({
 
     const unit = prof?.unit_preference || defaultUnit || 'kg'
     const findExercise = (planned) => {
+      if (planned.exerciseId) {
+        const byId = exerciseLibrary.find(ex => String(ex.id) === String(planned.exerciseId))
+        if (byId) return byId
+      }
       const plannedName = normalizeSearchValue(planned.name)
       return exerciseLibrary.find(ex => normalizeSearchValue(ex.name) === plannedName)
         || exerciseLibrary
@@ -2222,7 +2508,7 @@ export default function Workout({
           .sort((a, b) => scoreExerciseMatch(planned.name, b) - scoreExerciseMatch(planned.name, a))[0]
     }
 
-    const exercises = day.exercises
+    const exercises = workoutDay.exercises
       .map(planned => {
         const found = findExercise(planned)
         if (!found) return null
@@ -2231,12 +2517,20 @@ export default function Workout({
           planSource: 'training_plan',
           planId: sanitizePlanWorkoutMetadata(plan?.id, 80),
           planName: sanitizePlanWorkoutMetadata(plan?.name, VALIDATION_LIMITS.trainingPlanNameMaxLength),
-          planDayId: sanitizePlanWorkoutMetadata(day?.id, 40),
-          planDayName: sanitizePlanWorkoutMetadata(day?.name, 80),
-          planWeek: Number(day?.week) || 1,
+          planDayId: sanitizePlanWorkoutMetadata(workoutDay?.id, 40),
+          planDayName: sanitizePlanWorkoutMetadata(workoutDay?.name, 80),
+          planWeek: activePlanWeek,
           planGoal: sanitizePlanWorkoutMetadata(plan?.goal, 40),
           planTargetReps: planned.reps ? Math.max(1, Math.min(MAX_REPS, Number(planned.reps) || 0)) : null,
           planRepRange: sanitizePlanWorkoutMetadata(planned.repRange, 20),
+          planPeriodizationStyle: sanitizePlanWorkoutMetadata(
+            planned.periodizationStyle || planned.progression?.style || plan?.preferences?.periodization?.style || '',
+            40
+          ),
+          planIntensityTag: sanitizePlanWorkoutMetadata(planned.intensityTag || planned.progression?.intensityTag || '', 40),
+          planProgressionBias: sanitizePlanWorkoutMetadata(planned.progressionBias || planned.progression?.progressionBias || '', 40),
+          planDeloadWeek: isDeloadWeek,
+          planDeloadReason: isDeloadWeek ? 'scheduled' : null,
         }
         if (isCardio) {
           const setCount = Math.max(1, Math.min(Number(planned.sets) || 1, VALIDATION_LIMITS.trainingPlanMaxExercisesPerDay))
@@ -2289,10 +2583,11 @@ export default function Workout({
       defaultUnit: unit,
       defaultRest,
       sourcePlanId: plan?.id || null,
-      sourcePlanDayId: day.id || null,
+      sourcePlanDayId: workoutDay.id || null,
+      sourcePlanWeek: activePlanWeek,
+      sourcePlanDeloadWeek: isDeloadWeek,
     }, battleModeActive ? battleRoom?.id : null)
     setActiveWorkout(true)
-    loadRecentExerciseHistory(exercises, userId, data.id)
     return true
   }
 
@@ -2458,6 +2753,11 @@ export default function Workout({
       && progressionMap[exId]?.action === 'deload'
       && progressionMap[exId]?.activeSetIndex === setIdx
 
+    const REACCLIM_PLAN_MODES = new Set(['reacclimate_hold', 'reacclimate_reduce_one', 'reacclimate_reduce_two'])
+    const isReacclimSuggestion = field === 'done' && value === true
+      && REACCLIM_PLAN_MODES.has(progressionMap[exId]?.planMode)
+      && progressionMap[exId]?.activeSetIndex === setIdx
+
     setWorkoutExercises(prev => prev.map(ex => {
       if (ex.id !== exId) return ex
 
@@ -2476,11 +2776,15 @@ export default function Workout({
             !isRepsWithinInputRange(reps)
           ) return ex
           const updated = markExerciseSetCompleted(ex, setIdx, { completedAtMs: Date.now(), deriveRest: true })
-          if (!isDeloadSuggestion) return updated
-          return {
+          if (isDeloadSuggestion || ex.planDeloadWeek) return {
             ...updated,
             sets: updated.sets.map((s, i) => i === setIdx ? { ...s, progressionEvent: 'deload' } : s),
           }
+          if (isReacclimSuggestion) return {
+            ...updated,
+            sets: updated.sets.map((s, i) => i === setIdx ? { ...s, progressionEvent: 'reacclimate' } : s),
+          }
+          return updated
         }
         return clearExerciseSetCompletion(ex, setIdx)
       }
@@ -2626,7 +2930,6 @@ export default function Workout({
           restSeconds: created.default_rest_seconds ?? defaultRest,
         }
         setWorkoutExercises(prev => [...prev, customExercise])
-        loadRecentExerciseHistory([customExercise], userId, sessionId)
       }
 
       resetCustomExerciseForm()
@@ -2900,6 +3203,9 @@ export default function Workout({
               <span>{schedule.splitLabel || 'Auto'} split</span>
               <span>{periodization.styleLabel || 'Double Progression'}</span>
               <span>{adaptiveCoach.enabled ? 'Adaptive coach on' : 'Adaptive coach off'}</span>
+              {Number.isFinite(Number(viewingTrainingPlan.preferences?.qualityScore)) && (
+                <span>{Math.round(Number(viewingTrainingPlan.preferences.qualityScore))}/100 balance</span>
+              )}
             </div>
             {viewingTrainingPlan.equipment?.length > 0 && (
               <div className="plan-detail-equipment">
@@ -2955,7 +3261,8 @@ export default function Workout({
                         <div className="plan-detail-exercise-target">
                           <strong>{formatPlannedExerciseTarget(ex)}</strong>
                           {restLabel && <span>{restLabel}</span>}
-                          {ex.progression?.style && <span>{ex.progression.style.replaceAll('_', ' ')}</span>}
+                          {ex.progression?.style && <span>{formatPlanMetaLabel(ex.progression.style)}</span>}
+                          {ex.intensityTag && ex.intensityTag !== 'standard' && <span>{formatPlanMetaLabel(ex.intensityTag)}</span>}
                         </div>
                       </div>
                     )
@@ -2981,6 +3288,19 @@ export default function Workout({
     const dayOptions = [2, 3, 4, 5, 6, 7]
     const sessionOptions = [20, 30, 40, 45, 50, 60, 75, 90, 105, 120, 150, 180]
     const durationOptions = [1, 2, 3, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 'ongoing']
+    const renderPlanInfoModal = () => planInfoModal && (
+      <div className="plan-info-overlay" onClick={() => setPlanInfoModal(null)}>
+        <div className="plan-info-modal" role="dialog" aria-modal="true" aria-label={`${planInfoModal.title} info`} onClick={event => event.stopPropagation()}>
+          <div className="plan-info-modal-title">{planInfoModal.title}</div>
+          <div className="plan-info-modal-body">
+            {(planInfoModal.items || []).map(item => <p key={item}>{item}</p>)}
+          </div>
+          <button className="confirm-submit plan-info-modal-ok" onClick={() => setPlanInfoModal(null)}>
+            OK
+          </button>
+        </div>
+      </div>
+    )
     const goBack = () => {
       if (planBuilderStep === 0) closePlanBuilder()
       else setPlanBuilderStep(prev => Math.max(0, prev - 1))
@@ -3034,7 +3354,7 @@ export default function Workout({
         <div className="picker-list plan-builder-list">
           {planBuilderStep === 0 && (
             <div className="plan-builder-panel">
-              <div className="template-section-label">Goal</div>
+              <PlanInfoLabel label="Goal" helpKey="goal" onOpen={setPlanInfoModal} />
               <div className="plan-choice-grid">
                 {TRAINING_PLAN_GOALS.map(goal => (
                   <button
@@ -3046,7 +3366,7 @@ export default function Workout({
                   </button>
                 ))}
               </div>
-              <div className="template-section-label">Experience</div>
+              <PlanInfoLabel label="Experience" helpKey="experience" onOpen={setPlanInfoModal} />
               <div className="plan-segment-row">
                 {TRAINING_PLAN_EXPERIENCE.map(level => (
                   <button
@@ -3058,7 +3378,7 @@ export default function Workout({
                   </button>
                 ))}
               </div>
-              <div className="template-section-label">Days per week</div>
+              <PlanInfoLabel label="Days per week" helpKey="daysPerWeek" onOpen={setPlanInfoModal} />
               <div className="plan-pill-row">
                 {dayOptions.map(value => (
                   <button
@@ -3070,7 +3390,7 @@ export default function Workout({
                   </button>
                 ))}
               </div>
-              <div className="template-section-label">Session length</div>
+              <PlanInfoLabel label="Session length" helpKey="sessionLength" onOpen={setPlanInfoModal} />
               <div className="plan-pill-row">
                 {sessionOptions.map(value => (
                   <button
@@ -3082,7 +3402,7 @@ export default function Workout({
                   </button>
                 ))}
               </div>
-              <div className="template-section-label">Plan duration</div>
+              <PlanInfoLabel label="Plan duration" helpKey="duration" onOpen={setPlanInfoModal} />
               <div className="plan-pill-row">
                 {durationOptions.map(value => (
                   <button
@@ -3099,7 +3419,7 @@ export default function Workout({
 
           {planBuilderStep === 1 && (
             <div className="plan-builder-panel">
-              <div className="template-section-label">Equipment</div>
+              <PlanInfoLabel label="Equipment" helpKey="equipment" onOpen={setPlanInfoModal} />
               <div className="plan-choice-grid">
                 {TRAINING_PLAN_EQUIPMENT.map(item => {
                   const active = planForm.equipment.includes(item.id)
@@ -3119,7 +3439,7 @@ export default function Workout({
                   )
                 })}
               </div>
-              <div className="template-section-label">Focus Areas</div>
+              <PlanInfoLabel label="Focus Areas" helpKey="focusAreas" onOpen={setPlanInfoModal} />
               <div className="plan-chip-grid">
                 {TRAINING_PLAN_FOCUS_AREAS.map(area => {
                   const active = planForm.focusAreas.includes(area)
@@ -3144,7 +3464,7 @@ export default function Workout({
 
           {planBuilderStep === 2 && (
             <div className="plan-builder-panel">
-              <div className="template-section-label">Schedule</div>
+              <PlanInfoLabel label="Schedule" helpKey="schedule" onOpen={setPlanInfoModal} />
               <div className="plan-segment-row plan-segment-row-two">
                 {[
                   { id: 'flexible', label: `${planForm.daysPerWeek} flexible days` },
@@ -3160,28 +3480,31 @@ export default function Workout({
                 ))}
               </div>
               {planForm.scheduleMode === 'exact' && (
-                <div className="plan-pill-row">
-                  {TRAINING_PLAN_WEEKDAYS.map(day => {
-                    const active = planForm.trainingDays.includes(day.id)
-                    return (
-                      <button
-                        key={day.id}
-                        className={`plan-pill ${active ? 'active' : ''}`}
-                        onClick={() => {
-                          const next = active
-                            ? planForm.trainingDays.filter(id => id !== day.id)
-                            : [...planForm.trainingDays, day.id].slice(0, planForm.daysPerWeek)
-                          updatePlanForm({ trainingDays: next })
-                        }}
-                      >
-                        {day.label}
-                      </button>
-                    )
-                  })}
-                </div>
+                <>
+                  <PlanInfoLabel label="Training days" helpKey="trainingDays" onOpen={setPlanInfoModal} />
+                  <div className="plan-pill-row">
+                    {TRAINING_PLAN_WEEKDAYS.map(day => {
+                      const active = planForm.trainingDays.includes(day.id)
+                      return (
+                        <button
+                          key={day.id}
+                          className={`plan-pill ${active ? 'active' : ''}`}
+                          onClick={() => {
+                            const next = active
+                              ? planForm.trainingDays.filter(id => id !== day.id)
+                              : [...planForm.trainingDays, day.id].slice(0, planForm.daysPerWeek)
+                            updatePlanForm({ trainingDays: next })
+                          }}
+                        >
+                          {day.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
               )}
 
-              <div className="template-section-label">Split</div>
+              <PlanInfoLabel label="Split" helpKey="split" onOpen={setPlanInfoModal} />
               <div className="plan-choice-grid">
                 {TRAINING_PLAN_SPLITS.map(item => (
                   <button
@@ -3194,7 +3517,7 @@ export default function Workout({
                 ))}
               </div>
 
-              <div className="template-section-label">Progression</div>
+              <PlanInfoLabel label="Progression" helpKey="progression" onOpen={setPlanInfoModal} />
               <div className="plan-choice-grid">
                 {TRAINING_PLAN_PERIODIZATION.map(item => (
                   <button
@@ -3207,7 +3530,7 @@ export default function Workout({
                 ))}
               </div>
 
-              <div className="template-section-label">Deload Policy</div>
+              <PlanInfoLabel label="Deload Policy" helpKey="deload" onOpen={setPlanInfoModal} />
               <div className="plan-pill-row">
                 {TRAINING_PLAN_DELOAD_POLICIES.map(item => (
                   <button
@@ -3220,7 +3543,7 @@ export default function Workout({
                 ))}
               </div>
 
-              <div className="template-section-label">Block Goal</div>
+              <PlanInfoLabel label="Block Goal" helpKey="blockGoal" onOpen={setPlanInfoModal} />
               <div className="plan-chip-grid">
                 {TRAINING_PLAN_BLOCK_GOALS.map(item => (
                   <button
@@ -3232,6 +3555,7 @@ export default function Workout({
                   </button>
                 ))}
               </div>
+              <PlanInfoLabel label="Adaptive Coach" helpKey="adaptiveCoach" onOpen={setPlanInfoModal} />
               <button
                 className={`plan-toggle-card ${planForm.adaptiveCoach ? 'active' : ''}`}
                 onClick={() => updatePlanForm({ adaptiveCoach: !planForm.adaptiveCoach })}
@@ -3258,9 +3582,15 @@ export default function Workout({
                   <span>{generatedPlan.preferences?.schedule?.splitLabel || 'Auto'} split</span>
                   <span>{generatedPlan.preferences?.periodization?.styleLabel || 'Double Progression'}</span>
                   <span>{generatedPlan.preferences?.periodization?.deloadLabel || 'Adaptive'} deload</span>
+                  {Number.isFinite(Number(generatedPlan.preferences?.qualityScore)) && (
+                    <span>{Math.round(Number(generatedPlan.preferences.qualityScore))}/100 balance</span>
+                  )}
                 </div>
                 <p>{generatedPlan.preferences?.rationale?.split}</p>
                 <p>{generatedPlan.preferences?.rationale?.periodization}</p>
+                {generatedPlan.preferences?.qualityFlags?.length > 0 && (
+                  <p>{generatedPlan.preferences.qualityFlags.length} balance check{generatedPlan.preferences.qualityFlags.length === 1 ? '' : 's'} handled while building this week.</p>
+                )}
               </div>
               {generatedPlan.days.map(day => (
                 <div key={day.id} className="plan-day-preview-card">
@@ -3293,6 +3623,7 @@ export default function Workout({
             </div>
           )}
         </div>
+        {renderPlanInfoModal()}
       </div>
     )
   }
@@ -3434,7 +3765,7 @@ export default function Workout({
                   <div>
                     <div className="battle-panel-card-label">Projected Score</div>
                     <div className="battle-panel-card-body">
-                      {battleProjection.status === 'waiting' ? 'Live projection until both workouts finish.' : battleProjection.verdict}
+                      {battleProjection.status === 'waiting' ? `Live weighted score out of ${battleProjection.scoreTotal || 100}.` : battleProjection.verdict}
                     </div>
                   </div>
                   <div className="battle-projection-score">
@@ -3449,7 +3780,7 @@ export default function Workout({
                       <span className={metric.winner === 'you' ? 'is-leading' : ''}>
                         {metric.available ? fmtBattleMetric(metric, metric.yourValue) : '—'}
                       </span>
-                      <strong>{metric.label}</strong>
+                      <strong>{[metric.label, fmtBattleMetricWeight(metric)].filter(Boolean).join(' · ')}</strong>
                       <span className={metric.winner === 'opponent' ? 'is-leading' : ''}>
                         {metric.available ? fmtBattleMetric(metric, metric.opponentValue) : '—'}
                       </span>
@@ -3706,6 +4037,27 @@ export default function Workout({
                     suggestion={progressionMap[ex.id]}
                     unitPreference={ex.unit}
                     onApply={(weight, reps) => applyProgressionSuggestion(ex.id, weight, reps)}
+                    equipment={ex.equipment}
+                    customIncrementKg={customIncrements[ex.equipment] ?? null}
+                    onIncrementChange={(equipment, kg) => {
+                      setCustomIncrementKg(equipment, kg)
+                      setCustomIncrements(prev => {
+                        const next = { ...prev }
+                        if (kg == null) delete next[equipment]
+                        else next[equipment] = kg
+                        return next
+                      })
+                    }}
+                    customStartingWeightKg={startingWeights[ex.equipment] ?? null}
+                    onStartingWeightChange={(equipment, kg) => {
+                      setCustomStartingWeightKg(equipment, kg)
+                      setStartingWeights(prev => {
+                        const next = { ...prev }
+                        if (kg == null) delete next[equipment]
+                        else next[equipment] = kg
+                        return next
+                      })
+                    }}
                   />
                 )
             )}
@@ -3721,6 +4073,7 @@ export default function Workout({
               <div className="set-row header-row">
                 <span className="col-set">Set</span>
                 <span className="col-prev">Previous</span>
+                <span></span>
                 <span className="col-kg">{ex.unit}{(ex.equipment === 'Dumbbell' || ex.name === 'Cable Lateral Raise') && <span className="db-per-hint">per side</span>}</span>
                 <span className="col-reps">Reps</span>
                 <span className="col-done"></span>
@@ -3847,6 +4200,12 @@ export default function Workout({
               const minWeight = getWeightInputMin(ex.equipment, ex.unit, userBodyweightKg)
               const maxWeight = getWeightInputMax(ex.equipment, ex.unit)
               const hasPlateCalculator = PLATE_EQUIPMENT.has(ex.equipment) || ex.equipment === 'Bodyweight'
+              const weightWarning = !s.done && s.weight !== '' && Number.isFinite(enteredWeight) && !weightValid
+                ? (enteredWeight > maxWeight ? `Max ${maxWeight}` : `Min ${minWeight}`)
+                : null
+              const repsWarning = !s.done && s.reps !== '' && !Number.isNaN(enteredReps) && !repsValid
+                ? (enteredReps > MAX_REPS ? `Max ${MAX_REPS} reps` : 'Min 1 rep')
+                : null
               return (
               <div key={i} className="set-row-wrapper" {...swipeProps}>
                 {deleteBg}
@@ -3875,6 +4234,18 @@ export default function Workout({
                     </button>
                   )
                 })()}
+                <div className="set-type-wrap">
+                  <button
+                    className={`set-type-btn${s.setType !== 'normal' ? ' active' : ''}`}
+                    onClick={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect()
+                      const key = `${ex.id}-${i}`
+                      setOpenSetType(o => o?.key === key ? null : { key, exId: ex.id, setIdx: i, top: rect.bottom + 4, left: rect.left + rect.width / 2 })
+                    }}
+                  >
+                    {{ normal: 'N', warmup: 'W', dropset: 'D', superset: 'S' }[s.setType] ?? 'N'}
+                  </button>
+                </div>
                 <div className="col-kg-wrap">
                   <input
                     className="set-input"
@@ -3907,7 +4278,16 @@ export default function Workout({
                     <polyline points="20 6 9 17 4 12"/>
                   </svg>
                 </button>
+                <span className={`set-row-type-label set-row-type-label--${s.setType ?? 'normal'}`}>
+                  {{ normal: 'Normal Set', warmup: 'Warmup Set', dropset: 'Drop Set', superset: 'Super Set' }[s.setType] ?? 'Normal Set'}
+                </span>
                 </div>
+              {(weightWarning || repsWarning) && (
+                <div className="set-row-warnings">
+                  {weightWarning && <span className="set-row-warning">{weightWarning}</span>}
+                  {repsWarning && <span className="set-row-warning">{repsWarning}</span>}
+                </div>
+              )}
               </div>
             )})}
           </div>
@@ -3916,6 +4296,34 @@ export default function Workout({
             ))}
           </SortableContext>
         </DndContext>
+
+        {openSetType && typeof document !== 'undefined' && createPortal(
+          <div
+            className="set-type-dropdown"
+            style={{ top: openSetType.top, left: openSetType.left }}
+          >
+            {[
+              { type: 'normal',   label: 'Normal Set',  letter: 'N' },
+              { type: 'warmup',   label: 'Warmup Set',  letter: 'W' },
+              { type: 'dropset',  label: 'Drop Set',    letter: 'D' },
+              { type: 'superset', label: 'Super Set',   letter: 'S' },
+            ].map(({ type, label, letter }) => {
+              const ex = workoutExercises.find(e => e.id === openSetType.exId)
+              const currentType = ex?.sets[openSetType.setIdx]?.setType ?? 'normal'
+              return (
+                <button
+                  key={type}
+                  className={`set-type-option${currentType === type ? ' selected' : ''}`}
+                  onClick={() => { updateSet(openSetType.exId, openSetType.setIdx, 'setType', type); setOpenSetType(null) }}
+                >
+                  <span className="set-type-option-letter">{letter}</span>
+                  {label}
+                </button>
+              )
+            })}
+          </div>,
+          document.body
+        )}
 
         <div className="workout-actions">
           <button className="action-btn" onClick={() => { setPickerContext('workout'); setShowExercises(true) }}>

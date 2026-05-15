@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { fmtCompact } from '../lib/liftMath'
 import '../styles/WorkoutSummary.css'
 
 function fmtTime(s) {
@@ -24,6 +25,18 @@ function fmtMetricValue(metric, value) {
       ? ''
       : 'x'
   return `${value.toFixed(2)}${suffix}`
+}
+
+function fmtMetricWeight(metric) {
+  const weight = Number(metric.effectiveWeight ?? metric.weight)
+  return Number.isFinite(weight) && weight > 0 ? `${Math.round(weight)} pts` : ''
+}
+
+function getHighlightLabel(type) {
+  if (type === 'pr') return 'PR'
+  if (type === 'rank_up') return 'Rank Up'
+  if (type === 'achievement') return 'Achievement'
+  return 'Effort'
 }
 
 function getBattleOutcome(battle) {
@@ -87,13 +100,17 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     totalVolume,
     unit,
     exercises,
-    rankUps,
+    rankUps = [],
     newAchievements = [],
     battle = null,
     battleOnly = false,
     planCoaching = null,
   } = summary
   const battleOutcome = getBattleOutcome(battle)
+  const battleHighlights = [
+    ...(battle?.yourHighlights || []).map(item => ({ ...item, owner: 'You' })),
+    ...(battle?.opponentHighlights || []).map(item => ({ ...item, owner: battle?.opponentName || 'Opponent' })),
+  ]
 
   return (
     <div className={`ws-overlay ${show ? 'ws-overlay-in' : ''}`}>
@@ -131,7 +148,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
               <>
                 <div className="ws-stat-divider" />
                 <div className="ws-stat">
-                  <div className="ws-stat-value">~{caloriesBurned}</div>
+                  <div className="ws-stat-value">~{fmtCompact(caloriesBurned)}</div>
                   <div className="ws-stat-label">kcal</div>
                 </div>
               </>
@@ -165,6 +182,11 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                     <span>{battle.opponentName}</span>
                   </div>
                 </div>
+                {battle.scoreTotal && (
+                  <div className="ws-battle-score-total">
+                    Weighted score out of {battle.scoreTotal}
+                  </div>
+                )}
                 <div className="ws-battle-metrics">
                   {battle.metrics?.map(metric => (
                     <div key={metric.id} className="ws-battle-metric-row">
@@ -175,7 +197,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                         <div className="ws-battle-metric-label">{metric.label}</div>
                         <div className="ws-battle-metric-unit">
                           {metric.available
-                            ? metric.display
+                            ? [metric.display, fmtMetricWeight(metric)].filter(Boolean).join(' · ')
                             : metric.unavailableText || 'Needs both lifters to log this metric'}
                         </div>
                       </div>
@@ -185,6 +207,23 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                     </div>
                   ))}
                 </div>
+                {battleHighlights.length > 0 && (
+                  <div className="ws-battle-highlights">
+                    <div className="ws-battle-highlights-head">
+                      <span>Not scored</span>
+                      <small>PR and effort context</small>
+                    </div>
+                    {battleHighlights.map((highlight, index) => (
+                      <div key={`${highlight.owner}-${highlight.type}-${highlight.title}-${index}`} className="ws-battle-highlight">
+                        <div>
+                          <strong>{highlight.title}</strong>
+                          {highlight.body && <span>{highlight.body}</span>}
+                        </div>
+                        <em>{highlight.owner} · {getHighlightLabel(highlight.type)}</em>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {battle.bodyweightFallbackUsed && (
                   <div className="ws-battle-note">
                     Bodyweight was missing for at least one lifter, so this recap filled the gap from the available bodyweights in the room or a 170 lb default.

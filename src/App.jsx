@@ -16,12 +16,15 @@ import {
   respondToBattleInvite,
 } from './lib/battles'
 import { cancelRestNotification, scheduleRestEndNotification } from './lib/restNotification'
+import { readStoredWorkoutDraft } from './lib/workoutDraft'
 import { validateBodyweight } from './lib/inputValidation'
 import { useNetworkStatus } from './hooks/useNetworkStatus'
 import { useTheme } from './context/ThemeContext'
 import { UserProvider } from './context/UserContext'
 import { clearCachedTheme, getCachedThemeForUser, saveThemeForUser } from './lib/theme'
 import './App.css'
+
+
 
 const Home = lazy(() => import('./components/Home'))
 const Workout = lazy(() => import('./components/Workout'))
@@ -181,6 +184,8 @@ export default function App() {
   const [tabTransitionDirection, setTabTransitionDirection] = useState('forward')
   const [tabTransitionTick, setTabTransitionTick] = useState(0)
   const [quickActionSheetOpen, setQuickActionSheetOpen] = useState(false)
+  const [overtrain, setOvertrain] = useState(null)
+  const [overtrainDismissedKey, setOvertrainDismissedKey] = useState(() => localStorage.getItem('liftlog:overtrainDismissedKey') || null)
   const [startEmptyWorkoutTick, setStartEmptyWorkoutTick] = useState(0)
   const [resumeWorkoutTick, setResumeWorkoutTick] = useState(0)
   const [openAddFoodTick, setOpenAddFoodTick] = useState(0)
@@ -195,6 +200,7 @@ export default function App() {
   const [weightRefreshTick, setWeightRefreshTick] = useState(0)
   const [workoutRefreshTick, setWorkoutRefreshTick] = useState(0)
   const [ranksRefreshTick, setRanksRefreshTick] = useState(0)
+  const [appForegroundTick, setAppForegroundTick] = useState(0)
   const [homeWorkoutStreak, setHomeWorkoutStreak] = useState(0)
   const [showStreakInfo, setShowStreakInfo] = useState(false)
   const [session, setSession] = useState(undefined)
@@ -222,6 +228,7 @@ export default function App() {
   const introRemoveTimerRef = useRef(null)
   const homeIntroMotionTimerRef = useRef(null)
   const quickTimerNotificationRef = useRef({ scheduled: false })
+  const appWasBackgroundedRef = useRef(false)
   const battleRefreshTimerRef = useRef(null)
   const battleFallbackPollRef = useRef(null)
   const battleRefreshInFlightRef = useRef(false)
@@ -235,6 +242,19 @@ export default function App() {
     startY: 0,
   })
   const onWorkoutStatus = useCallback((status) => setWorkoutStatus(status), [])
+
+  // Seed resumable flag immediately from localStorage when session first resolves,
+  // before the Workout component's async init (network calls) completes.
+  // Workout's onStatusChange will overwrite this with the authoritative value later.
+  useEffect(() => {
+    const uid = session?.user?.id
+    if (!uid) return
+    const { draft } = readStoredWorkoutDraft(uid)
+    if (draft) {
+      setWorkoutStatus(s => s.resumable || s.active ? s : { ...s, resumable: true })
+    }
+  }, [session?.user?.id])
+
   const onWorkoutFinish = useCallback((summary) => {
     setWorkoutSummary(summary)
     setWorkoutRefreshTick(t => t + 1)
@@ -351,6 +371,7 @@ export default function App() {
       return
     }
     const tick = () => {
+      if (document.visibilityState === 'hidden') return
       const remaining = Math.max(0, Math.ceil((quickTimer.endTime - Date.now()) / 1000))
       setQuickTimerDisplay(remaining)
     }
@@ -397,6 +418,57 @@ export default function App() {
     setTabTransitionDirection(getTabDirection(currentTab, nextTab))
     setTabTransitionTick(tick => tick + 1)
     setTab(nextTab)
+  }, [])
+
+  useEffect(() => {
+    const markBackgrounded = () => {
+      appWasBackgroundedRef.current = true
+    }
+
+    const markForegrounded = () => {
+      if (!appWasBackgroundedRef.current) return
+      appWasBackgroundedRef.current = false
+      setAppForegroundTick(tick => tick + 1)
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        markBackgrounded()
+        return
+      }
+
+      if (document.visibilityState === 'visible') markForegrounded()
+    }
+
+    const handlePageShow = () => markForegrounded()
+
+    let cancelled = false
+    let appStateListener
+    CapApp.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) {
+        markForegrounded()
+      } else {
+        markBackgrounded()
+      }
+    }).then(handle => {
+      if (cancelled) {
+        handle.remove()
+        return
+      }
+      appStateListener = handle
+    }).catch(() => {})
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', markForegrounded)
+    window.addEventListener('pageshow', handlePageShow)
+
+    return () => {
+      cancelled = true
+      appStateListener?.remove()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', markForegrounded)
+      window.removeEventListener('pageshow', handlePageShow)
+    }
   }, [])
 
   const refreshBattleSummary = useCallback(async (roomId) => {
@@ -934,12 +1006,12 @@ export default function App() {
   const otherScreens = useMemo(() => {
     if (!session?.user?.id) return {}
     return {
-      home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} onWorkoutDeleted={handleWorkoutDeleted} />,
+      home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} onWorkoutDeleted={handleWorkoutDeleted} workoutActive={workoutStatus.active} onOvertrain={setOvertrain} isVisible={tab === 'home'} appForegroundTick={appForegroundTick} />,
       ranks: <Ranks refreshTick={ranksRefreshTick} />,
       nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
       profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={handleWorkoutDeleted} workoutActive={workoutStatus.active} />,
     }
-  }, [session, showIntroSplash, homeIntroMotionReady, initialScreenReady, handleNavigate, setHomeWorkoutStreak, markInitialScreenReady, weightRefreshTick, workoutRefreshTick, handleWorkoutDeleted, ranksRefreshTick, openAddFoodTick, handleChallengeFriend, workoutStatus.active])
+  }, [session, showIntroSplash, homeIntroMotionReady, initialScreenReady, handleNavigate, setHomeWorkoutStreak, markInitialScreenReady, weightRefreshTick, workoutRefreshTick, handleWorkoutDeleted, ranksRefreshTick, openAddFoodTick, handleChallengeFriend, workoutStatus.active, setOvertrain, tab, appForegroundTick])
 
   if (session === undefined) return introSplash || <LoadingSpinner fullPage />
   if (!session || recoveryMode) {
@@ -953,6 +1025,45 @@ export default function App() {
       </>
     )
   }
+
+  const overtrainKey = overtrain?.hasWarning
+    ? `${overtrain.goal || 'default'}:${overtrain.signals.map(s => `${s.type}:${s.key}`).sort().join(',')}`
+    : null
+  const overtrainBannerVisible = overtrainKey !== null && overtrainKey !== overtrainDismissedKey
+
+  const overtrainBannerContent = (() => {
+    const ps = overtrain?.primarySignal
+    if (!ps) return null
+    const multipleSignals = (overtrain?.signals?.length ?? 0) > 1
+    const suffix = multipleSignals ? ' Review the Muscles Worked section for details.' : ''
+    if (ps.type === 'overuse') {
+      const ratio = ps.targetRatio != null ? ps.targetRatio.toFixed(1) : '?'
+      return {
+        title: `${ps.label} trained at ${ratio}× weekly target`,
+        body: `Repeating this without extra recovery may increase fatigue and injury risk.${suffix}`,
+      }
+    }
+    if (ps.type === 'volume_spike') {
+      const pct = Math.round((ps.spikePct ?? 0) * 100)
+      return {
+        title: `Volume for ${ps.label} jumped ${pct}% vs last week`,
+        body: `A sudden spike beyond 50% week-over-week is a common overreaching trigger. Ease back to last week's level before progressing.${suffix}`,
+      }
+    }
+    if (ps.type === 'low_baseline_high_volume') {
+      return {
+        title: `High volume for ${ps.label} after low recent training`,
+        body: `${ps.label} accumulated ${ps.currentSets} effective sets this week with little volume the week before. Ramp up more gradually to let your body adapt.${suffix}`,
+      }
+    }
+    if (ps.type === 'high_frequency') {
+      return {
+        title: `${ps.label} trained ${ps.trainedDayCount} times this week`,
+        body: `${ps.label} was last worked ${ps.hoursSinceLast} hours ago. Allowing 48 hours before the next session supports full recovery.${suffix}`,
+      }
+    }
+    return null
+  })()
 
   const profileButtonLabel = displayName(session?.user?.user_metadata) || session?.user?.email || 'Profile'
   const tabs = [
@@ -999,6 +1110,25 @@ export default function App() {
                   </span>
                 </button>
               )}
+              {tab === 'workout' && overtrainKey !== null && (
+                <button
+                  type="button"
+                  className="topbar-bell-btn"
+                  onClick={() => {
+                    if (overtrainBannerVisible) {
+                      localStorage.setItem('liftlog:overtrainDismissedKey', overtrainKey)
+                      setOvertrainDismissedKey(overtrainKey)
+                    } else {
+                      localStorage.removeItem('liftlog:overtrainDismissedKey')
+                      setOvertrainDismissedKey(null)
+                    }
+                  }}
+                  aria-label="View training load advisory"
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+                  {!overtrainBannerVisible && <span className="topbar-bell-dot" />}
+                </button>
+              )}
               <button
                 className={`topbar-profile-btn ${tab === 'profile' ? 'active' : ''}`}
                 onClick={() => handleNavigate('profile')}
@@ -1015,13 +1145,32 @@ export default function App() {
         </header>
 
         <main
-          className="content"
+          className={`content${workoutStatus.active && tab !== 'workout' ? ' content-workout-banner' : ''}`}
           onTouchStart={handleTabSwipeStart}
           onTouchEnd={handleTabSwipeEnd}
           onTouchCancel={handleTabSwipeCancel}
         >
           <Suspense fallback={appFallback}>
             <div className={tab === 'workout' ? contentScreenClassName : 'content-screen-hidden'}>
+              {overtrainBannerVisible && overtrainBannerContent && (
+                <div className={`home-overtrain-banner severity-${overtrain.severity}`}>
+                  <div className="home-overtrain-banner-header">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    <span>Training Load Advisory</span>
+                    <span className={`home-overtrain-banner-severity-chip severity-${overtrain.severity}`}>
+                      {overtrain.severity === 'high' ? 'High Risk' : overtrain.severity === 'moderate' ? 'Moderate Risk' : 'Low Risk'}
+                    </span>
+                    <button
+                      type="button"
+                      className="home-overtrain-banner-dismiss"
+                      onClick={() => { localStorage.setItem('liftlog:overtrainDismissedKey', overtrainKey); setOvertrainDismissedKey(overtrainKey) }}
+                      aria-label="Dismiss training load advisory"
+                    >×</button>
+                  </div>
+                  <p className="home-overtrain-banner-title">{overtrainBannerContent.title}</p>
+                  <p className="home-overtrain-banner-body">{overtrainBannerContent.body}</p>
+                </div>
+              )}
               <Workout
                 onStatusChange={onWorkoutStatus}
                 onFinish={onWorkoutFinish}

@@ -8,9 +8,10 @@ import RankBadge from '../RankBadge'
 import LoadingSpinner from '../LoadingSpinner'
 import ExerciseChart from './ExerciseChart'
 import {
-  TIERS, TIER_GROUPS, TIER_COLORS, ANCHORS,
+  TIERS, TIER_GROUPS, TIER_COLORS,
   tierGroup, tierColor,
   expandAnchors, getTierIdx, getProgress, weightForOrm,
+  getAnchors, anchorsOrNull,
 } from '../../lib/strengthStandards'
 import {
   ALL_TIME_RANK_MODE,
@@ -277,6 +278,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
   const [loading, setLoading]     = useState(true)
   const [loadError, setLoadError] = useState('')
   const [chartPeriod, setChartPeriod] = useState('3m')
+  const [showTrendLine, setShowTrendLine] = useState(false)
   const [muscleLabel, setMuscleLabel] = useState(null)
   const [prevSets, setPrevSets] = useState([])
   const [prevSetsHasMore, setPrevSetsHasMore] = useState(false)
@@ -314,6 +316,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
           .not('reps', 'is', null)
           .order('created_at', { ascending: false })
           .range(0, PREV_SETS_PAGE),
+        getAnchors(),
       ])
       const initialLoadError = exError || profileError || prevSetsResult.error
       if (initialLoadError) throw initialLoadError
@@ -430,7 +433,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
 
   // Rank
   const isBW = exercise?.equipment === 'Bodyweight'
-  const exerciseAnchors = exercise ? ANCHORS[gender]?.[exercise.name] : null
+  const exerciseAnchors = exercise ? anchorsOrNull()?.[gender]?.[exercise.name] : null
   let allTimeRankSection = null
   if (stats && bodyweightKg && exerciseAnchors) {
     const thresholds = expandAnchors(exerciseAnchors)
@@ -634,23 +637,33 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
             <div className="ex-section-header">
               <div className="ex-section-title">1RM Progress</div>
               {chartData.length > 0 && (
-                <div className="ex-period-toggle">
-                  {CHART_PERIOD_OPTIONS.map(({ value }) => (
-                    <button
-                      key={value}
-                      className={`ex-period-btn ${chartPeriod === value ? 'active' : ''}`}
-                      onClick={() => setChartPeriod(value)}
-                    >
-                      {getChartPeriodLabel(value)}
-                    </button>
-                  ))}
+                <div className="ex-chart-controls">
+                  <label className="ex-trend-check">
+                    <input
+                      type="checkbox"
+                      checked={showTrendLine}
+                      onChange={e => setShowTrendLine(e.target.checked)}
+                    />
+                    Trend
+                  </label>
+                  <div className="ex-period-toggle">
+                    {CHART_PERIOD_OPTIONS.map(({ value }) => (
+                      <button
+                        key={value}
+                        className={`ex-period-btn ${chartPeriod === value ? 'active' : ''}`}
+                        onClick={() => setChartPeriod(value)}
+                      >
+                        {getChartPeriodLabel(value)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
             {chartData.length === 0
               ? <div className="chart-empty">No data yet — log this exercise to track your progress</div>
               : chartDisplay.length > 0
-                ? <div className="ex-chart-wrap"><ExerciseChart data={chartDisplay} unit={displayUnit} /></div>
+                ? <div className="ex-chart-wrap"><ExerciseChart data={chartDisplay} unit={displayUnit} showTrendLine={showTrendLine} /></div>
                 : <div className="chart-empty">No data in this period</div>
             }
           </div>

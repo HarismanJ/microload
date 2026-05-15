@@ -4,18 +4,20 @@ import { createPortal } from 'react-dom'
 import Model from 'react-body-highlighter'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, getStartupSnapshot, setStartupSnapshot, getCalendarMonthCacheKey, invalidateCache } from '../lib/cache'
-import { calculateORM } from '../lib/orm'
+import { ESTIMATED_ORM_REP_CAP, calculateORM, calculateSetEstimatedOrm } from '../lib/orm'
 import { fetchExercises } from '../data/exercises'
 import { fetchExerciseRankStates, mapExerciseRankStates, upsertExerciseRankStates } from '../data/rankStates'
 import RankBadge from './RankBadge'
 import LoadingSpinner from './LoadingSpinner'
 import {
-  TIERS, TIER_COLORS, ANCHORS,
+  TIERS, TIER_COLORS,
   tierGroup, tierColor,
   expandAnchors, getTierIdx, getProgress, weightForOrm,
+  getAnchors, anchorsOrNull,
 } from '../lib/strengthStandards'
 import {
   MAX_REPS,
+  MAX_WEIGHT,
   getWeightInputMax,
   getWeightInputMin,
   isRepsWithinInputRange,
@@ -152,7 +154,7 @@ function lbsToKg(v) { return v * 0.453592 }
 function kgToLbs(v) { return v * 2.20462 }
 
 function getLiftRank(lift, ormKg, bodyweightKg, gender) {
-  const anchors = ANCHORS[gender]?.[lift.name]
+  const anchors = anchorsOrNull()?.[gender]?.[lift.name]
   if (!anchors || !bodyweightKg) return null
 
   const thresholds = expandAnchors(anchors)
@@ -411,6 +413,7 @@ export default function Ranks({ refreshTick = 0 }) {
     const cached = getCached('ranks')
     if (isValidRanksSnapshot(cached, userId)) {
       setProfile(cached.profile)
+      await getAnchors()
       setLifts(cached.lifts)
       setLoading(false)
       return
@@ -420,13 +423,15 @@ export default function Ranks({ refreshTick = 0 }) {
     if (isValidRanksSnapshot(snapshot, userId)) {
       setCached('ranks', snapshot)
       setProfile(snapshot.profile)
+      await getAnchors()
       setLifts(snapshot.lifts)
       setLoading(false)
       return
     }
 
     try {
-      const anchorNames = Object.keys(ANCHORS.male)
+      const resolvedAnchors = await getAnchors()
+      const anchorNames = Object.keys(resolvedAnchors.male)
       const anchorNameSet = new Set(anchorNames)
 
       const [{ data: profileData }, { data: prsData }, exerciseRows, rankStatesResult] = await Promise.all([
@@ -541,7 +546,7 @@ export default function Ranks({ refreshTick = 0 }) {
   const liftsWithDetails = useMemo(() => {
     const now = Date.now()
     return lifts.map(lift => {
-      const anchors = ANCHORS[gender]?.[lift.name] ?? null
+      const anchors = anchorsOrNull()?.[gender]?.[lift.name] ?? null
       const thresholds = anchors ? expandAnchors(anchors) : null
       const allTimeCardRank = lift.ormKg !== null && bodyweightKg && anchors
         ? getLiftRank(lift, lift.ormKg, bodyweightKg, gender)
@@ -653,7 +658,13 @@ export default function Ranks({ refreshTick = 0 }) {
     })
   const repsReady = topSetForm.reps !== '' && isRepsWithinInputRange(enteredReps)
   const previewOrm = editingLift && weightReady && repsReady
-    ? calculateORM(enteredWeight, enteredReps)
+    ? calculateSetEstimatedOrm({
+        weight: enteredWeight,
+        reps: enteredReps,
+        unit: useLbs ? 'lbs' : 'kg',
+        equipment: editingLift.equipment,
+        bodyweightKg,
+      })
     : null
   const previewOrmKg = previewOrm === null
     ? null
@@ -706,7 +717,19 @@ export default function Ranks({ refreshTick = 0 }) {
       return
     }
 
-    const estimated1RM = calculateORM(weight, reps)
+    const estimated1RM = calculateSetEstimatedOrm({
+      weight,
+      reps,
+      unit: useLbs ? 'lbs' : 'kg',
+      equipment: lift.equipment,
+      bodyweightKg,
+    })
+
+    if (estimated1RM === null) {
+      setTopSetError(`Estimated 1RM ranks are only available for sets of ${ESTIMATED_ORM_REP_CAP} reps or fewer.`)
+      return
+    }
+
     const estimated1RMKg = useLbs ? lbsToKg(estimated1RM) : estimated1RM
     const beatsCurrentTop = lift.ormKg === null || estimated1RMKg > lift.ormKg + 0.01
 
@@ -827,7 +850,7 @@ export default function Ranks({ refreshTick = 0 }) {
 
   const ormCalcW = parseFloat(ormWeight)
   const ormCalcR = parseInt(ormReps)
-  const ormResult = Number.isFinite(ormCalcW) && ormCalcW > 0 && Number.isFinite(ormCalcR) && ormCalcR >= 1 && ormCalcR <= 36
+  const ormResult = Number.isFinite(ormCalcW) && ormCalcW > 0 && Number.isFinite(ormCalcR) && ormCalcR >= 1 && ormCalcR <= ESTIMATED_ORM_REP_CAP
     ? (() => {
         const kg = ormUnit === 'lbs' ? ormCalcW * 0.453592 : ormCalcW
         const resultKg = calculateORM(kg, ormCalcR)
@@ -1267,6 +1290,7 @@ export default function Ranks({ refreshTick = 0 }) {
                   type="number"
                   inputMode="decimal"
                   min="0"
+                  max={MAX_WEIGHT}
                   step="any"
                   placeholder="0"
                   value={ormWeight}

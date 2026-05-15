@@ -84,20 +84,18 @@ export default function Achievements({ onBack }) {
       const [
         { data: profileData, error: profileError },
         { data: prs, error: prsError },
-        { data: nutData, error: nutritionError },
+        { data: nutDayData, error: nutError },
       ] = await Promise.all([
         fetchProfileWithWorkoutCount(userId, ['lifetime_volume_kg']),
         supabase
           .from('exercise_prs')
           .select('best_1rm_kg, exercises!inner(name)')
           .eq('user_id', userId),
-        supabase
-          .from('nutrition_logs')
-          .select('log_date')
-          .eq('user_id', userId)
-          .limit(1000),
+        supabase.rpc('count_distinct_nutrition_days', { p_user_id: userId }),
       ])
-      const error = profileError || prsError || nutritionError
+      const nutRpcMissing = nutError?.message?.toLowerCase?.().includes('count_distinct_nutrition_days')
+        || nutError?.message?.toLowerCase?.().includes('could not find the function')
+      const error = profileError || prsError || (nutRpcMissing ? null : nutError)
       if (error) throw error
 
       // Max ORM in kg per exercise name — best_1rm_kg is already in kg
@@ -111,11 +109,17 @@ export default function Achievements({ onBack }) {
       const totalVolumeKg = profileData?.lifetime_volume_kg ?? 0
       const sessionCount = Math.max(0, Number(profileData?.workout_count) || 0)
 
-      const nutDayCount = new Set((nutData || []).map(n => n.log_date)).size
+      const nutDayCount = Number(nutDayData) || 0
 
       const unlockedIds = new Set()
       for (const a of ACHIEVEMENTS) {
-        if (a.match) {
+        if (a.matchNames) {
+          const nameSet = new Set(a.matchNames)
+          const best = Object.entries(maxOrmKg)
+            .filter(([name]) => nameSet.has(name))
+            .reduce((max, [, orm]) => Math.max(max, orm), 0)
+          if (best >= a.kgTarget) unlockedIds.add(a.id)
+        } else if (a.match) {
           const best = Object.entries(maxOrmKg)
             .filter(([name]) => name.includes(a.match))
             .reduce((max, [, orm]) => Math.max(max, orm), 0)

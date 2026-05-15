@@ -18,7 +18,9 @@ function saveTimerTarget(id, targetMs, title, body) {
     const stored = JSON.parse(localStorage.getItem(TIMER_STORAGE_KEY) || '{}')
     stored[id] = { targetMs, title, body }
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stored))
-  } catch {}
+  } catch {
+    // Ignore storage failures; timer state is best-effort.
+  }
 }
 
 function clearTimerTarget(id) {
@@ -26,7 +28,9 @@ function clearTimerTarget(id) {
     const stored = JSON.parse(localStorage.getItem(TIMER_STORAGE_KEY) || '{}')
     delete stored[id]
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stored))
-  } catch {}
+  } catch {
+    // Ignore storage failures; clearing is best-effort.
+  }
 }
 
 // Called on visibility change — fires any notifications that should have fired while backgrounded
@@ -54,7 +58,9 @@ export function checkMissedTimers() {
       }
     }
     localStorage.setItem(TIMER_STORAGE_KEY, JSON.stringify(stored))
-  } catch {}
+  } catch {
+    // Ignore malformed storage so notification checks never break the app.
+  }
 }
 
 async function getServiceWorker() {

@@ -68,6 +68,7 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
   const gradientBaseId = useId()
   const [containerWidth, setContainerWidth] = useState(0)
   const [lineDrawn, setLineDrawn] = useState(false)
+  const [nowMs] = useState(() => Date.now())
   const accentColor = 'var(--blue)'
   const gradientId = `weight-grad-${gradientBaseId.replace(/:/g, '')}`
   const dataSignature = useMemo(() => (data || [])
@@ -97,7 +98,6 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
   useEffect(() => {
     if (!data?.length) return undefined
 
-    setLineDrawn(false)
     if (!animationReady) return undefined
 
     const animationFrame = requestAnimationFrame(() => {
@@ -105,7 +105,7 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
     })
 
     return () => cancelAnimationFrame(animationFrame)
-  }, [animationReady, dataSignature, containerWidth, unit, height, tickCount])
+  }, [animationReady, dataSignature, containerWidth, unit, height, tickCount, data?.length])
 
   if (!data || data.length === 0) {
     return <div className="chart-empty">No weight history yet</div>
@@ -143,7 +143,7 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
       const ratePerMs = rateKgPerWeek / (7 * 86400000)
       const weightAtMs = ms => convertWeight(anchorWeightKg + ratePerMs * (ms - anchorMs), 'kg', unit)
       const startMs = Math.max(firstDate.getTime(), anchorMs)
-      const endMs = Math.max(lastDate.getTime(), Date.now())
+      const endMs = Math.max(lastDate.getTime(), nowMs)
       trendDomainValues.push(weightAtMs(startMs), weightAtMs(endMs))
     }
   }
@@ -165,6 +165,12 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
 
   const xAt = (i) => padL + (normalizedData.length === 1 ? plotW / 2 : (i / (normalizedData.length - 1)) * plotW)
   const yAt = (v) => padT + plotH - ((v - minVal) / (maxVal - minVal)) * plotH
+  const trendRegression = normalizedData.length > 1
+    ? linearRegression(normalizedData.map((d, i) => ({ x: xAt(i), y: d.displayWeight })))
+    : null
+  const trendWeightAtX = trendRegression
+    ? (x) => trendRegression.slope * x + trendRegression.intercept
+    : null
 
   const pts = normalizedData.map((d, i) => `${xAt(i)},${yAt(d.displayWeight)}`).join(' ')
   const areaBase = padT + plotH
@@ -272,13 +278,11 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
         )}
 
         {showTrend && (() => {
-          const regrPoints = normalizedData.map((d, i) => ({ x: xAt(i), y: yAt(d.displayWeight) }))
-          const reg = linearRegression(regrPoints)
-          if (!reg) return null
+          if (!trendWeightAtX) return null
           const x0 = xAt(0)
           const x1 = xAt(normalizedData.length - 1)
-          const y0 = reg.slope * x0 + reg.intercept
-          const y1 = reg.slope * x1 + reg.intercept
+          const y0 = yAt(trendWeightAtX(x0))
+          const y1 = yAt(trendWeightAtX(x1))
           return (
             <>
               <line
@@ -312,11 +316,10 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
           const y0 = yAt(weightAtMs(lineStartMs))
           const y1 = yAt(weightAtMs(lastMs))
 
-          // Pace delta vs most recent actual
-          const latestActual = normalizedData.at(-1)
-          const latestActualMs = getPointDate(latestActual)?.getTime()
-          const expectedAtLatest = Number.isFinite(latestActualMs) ? weightAtMs(latestActualMs) : null
-          const delta = expectedAtLatest !== null ? latestActual.displayWeight - expectedAtLatest : null
+          // Compare pace against the smoothed trend instead of one individual weigh-in.
+          const trendAtLatest = trendWeightAtX ? trendWeightAtX(x1) : null
+          const expectedAtLatest = weightAtMs(lastMs)
+          const delta = trendAtLatest !== null ? trendAtLatest - expectedAtLatest : null
           const absDelta = delta !== null ? Math.abs(delta) : null
           const onPace = absDelta !== null && absDelta < (unit === 'lbs' ? 0.5 : 0.3)
           const isAhead = delta !== null && (rateKgPerWeek < 0 ? delta <= 0 : rateKgPerWeek > 0 ? delta >= 0 : onPace)

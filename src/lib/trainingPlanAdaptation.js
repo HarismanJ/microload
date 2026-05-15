@@ -19,13 +19,18 @@ function countCompletedSets(exercises = []) {
 }
 
 function parseRepRange(repRange, fallback = null) {
-  const text = String(repRange || '')
-  const match = text.match(/(\d+)\s*-\s*(\d+)/)
-  if (!match) {
-    const direct = Number(fallback)
-    return Number.isFinite(direct) ? { low: direct, high: direct } : null
+  if (repRange && typeof repRange === 'object') {
+    const low = Number(repRange.low ?? repRange.lower ?? repRange.min)
+    const high = Number(repRange.high ?? repRange.upper ?? repRange.max)
+    if (Number.isFinite(low) && Number.isFinite(high) && low > 0 && high >= low) return { low, high }
   }
-  return { low: Number(match[1]), high: Number(match[2]) }
+
+  const text = String(repRange || '')
+  const match = text.match(/(\d+)\s*[-–]\s*(\d+)/)
+  if (match) return { low: Number(match[1]), high: Number(match[2]) }
+
+  const direct = Number(repRange || fallback)
+  return Number.isFinite(direct) && direct > 0 ? { low: direct, high: direct } : null
 }
 
 function getStrengthCompletion(exercises = []) {
@@ -60,6 +65,7 @@ export function buildPlanAdaptation({
   exercises = [],
   durationSeconds = 0,
   sessionId = null,
+  planWeek = null,
 } = {}) {
   if (!plan?.id || !day?.id) return null
 
@@ -125,7 +131,7 @@ export function buildPlanAdaptation({
     planId: plan.id,
     sessionId,
     planDayId: day.id,
-    planWeek: Number(day.week) || 1,
+    planWeek: Number(planWeek) || Number(day.week) || 1,
     status: 'pending',
     summary: primary.title,
     body: primary.body,

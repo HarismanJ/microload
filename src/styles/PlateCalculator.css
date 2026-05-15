@@ -119,6 +119,41 @@
   opacity: 0.8;
 }
 
+.plate-calc-custom-bar {
+  margin-top: -10px;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.plate-calc-custom-bar-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.plate-calc-custom-bar-input:focus {
+  border-color: var(--blue);
+}
+
+.plate-calc-custom-bar-input.error {
+  border-color: var(--red, #ef4444);
+}
+
+.plate-calc-custom-bar-error {
+  font-size: 11px;
+  color: var(--red, #ef4444);
+  padding-left: 4px;
+}
+
 .plate-calc-plates-row {
   display: flex;
   gap: 8px;

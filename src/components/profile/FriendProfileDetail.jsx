@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { getCached, setCached } from '../../lib/cache'
 import Model from 'react-body-highlighter'
 import { supabase } from '../../lib/supabase'
 import { useCurrentUserId } from '../../context/UserContext'
@@ -9,14 +10,16 @@ import LoadingSpinner from '../LoadingSpinner'
 import {
   TIERS,
   TIER_COLORS,
-  ANCHORS,
   tierGroup,
   tierColor,
   expandAnchors,
   getTierIdx,
   getProgress,
+  getAnchors,
+  anchorsOrNull,
 } from '../../lib/strengthStandards'
 import { convertWeight } from '../../lib/liftMath'
+import { VALIDATION_LIMITS } from '../../lib/inputValidation'
 import {
   ACTIVE_RANK_MODE,
   ALL_TIME_RANK_MODE,
@@ -53,16 +56,12 @@ const MUSCLE_GROUPS = [
 const MUSCLE_GROUP_KEYS = new Set(MUSCLE_GROUPS.map(group => group.key))
 const MUSCLE_CHART_COLORS = FRIEND_TIER_GROUPS.slice(1).map(group => TIER_COLORS[group])
 
-function lbsToKg(v) {
-  return v * 0.453592
-}
-
 function kgToLbs(v) {
   return v * 2.20462
 }
 
 function getLiftRank(lift, ormKg, bodyweightKg, gender) {
-  const anchors = ANCHORS[gender]?.[lift.name]
+  const anchors = anchorsOrNull()?.[gender]?.[lift.name]
   if (!anchors || !bodyweightKg) return null
 
   const thresholds = expandAnchors(anchors)
@@ -186,7 +185,8 @@ function getWorkoutStreakFromSessions(allSessions = []) {
 }
 
 async function loadRankBundle(userId, { fallbackProfile = null, includeSessions = false } = {}) {
-  const anchorNames = Object.keys(ANCHORS.male)
+  const resolvedAnchors = await getAnchors()
+  const anchorNames = Object.keys(resolvedAnchors.male)
   const anchorNameSet = new Set(anchorNames)
   const oneYearAgo = new Date()
   oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
@@ -225,7 +225,7 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
   if (sessionsRes?.error) throw sessionsRes.error
 
   // Use profile.bodyweight if set, otherwise fall back to most recent weight log
-  const profileData = profileRes.data
+  const profileData = profileRes.data || fallbackProfile || {}
   if (!profileData.bodyweight && weightLogRes.data?.length > 0) {
     const latest = weightLogRes.data[0]
     profileData.bodyweight = latest.weight
@@ -281,7 +281,7 @@ function buildLiftDetails(lifts, bodyweightKg, gender, rankDisplayMode) {
   const rankNow = Date.now()
   return lifts.map(lift => ({
     ...lift,
-    anchors: ANCHORS[gender]?.[lift.name] ?? null,
+    anchors: anchorsOrNull()?.[gender]?.[lift.name] ?? null,
   })).map(lift => {
     const thresholds = lift.anchors ? expandAnchors(lift.anchors) : null
     const allTimeCardRank = lift.ormKg !== null && bodyweightKg && lift.anchors
@@ -420,10 +420,28 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
       setError('')
 
       try {
+        const ranksCache = currentUserId ? getCached('ranks') : null
+        const cachedSelf = (ranksCache?.userId === currentUserId)
+          ? {
+              profile: { ...ranksCache.profile, id: currentUserId },
+              lifts: (ranksCache.lifts || []).filter(l => l.ormKg !== null),
+              workoutStreak: 0,
+            }
+          : null
+
+        const friendCacheKey = `ranks:friend:${friendId}`
+        const cachedFriend = getCached(friendCacheKey)
+
         const [friendBundle, selfBundle] = await Promise.all([
-          loadRankBundle(friendId, { fallbackProfile, includeSessions: true }),
-          currentUserId ? loadRankBundle(currentUserId) : Promise.resolve(null),
+          cachedFriend
+            ? Promise.resolve(cachedFriend)
+            : loadRankBundle(friendId, { fallbackProfile, includeSessions: true }),
+          cachedSelf ? Promise.resolve(cachedSelf) : (currentUserId ? loadRankBundle(currentUserId) : Promise.resolve(null)),
         ])
+
+        if (!cachedFriend) {
+          setCached(friendCacheKey, friendBundle, 5 * 60 * 1000)
+        }
 
         if (!cancelled) {
           setProfile(friendBundle.profile)
@@ -753,6 +771,7 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
         }
         value={search}
         onChange={e => setSearch(e.target.value)}
+        maxLength={VALIDATION_LIMITS.searchMaxLength}
       />
 
       {!compareMode && (

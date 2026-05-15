@@ -92,14 +92,14 @@ export const THEMES = [
 ]
 
 export function applyTheme(themeId) {
-  const theme = THEMES.find(t => t.id === themeId) || THEMES[1] // obsidian default
+  const theme = THEMES.find(t => t.id === themeId) || THEMES.find(t => t.id === 'navy')
   const root = document.documentElement
   Object.entries(theme.vars).forEach(([key, val]) => root.style.setProperty(key, val))
 }
 
 export function getSavedTheme() {
   try {
-    return localStorage.getItem('theme') || 'obsidian'
+    return localStorage.getItem('theme') || 'navy'
   } catch {
     return 'obsidian'
   }

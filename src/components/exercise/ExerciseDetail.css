@@ -324,6 +324,34 @@
   color: #fff;
 }
 
+.ex-chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ex-trend-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ex-trend-check input[type="checkbox"] {
+  accent-color: #a78bfa;
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+.ex-trend-check:has(input:checked) {
+  color: #a78bfa;
+}
+
 .ex-chart-wrap {
   padding: 4px 0;
 }

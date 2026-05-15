@@ -16,9 +16,9 @@ export const ACHIEVEMENTS = [
   { id: 'dl_4p',    cat: 'Strength', tier: 'gold',     title: '4-Plate Deadlift',  desc: 'Deadlift 405 lbs / 185 kg',         match: 'deadlift',       kgTarget: 185 },
   { id: 'dl_5p',    cat: 'Strength', tier: 'diamond',  title: '5-Plate Deadlift',  desc: 'Deadlift 495 lbs / 225 kg',         match: 'deadlift',       kgTarget: 225 },
 
-  { id: 'ohp_1p',   cat: 'Strength', tier: 'silver',   title: '1-Plate Press',     desc: 'Overhead press 135 lbs / 60 kg',    match: 'overhead press', kgTarget: 60  },
-  { id: 'ohp_185',  cat: 'Strength', tier: 'gold',     title: 'Press 185',         desc: 'Overhead press 185 lbs / 84 kg',    match: 'overhead press', kgTarget: 84  },
-  { id: 'ohp_2p',   cat: 'Strength', tier: 'platinum', title: '2-Plate Press',     desc: 'Overhead press 225 lbs / 100 kg',   match: 'overhead press', kgTarget: 100 },
+  { id: 'ohp_1p',   cat: 'Strength', tier: 'silver',   title: '1-Plate Press',     desc: 'Overhead press 135 lbs / 60 kg',    matchNames: ['shoulder press', 'military press'], kgTarget: 60  },
+  { id: 'ohp_185',  cat: 'Strength', tier: 'gold',     title: 'Press 185',         desc: 'Overhead press 185 lbs / 84 kg',    matchNames: ['shoulder press', 'military press'], kgTarget: 84  },
+  { id: 'ohp_2p',   cat: 'Strength', tier: 'platinum', title: '2-Plate Press',     desc: 'Overhead press 225 lbs / 100 kg',   matchNames: ['shoulder press', 'military press'], kgTarget: 100 },
 
   // ── Consistency ──────────────────────────────────────────────────────────
   { id: 'w1',   cat: 'Consistency', tier: 'bronze',   title: 'First Rep',    desc: 'Complete your first workout',   sessions: 1   },

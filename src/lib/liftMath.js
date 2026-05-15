@@ -5,6 +5,16 @@ export const MAX_WEIGHT = 9999
 export const MAX_BODYWEIGHT_EXTERNAL_KG = 999
 export const DEFAULT_BODYWEIGHT_KG = 170 * LBS_TO_KG
 
+export function fmtCompact(n) {
+  if (n < 10000) return String(n)
+  if (n < 1000000) {
+    const k = n / 1000
+    return (Number.isInteger(k) ? k.toFixed(0) : k.toFixed(1)) + 'k'
+  }
+  const m = n / 1000000
+  return (Number.isInteger(m) ? m.toFixed(0) : m.toFixed(1)) + 'M'
+}
+
 export function toKg(value, unit = 'kg') {
   return unit === 'lbs' ? value * LBS_TO_KG : value
 }

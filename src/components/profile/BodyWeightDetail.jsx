@@ -1,7 +1,30 @@
+import { useState } from 'react'
 import WeightChart from './WeightChart'
 import { CHART_PERIOD_OPTIONS, getChartPeriodLabel } from '../../lib/chartPeriods'
-import { WEIGHT_TREND_PRESETS, formatRateForUnit } from '../../lib/weightTrend'
+import { WEIGHT_TREND_PRESETS, buildWeightPaceCalorieCoach, formatRateForUnit } from '../../lib/weightTrend'
+import { convertWeight } from '../../lib/liftMath'
 import '../../styles/Profile.css'
+
+function linearRegressionMs(pts) {
+  const n = pts.length
+  if (n < 2) return null
+  let sx = 0, sy = 0, sxy = 0, sx2 = 0
+  for (const { x, y } of pts) {
+    sx += x; sy += y; sxy += x * y; sx2 += x * x
+  }
+  const d = n * sx2 - sx * sx
+  if (d === 0) return null
+  const slope = (n * sxy - sx * sy) / d
+  const intercept = (sy - slope * sx) / n
+  return { slope, intercept }
+}
+
+function etaDateLabel(ms) {
+  if (!Number.isFinite(ms)) return null
+  const d = new Date(ms)
+  if (isNaN(d.getTime())) return null
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
 
 export default function BodyWeightDetail({
   onBack,
@@ -16,6 +39,7 @@ export default function BodyWeightDetail({
   weightPeriod,
   onPeriodChange,
   hasWeightLogs,
+  weightLogs = [],
   filteredWeightLogs,
   chartHeight = 250,
   recentWeightLogs,
@@ -49,7 +73,74 @@ export default function BodyWeightDetail({
   onTrendDateChange,
   onTrendDateConfirm,
   onTrendDateCancel,
+  dailyCalorieGoal = null,
+  weightAllLoading = false,
 }) {
+  const [renderedAtMs] = useState(() => Date.now())
+  // Goal ETA computations
+  let paceEta = null
+  let trendEta = null
+
+  if (goalWeightKg !== null) {
+    // Pace ETA: when the orange pace line reaches goalWeightKg
+    if (trendModeConfig) {
+      const { rateKgPerWeek, anchorDate, anchorWeightKg } = trendModeConfig
+      const anchorMs = new Date(anchorDate + 'T12:00:00').getTime()
+      if (
+        Number.isFinite(anchorMs) &&
+        Number.isFinite(anchorWeightKg) &&
+        Number.isFinite(rateKgPerWeek) &&
+        rateKgPerWeek !== 0
+      ) {
+        const weeksNeeded = (goalWeightKg - anchorWeightKg) / rateKgPerWeek
+        if (weeksNeeded >= 0) {
+          const targetMs = anchorMs + weeksNeeded * 7 * 86400000
+          const label = etaDateLabel(targetMs)
+          if (label) paceEta = { label, isPast: targetMs < renderedAtMs }
+        }
+      }
+    }
+
+    // Trend ETA should use the full weight history, not the selected chart period.
+    const etaTrendLogs = weightLogs.length >= 2 ? weightLogs : filteredWeightLogs
+    if (etaTrendLogs.length >= 2) {
+      const pts = etaTrendLogs
+        .map(log => ({
+          x: new Date(log.loggedAt || log.date + 'T12:00:00').getTime(),
+          y: convertWeight(log.weight, log.unit || activeUnit, 'kg'),
+        }))
+        .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y))
+        .sort((a, b) => a.x - b.x)
+      if (pts.length >= 2) {
+        const reg = linearRegressionMs(pts)
+        if (reg && reg.slope !== 0) {
+          const latestKg = pts[pts.length - 1].y
+          const trendTowardGoal =
+            (goalWeightKg < latestKg && reg.slope < 0) ||
+            (goalWeightKg > latestKg && reg.slope > 0)
+          if (trendTowardGoal) {
+            const targetMs = (goalWeightKg - reg.intercept) / reg.slope
+            const label = etaDateLabel(targetMs)
+            if (label) trendEta = { label, isPast: targetMs < renderedAtMs }
+          }
+        }
+      }
+    }
+  }
+
+  const paceCoach = buildWeightPaceCalorieCoach({
+    logs: weightLogs,
+    trendModeConfig,
+    dailyCalorieGoal,
+  })
+  const showPaceCoach = trendModeConfig !== null && paceCoach.status !== 'no_pace'
+  const actualRateLabel = Number.isFinite(paceCoach.actualRateKgPerWeek)
+    ? formatRateForUnit(paceCoach.actualRateKgPerWeek, activeUnit)
+    : null
+  const targetRateLabel = Number.isFinite(paceCoach.targetRateKgPerWeek)
+    ? formatRateForUnit(paceCoach.targetRateKgPerWeek, activeUnit)
+    : null
+
   return (
     <div className="day-detail body-weight-detail">
       <div className="day-detail-header">
@@ -152,6 +243,8 @@ export default function BodyWeightDetail({
               step="0.05"
               inputMode="decimal"
               placeholder={activeUnit === 'lbs' ? 'lbs/wk' : 'kg/wk'}
+              min={activeUnit === 'lbs' ? -11 : -5}
+              max={activeUnit === 'lbs' ? 11 : 5}
               value={trendRateInput}
               onChange={(e) => onTrendRateInputChange(e.target.value)}
             />
@@ -164,6 +257,50 @@ export default function BodyWeightDetail({
             {trendModeSaving ? 'Saving…' : trendModeConfig ? 'Update' : 'Set'}
           </button>
         </div>
+
+        {(paceEta !== null || trendEta !== null) && (
+          <div className="bw-eta-block">
+            <div className="bw-eta-title">Goal ETA</div>
+            <div className="bw-eta-stats">
+              {paceEta !== null && (
+                <div className="bw-eta-stat">
+                  <span className="bw-eta-label">At pace</span>
+                  <span className={`bw-eta-value ${paceEta.isPast ? 'bw-eta-value--past' : 'bw-eta-value--pace'}`}>
+                    {paceEta.label}
+                  </span>
+                </div>
+              )}
+              {trendEta !== null && (
+                <div className="bw-eta-stat">
+                  <span className="bw-eta-label">At trend</span>
+                  <span className={`bw-eta-value ${trendEta.isPast ? 'bw-eta-value--past' : 'bw-eta-value--trend'}`}>
+                    {trendEta.label}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {showPaceCoach && (
+          <div className={`bw-coach-card bw-coach-card--${paceCoach.tone}`}>
+            <div className="bw-coach-top">
+              <div>
+                <div className="bw-coach-title">{paceCoach.title}</div>
+                <div className="bw-coach-summary">{paceCoach.summary}</div>
+              </div>
+              {paceCoach.recommendedCalories !== null && paceCoach.adjustmentKcal !== 0 && (
+                <div className="bw-coach-target">{paceCoach.recommendedCalories}<span> kcal</span></div>
+              )}
+            </div>
+            <div className="bw-coach-instruction">{paceCoach.instruction}</div>
+            <div className="bw-coach-metrics">
+              {targetRateLabel && <span>Pace {targetRateLabel}</span>}
+              {actualRateLabel && <span>Trend {actualRateLabel}</span>}
+              {paceCoach.status === 'needs_data' && <span>{paceCoach.weighInCount || 0} weigh-ins</span>}
+            </div>
+          </div>
+        )}
 
         {hasWeightLogs && (
           <div className="body-stats-chart-header">
@@ -200,7 +337,8 @@ export default function BodyWeightDetail({
         )}
 
         {filteredWeightLogs.length > 0 ? (
-          <div className="body-stats-chart-wrap">
+          <div className={`body-stats-chart-wrap${weightAllLoading ? ' bw-chart-loading' : ''}`}>
+            {weightAllLoading && <div className="bw-chart-spinner-overlay"><span className="bw-period-spinner" aria-label="Loading" /></div>}
             <WeightChart
               data={filteredWeightLogs}
               unit={activeUnit}

@@ -1,6 +1,6 @@
 import { VALIDATION_LIMITS } from './inputValidation'
 
-export const defaultSet = () => ({ reps: '', weight: '', done: false, completedAt: null, restBeforeSeconds: null })
+export const defaultSet = () => ({ reps: '', weight: '', done: false, completedAt: null, restBeforeSeconds: null, setType: 'normal' })
 export const defaultCardioSet = () => ({ duration: 0, done: false, completedAt: null })
 
 export function normalizeStrengthSet(set = {}) {
@@ -14,6 +14,7 @@ export function normalizeStrengthSet(set = {}) {
     done: Boolean(set.done),
     completedAt: set.completedAt ?? set.completed_at ?? null,
     restBeforeSeconds: Number.isFinite(parsedRest) ? Math.max(0, parsedRest) : null,
+    setType: set.setType ?? (set.is_warmup ? 'warmup' : 'normal'),
   }
 }
 

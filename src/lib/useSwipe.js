@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 // Set-row swipe-to-delete. Uses RAF for smooth rendering under many concurrent rows.
 // Threshold: 70% of screen width. Identifier is (exId, idx) pair.
@@ -9,7 +9,9 @@ export function useSetSwipe({ onDelete }) {
 
   // Always call the latest onDelete without making handlers stale.
   const onDeleteRef = useRef(onDelete)
-  onDeleteRef.current = onDelete
+  useEffect(() => {
+    onDeleteRef.current = onDelete
+  }, [onDelete])
 
   const handleTouchStart = (exId, idx, e) => {
     cancelAnimationFrame(rafRef.current)

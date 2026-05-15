@@ -1,11 +1,13 @@
 import { toKg } from './liftMath'
-import { calculateORM } from './orm'
+import { computeMuscleOverlapWeight } from './muscleWorkload'
+import { ESTIMATED_ORM_REP_CAP, calculateORM } from './orm'
 import { PLATE_EQUIPMENT, snapToPlates } from './plateUtils'
-import { weightForOrm, ANCHORS } from './strengthStandards'
+import { weightForOrm, anchorsOrNull, getAnchors } from './strengthStandards'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HISTORY_SESSION_LIMIT = 8
+const HISTORY_SETS_PER_SESSION_ESTIMATE = 25
 const GOAL_INFERENCE_LIMIT = 3
 const FAILURE_WINDOW = 5
 const FAILURE_COUNT_THRESHOLD = 3
@@ -14,6 +16,9 @@ const PROGRESSION_E1RM_UP_PCT = 0.03
 const WEIGHT_INCREASE_PCT = 0.025
 const DELOAD_WEIGHT_PCT = 0.05
 const FATIGUE_MAX_PCT = 0.05
+const CROSS_EXERCISE_PER_SET_RATE = 0.01
+const CROSS_EXERCISE_DECAY = 0.60
+const CROSS_EXERCISE_PRE_FATIGUE_MAX_PCT = 0.08
 const WARMUP_E1RM_THRESHOLD = 0.80
 const REACCLIMATION_HOLD_DAYS = 8
 const REACCLIMATION_REDUCE_ONE_DAYS = 15
@@ -21,6 +26,9 @@ const REACCLIMATION_REDUCE_TWO_DAYS = 28
 const SAME_LOAD_TOLERANCE_KG = 0.25
 const LBS_TO_KG = 0.453592
 const FALLBACK_BODYWEIGHT_KG = 180 * LBS_TO_KG
+const PLAN_PERIODIZATION_STYLES = new Set(['double_progression', 'linear', 'undulating', 'maintenance', 'deload_aware'])
+const PLAN_INTENSITY_TAGS = new Set(['standard', 'heavy', 'volume', 'light', 'maintenance'])
+const PLAN_PROGRESSION_BIASES = new Set(['reps_first', 'load_first', 'maintenance', 'deload_aware'])
 
 export const WEIGHT_INCREMENTS_KG = {
   'Barbell': 2.5,
@@ -58,9 +66,10 @@ export function getWeightIncrement(equipment, unitPreference = 'kg') {
   return WEIGHT_INCREMENTS_KG[equipment] ?? 2.5
 }
 
-function roundToIncrement(weightKg, incrementKg) {
+function roundToIncrement(weightKg, incrementKg, startingWeightKg = 0) {
   if (!incrementKg || incrementKg <= 0) return Math.round(weightKg * 10) / 10
-  return Math.ceil(weightKg / incrementKg) * incrementKg
+  const phase = startingWeightKg > 0 ? startingWeightKg % incrementKg : 0
+  return Math.round((weightKg - phase) / incrementKg) * incrementKg + phase
 }
 
 function roundToSignedIncrement(weightKg, incrementKg) {
@@ -69,16 +78,17 @@ function roundToSignedIncrement(weightKg, incrementKg) {
   return -roundToIncrement(Math.abs(weightKg), incrementKg)
 }
 
-function createWeightSnapper(equipment, unitPreference, incrementKg) {
+function createWeightSnapper(equipment, unitPreference, incrementKg, overrideIncrement = false, startingWeightKg = 0) {
   return function snapWeight(weightKg) {
     if (weightKg === null || weightKg === undefined) return null
-    if (PLATE_EQUIPMENT.has(equipment)) {
+    if (!overrideIncrement && PLATE_EQUIPMENT.has(equipment)) {
       return snapToPlates(Math.max(0, weightKg), unitPreference, equipment)
     }
     if (equipment === 'Bodyweight') {
       return roundToSignedIncrement(weightKg, incrementKg)
     }
-    return roundToIncrement(Math.max(0, weightKg), incrementKg)
+    const minWeight = startingWeightKg > 0 ? startingWeightKg : 0
+    return roundToIncrement(Math.max(minWeight, weightKg), incrementKg, startingWeightKg)
   }
 }
 
@@ -100,16 +110,36 @@ function isFiniteNumber(value) {
   return Number.isFinite(value)
 }
 
-function calcOrmKg(weightKg, reps) {
-  if (!reps || reps <= 0) return 0
-  if (reps === 1) return weightKg
-  return calculateORM(weightKg, reps)
+function normalizePlanPeriodizationStyle(style) {
+  return PLAN_PERIODIZATION_STYLES.has(style) ? style : null
 }
 
-function getWorkingSets(sets = []) {
-  const validSets = sets.filter(set => set.reps !== null && set.reps !== undefined)
-  const weightedSets = validSets.filter(set => isFiniteNumber(set.weightKg) && set.weightKg > 0)
-  return weightedSets.length > 0 ? weightedSets : validSets
+function normalizePlanIntensityTag(tag) {
+  return PLAN_INTENSITY_TAGS.has(tag) ? tag : null
+}
+
+function getDefaultProgressionBias(style, intensityTag) {
+  if (style === 'maintenance') return 'maintenance'
+  if (style === 'deload_aware') return 'deload_aware'
+  if (style === 'linear' || intensityTag === 'heavy') return 'load_first'
+  if (style || intensityTag) return 'reps_first'
+  return null
+}
+
+function normalizePlanProgressionBias(bias, style, intensityTag) {
+  if (PLAN_PROGRESSION_BIASES.has(bias)) return bias
+  return getDefaultProgressionBias(style, intensityTag)
+}
+
+function getPlanFailureThreshold(progressionBias) {
+  return progressionBias === 'deload_aware' ? Math.max(2, FAILURE_COUNT_THRESHOLD - 1) : FAILURE_COUNT_THRESHOLD
+}
+
+function calcOrmKg(weightKg, reps) {
+  if (!reps || reps <= 0) return 0
+  if (reps > ESTIMATED_ORM_REP_CAP) return null
+  if (reps === 1) return weightKg
+  return calculateORM(weightKg, reps)
 }
 
 // ─── Rep range / objective helpers ───────────────────────────────────────────
@@ -124,7 +154,7 @@ function buildRepRangeFromCenter(centerValue) {
   const roundedCenter = clamp(Math.round(centerValue), 1, 100)
 
   if (roundedCenter <= 6) {
-    const lower = clamp(roundedCenter - 1, 3, 6)
+    const lower = clamp(roundedCenter - 1, 1, 6)
     const upper = clamp(roundedCenter + 1, lower, 6)
     return {
       objective: 'strength',
@@ -211,6 +241,7 @@ function buildSessionSet(record) {
     completed_at: completedAt,
     rest_before_seconds: isFiniteNumber(restBeforeSeconds) ? restBeforeSeconds : null,
     progressionEvent: record.progression_event ?? null,
+    isWarmup: record.is_warmup ?? false,
   }
 }
 
@@ -218,8 +249,40 @@ function buildSessionSet(record) {
 
 export async function fetchRecentSessions(userId, exerciseIds, supabase, currentSessionId = null) {
   if (!exerciseIds.length || !userId) return {}
+  await getAnchors()
 
-  let query = supabase
+  // Roundtrip 1: lightweight — identify the last HISTORY_SESSION_LIMIT session IDs
+  // per exercise. Only 3 narrow columns; no JOIN needed.
+  let indexQuery = supabase
+    .from('workout_sets')
+    .select('exercise_id, session_id, created_at')
+    .eq('user_id', userId)
+    .in('exercise_id', exerciseIds)
+    .order('created_at', { ascending: false })
+    .limit(exerciseIds.length * HISTORY_SESSION_LIMIT * HISTORY_SETS_PER_SESSION_ESTIMATE)
+
+  if (currentSessionId) {
+    indexQuery = indexQuery.neq('session_id', currentSessionId)
+  }
+
+  const { data: indexData, error: indexError } = await indexQuery
+  if (indexError || !indexData?.length) return {}
+
+  // Client-side dedup: rows are DESC so first unique session_id per exercise = most recent.
+  const sessionIdsByExercise = {}
+  for (const row of indexData) {
+    const { exercise_id: exerciseId, session_id: sessionId } = row
+    if (!sessionIdsByExercise[exerciseId]) sessionIdsByExercise[exerciseId] = new Set()
+    if (sessionIdsByExercise[exerciseId].size < HISTORY_SESSION_LIMIT) {
+      sessionIdsByExercise[exerciseId].add(sessionId)
+    }
+  }
+
+  const allSessionIds = [...new Set(Object.values(sessionIdsByExercise).flatMap(s => [...s]))]
+  if (!allSessionIds.length) return {}
+
+  // Roundtrip 2: full set data for exactly those sessions — no row-count guessing.
+  const { data, error } = await supabase
     .from('workout_sets')
     .select(`
       exercise_id,
@@ -234,18 +297,13 @@ export async function fetchRecentSessions(userId, exerciseIds, supabase, current
       created_at,
       session_id,
       progression_event,
+      is_warmup,
       workout_sessions!inner(started_at)
     `)
     .eq('user_id', userId)
     .in('exercise_id', exerciseIds)
-    .order('created_at', { ascending: false })
-    .limit(exerciseIds.length * 80)
+    .in('session_id', allSessionIds)
 
-  if (currentSessionId) {
-    query = query.neq('session_id', currentSessionId)
-  }
-
-  const { data, error } = await query
   if (error || !data?.length) return {}
 
   const groupedByExercise = {}
@@ -319,6 +377,7 @@ function getSetHistoryByIndex(sessions, setIndex) {
     const targetSet = allSessionSets.find(s => s.set_number === targetSetNumber)
     if (!targetSet) continue
     if (!isFiniteNumber(targetSet.weightKg) || !isFiniteNumber(targetSet.estimatedOrmKg)) continue
+    if (targetSet.isWarmup) continue
 
     // Warmup exclusion: before the peak set AND e1RM < 80% of session best
     if (
@@ -390,6 +449,7 @@ function inferSetObjectiveProfile(setHistory, planRange) {
 
 function getSetExpectedE1rmKg(setHistory) {
   const values = setHistory
+    .filter(e => e.set.progressionEvent !== 'deload' && e.set.progressionEvent !== 'reacclimate')
     .slice(-FAILURE_WINDOW)
     .map(entry => entry.set.estimatedOrmKg)
     .filter(v => isFiniteNumber(v) && v > 0)
@@ -480,14 +540,37 @@ function checkSetProgressionTrigger(setHistory, objectiveProfile, expectedE1rmKg
 
 // ─── Beginner ORM lookup ──────────────────────────────────────────────────────
 
-function getBeginnerOrmKg(exerciseName, userBodyweightKg) {
+function normalizeStrengthGender(gender) {
+  const normalized = String(gender || '').toLowerCase()
+  if (normalized === 'female') return 'female'
+  if (normalized === 'male') return 'male'
+  return null
+}
+
+function getBeginnerAnchorRatio(exerciseName, userGender) {
   if (!exerciseName) return null
+  const gender = normalizeStrengthGender(userGender)
+
+  if (gender) {
+    const anchors = anchorsOrNull()?.[gender]?.[exerciseName]
+    return anchors && isFiniteNumber(anchors[1]) && anchors[1] > 0 ? anchors[1] : null
+  }
+
+  const ratios = ['female', 'male']
+    .map(key => anchorsOrNull()?.[key]?.[exerciseName]?.[1])
+    .filter(value => isFiniteNumber(value) && value > 0)
+
+  return ratios.length ? Math.min(...ratios) : null
+}
+
+function getBeginnerOrmKg(exerciseName, userBodyweightKg, userGender) {
+  const beginnerRatio = getBeginnerAnchorRatio(exerciseName, userGender)
+  if (!isFiniteNumber(beginnerRatio) || beginnerRatio <= 0) return null
+
   const bwKg = isFiniteNumber(userBodyweightKg) && userBodyweightKg > 0
     ? userBodyweightKg
     : FALLBACK_BODYWEIGHT_KG
-  const anchors = ANCHORS.male[exerciseName]
-  if (!anchors || !isFiniteNumber(anchors[1]) || anchors[1] <= 0) return null
-  return bwKg * anchors[1]
+  return bwKg * beginnerRatio
 }
 
 // ─── Per-set analysis ─────────────────────────────────────────────────────────
@@ -506,11 +589,21 @@ function analyzeSetHistory(
   unitPreference,
   planRange,
   userBodyweightKg,
+  userGender,
   exerciseName,
   isFallbackFromPrior,
+  customIncrementKg = null,
+  customStartingWeightKg = null,
+  planPeriodizationStyle = null,
+  planIntensityTag = null,
+  planProgressionBias = null,
 ) {
-  const incrementKg = getWeightIncrement(equipment, unitPreference)
-  const snapWeight = createWeightSnapper(equipment, unitPreference, incrementKg)
+  const normalizedPlanStyle = normalizePlanPeriodizationStyle(planPeriodizationStyle)
+  const normalizedIntensityTag = normalizePlanIntensityTag(planIntensityTag)
+  const normalizedProgressionBias = normalizePlanProgressionBias(planProgressionBias, normalizedPlanStyle, normalizedIntensityTag)
+  const incrementKg = customIncrementKg ?? getWeightIncrement(equipment, unitPreference)
+  const startingWeightKg = customStartingWeightKg ?? 0
+  const snapWeight = createWeightSnapper(equipment, unitPreference, incrementKg, customIncrementKg !== null, startingWeightKg)
   const objectiveProfile = inferSetObjectiveProfile(setHistory, planRange)
   const expectedE1rmKg = getSetExpectedE1rmKg(setHistory)
   const failures = countSetFailures(setHistory, expectedE1rmKg)
@@ -556,7 +649,7 @@ function analyzeSetHistory(
         : null
     } else if (setHistory.length === 0) {
       planModeTargetReps = Math.round((planRange.low + planRange.high) / 2)
-      const beginnerOrmKg = getBeginnerOrmKg(exerciseName, userBodyweightKg)
+      const beginnerOrmKg = getBeginnerOrmKg(exerciseName, userBodyweightKg, userGender)
       if (isFiniteNumber(beginnerOrmKg) && beginnerOrmKg > 0) {
         const rawWeight = weightForOrm(beginnerOrmKg, planModeTargetReps)
         planModeTargetWeightKg = isFiniteNumber(rawWeight) && rawWeight > 0
@@ -574,6 +667,16 @@ function analyzeSetHistory(
     planModeTargetReps = isFiniteNumber(historicalMedianReps)
       ? clamp(Math.round(historicalMedianReps), planRange.low, planRange.high)
       : Math.round((planRange.low + planRange.high) / 2)
+  } else if (!planRange && !isBodyweightOnly && setHistory.length === 0) {
+    const beginnerOrmKg = getBeginnerOrmKg(exerciseName, userBodyweightKg, userGender)
+    if (isFiniteNumber(beginnerOrmKg) && beginnerOrmKg > 0) {
+      planModeTargetReps = objectiveProfile.center
+      const rawWeight = weightForOrm(beginnerOrmKg, planModeTargetReps)
+      planModeTargetWeightKg = isFiniteNumber(rawWeight) && rawWeight > 0
+        ? snapWeight(rawWeight)
+        : null
+      beginnerFallback = true
+    }
   }
 
   const objectiveLabel = formatObjectiveLabel(objectiveProfile?.objective)
@@ -596,6 +699,9 @@ function analyzeSetHistory(
     confidence: buildSetConfidence(setHistory),
     isBodyweightOnly,
     isFallbackFromPrior: Boolean(isFallbackFromPrior),
+    planPeriodizationStyle: normalizedPlanStyle,
+    planIntensityTag: normalizedIntensityTag,
+    planProgressionBias: normalizedProgressionBias,
     planRange,
     objectiveLabel,
     repRangeText,
@@ -626,6 +732,7 @@ function buildBodyweightSuggestion(analysis) {
     objectiveLabel,
     repRangeText,
     setHistory,
+    planProgressionBias,
   } = analysis
 
   const expectedReps = median(
@@ -669,6 +776,15 @@ function buildBodyweightSuggestion(analysis) {
       action: 'maintain', weightKg: null, reps: targetReps,
       planMode: 'reacclimate_hold',
       reasoning: `${objectiveLabel} focus (${repRangeText}) — after a short break, match your last target before progressing.`,
+      confidence, isBodyweightOnly: true, objectiveLabel, repRangeText,
+    }
+  }
+
+  if (planProgressionBias === 'maintenance') {
+    return {
+      action: 'maintain', weightKg: null, reps: targetReps,
+      planMode: 'maintenance',
+      reasoning: `${objectiveLabel} focus (${repRangeText}) — this plan is set to maintenance, so hold the current target and keep reps clean.`,
       confidence, isBodyweightOnly: true, objectiveLabel, repRangeText,
     }
   }
@@ -720,6 +836,7 @@ function buildPerSetSuggestion(setIndex, analysis) {
     objectiveLabel,
     repRangeText,
     setHistory,
+    planProgressionBias,
   } = analysis
 
   if (isBodyweightOnly) return buildBodyweightSuggestion(analysis)
@@ -727,23 +844,16 @@ function buildPerSetSuggestion(setIndex, analysis) {
   const isPlanMode = planRange !== null
 
   if (setHistory.length === 0) {
-    if (!isPlanMode) {
-      return {
-        action: 'first_time', weightKg: null, reps: null,
-        planMode: 'none', reasoning: '', confidence: 'low',
-        isBodyweightOnly: false, objectiveLabel, repRangeText,
-      }
-    }
     if (planModeTargetWeightKg !== null) {
       return {
         action: 'maintain', weightKg: planModeTargetWeightKg, reps: planModeTargetReps,
-        planMode: 'plan_beginner',
+        planMode: isPlanMode ? 'plan_beginner' : 'beginner',
         reasoning: `${objectiveLabel} focus (${repRangeText}) — no prior history, so starting with an estimated beginner weight for this rep target.`,
         confidence: 'low', isBodyweightOnly: false, objectiveLabel, repRangeText,
       }
     }
     return {
-      action: 'first_time', weightKg: null, reps: planModeTargetReps,
+      action: 'first_time', weightKg: null, reps: planModeTargetReps ?? null,
       planMode: 'none', reasoning: '', confidence: 'low',
       isBodyweightOnly: false, objectiveLabel, repRangeText,
     }
@@ -781,7 +891,7 @@ function buildPerSetSuggestion(setIndex, analysis) {
   }
 
   // Priority 3: failure deload
-  if (!failures.postDeloadGuard && failures.count >= FAILURE_COUNT_THRESHOLD) {
+  if (!failures.postDeloadGuard && failures.count >= getPlanFailureThreshold(planProgressionBias)) {
     return {
       action: 'deload',
       weightKg: safeReduceWeight(startWeightKg, DELOAD_WEIGHT_PCT, incrementKg, snapWeight),
@@ -798,6 +908,15 @@ function buildPerSetSuggestion(setIndex, analysis) {
       action: 'maintain', weightKg: startWeightKg, reps: targetReps,
       planMode: 'reacclimate_hold',
       reasoning: `${objectiveLabel} focus (${repRangeText}) — after a short break, match your last successful target before progressing again.`,
+      confidence, isBodyweightOnly: false, objectiveLabel, repRangeText,
+    }
+  }
+
+  if (planProgressionBias === 'maintenance') {
+    return {
+      action: 'maintain', weightKg: startWeightKg, reps: targetReps,
+      planMode: 'maintenance',
+      reasoning: `${objectiveLabel} focus (${repRangeText}) — this plan is set to maintenance, so hold the current target unless you manually choose to advance.`,
       confidence, isBodyweightOnly: false, objectiveLabel, repRangeText,
     }
   }
@@ -819,12 +938,17 @@ function buildPerSetSuggestion(setIndex, analysis) {
   }
 
   // Priority 6: maintain / increase reps
-  const suggestedReps = isPlanMode
-    ? targetReps
-    : (targetReps < objectiveProfile.upper
-        ? Math.min(objectiveProfile.upper, targetReps + 1)
-        : targetReps)
-  const action = !isPlanMode && suggestedReps > baselineReps ? 'increase_reps' : 'maintain'
+  const shouldAddPlanRep = isPlanMode
+    && planProgressionBias === 'reps_first'
+    && targetReps < objectiveProfile.upper
+  const suggestedReps = shouldAddPlanRep
+    ? Math.min(objectiveProfile.upper, targetReps + 1)
+    : isPlanMode
+      ? targetReps
+      : (targetReps < objectiveProfile.upper
+          ? Math.min(objectiveProfile.upper, targetReps + 1)
+          : targetReps)
+  const action = (shouldAddPlanRep || (!isPlanMode && suggestedReps > baselineReps)) ? 'increase_reps' : 'maintain'
 
   return {
     action, weightKg: startWeightKg, reps: suggestedReps,
@@ -891,7 +1015,79 @@ function applyE1rmFatigueCascade(
   return { ...suggestion, weightKg: newWeightKg, fatigueAdjustmentPct: fatiguePct }
 }
 
+// ─── Cross-exercise pre-fatigue (within-session) ─────────────────────────────
+
+function countWorkingSets(doneSets) {
+  if (!doneSets?.length) return 0
+  const parsedSets = doneSets.filter(s => s.reps > 0 && s.setType !== 'warmup')
+  if (!parsedSets.length) return 0
+
+  const isBodyweight = parsedSets.every(s => s.weight <= 0)
+  if (isBodyweight) {
+    const peakReps = Math.max(...parsedSets.map(s => s.reps))
+    return parsedSets.filter(s => s.reps >= peakReps * WARMUP_E1RM_THRESHOLD).length
+  }
+
+  const e1rms = parsedSets.map(s => s.weight * (1 + s.reps / 30))
+  const peak = Math.max(...e1rms)
+  return e1rms.filter(e => e >= peak * WARMUP_E1RM_THRESHOLD).length
+}
+
+function computeSessionPreFatiguePct(priorExercises, currentPrimaryMuscles, currentSecondaryMuscles) {
+  if (!priorExercises?.length) return 0
+  let total = 0
+  for (let i = 0; i < priorExercises.length; i++) {
+    const prior = priorExercises[i]
+    const workingSets = countWorkingSets(prior.doneSets)
+    if (!workingSets) continue
+    const overlap = computeMuscleOverlapWeight(
+      prior.primaryMuscles, prior.secondaryMuscles,
+      currentPrimaryMuscles, currentSecondaryMuscles
+    )
+    if (overlap <= 0) continue
+    total += workingSets * overlap * CROSS_EXERCISE_PER_SET_RATE * Math.pow(CROSS_EXERCISE_DECAY, i)
+  }
+  return Math.min(total, CROSS_EXERCISE_PRE_FATIGUE_MAX_PCT)
+}
+
+function applyCrossExercisePreFatigue(suggestion, preFatiguePct, objectiveProfile, snapWeight) {
+  if (
+    suggestion.action === 'deload' ||
+    suggestion.action === 'first_time' ||
+    !isFiniteNumber(preFatiguePct) || preFatiguePct <= 0
+  ) return { ...suggestion, crossExerciseFatiguePct: 0 }
+
+  if (suggestion.isBodyweightOnly) {
+    if (!isFiniteNumber(suggestion.reps)) return { ...suggestion, crossExerciseFatiguePct: 0 }
+    const newReps = Math.max(objectiveProfile.lower, Math.round(suggestion.reps * (1 - preFatiguePct)))
+    return { ...suggestion, reps: newReps, crossExerciseFatiguePct: preFatiguePct }
+  }
+
+  if (!isFiniteNumber(suggestion.weightKg) || !isFiniteNumber(suggestion.reps))
+    return { ...suggestion, crossExerciseFatiguePct: 0 }
+
+  const plannedE1rm = calcOrmKg(suggestion.weightKg, suggestion.reps)
+  if (!isFiniteNumber(plannedE1rm) || plannedE1rm <= 0)
+    return { ...suggestion, crossExerciseFatiguePct: 0 }
+
+  const adjustedE1rm = plannedE1rm * (1 - preFatiguePct)
+  const rawWeight = weightForOrm(adjustedE1rm, suggestion.reps)
+  const newWeightKg = isFiniteNumber(rawWeight) && rawWeight > 0 ? snapWeight(rawWeight) : suggestion.weightKg
+  return { ...suggestion, weightKg: newWeightKg, crossExerciseFatiguePct: preFatiguePct }
+}
+
 // ─── E1RM floor (per-set) ─────────────────────────────────────────────────────
+
+function getAppliedFatigueMultiplier(suggestion) {
+  const setFatiguePct = isFiniteNumber(suggestion.fatigueAdjustmentPct)
+    ? clamp(suggestion.fatigueAdjustmentPct, 0, FATIGUE_MAX_PCT)
+    : 0
+  const crossExerciseFatiguePct = isFiniteNumber(suggestion.crossExerciseFatiguePct)
+    ? clamp(suggestion.crossExerciseFatiguePct, 0, CROSS_EXERCISE_PRE_FATIGUE_MAX_PCT)
+    : 0
+
+  return (1 - setFatiguePct) * (1 - crossExerciseFatiguePct)
+}
 
 function applyPerSetE1rmFloor(suggestion, expectedE1rmKg, objectiveProfile, snapWeight, incrementKg, isPlanMode) {
   if (
@@ -907,7 +1103,9 @@ function applyPerSetE1rmFloor(suggestion, expectedE1rmKg, objectiveProfile, snap
   }
 
   const plannedE1rm = calcOrmKg(suggestion.weightKg, suggestion.reps)
-  const floor = expectedE1rmKg - SAME_LOAD_TOLERANCE_KG
+  const fatigueMultiplier = getAppliedFatigueMultiplier(suggestion)
+  const floor = (expectedE1rmKg * fatigueMultiplier) - SAME_LOAD_TOLERANCE_KG
+  const floorWasFatigueAdjusted = fatigueMultiplier < 1
 
   if (isFiniteNumber(plannedE1rm) && plannedE1rm >= floor) return suggestion
 
@@ -915,7 +1113,7 @@ function applyPerSetE1rmFloor(suggestion, expectedE1rmKg, objectiveProfile, snap
   for (let reps = suggestion.reps + 1; reps <= objectiveProfile.upper; reps++) {
     const e1rm = calcOrmKg(suggestion.weightKg, reps)
     if (isFiniteNumber(e1rm) && e1rm >= floor) {
-      return { ...suggestion, reps, e1rmFloorAdjusted: true }
+      return { ...suggestion, reps, e1rmFloorAdjusted: true, e1rmFloorFatigueAdjusted: floorWasFatigueAdjusted }
     }
   }
 
@@ -924,7 +1122,7 @@ function applyPerSetE1rmFloor(suggestion, expectedE1rmKg, objectiveProfile, snap
   if (isFiniteNumber(newWeight) && newWeight > suggestion.weightKg) {
     const e1rm = calcOrmKg(newWeight, suggestion.reps)
     if (isFiniteNumber(e1rm) && e1rm >= floor) {
-      return { ...suggestion, weightKg: newWeight, e1rmFloorAdjusted: true }
+      return { ...suggestion, weightKg: newWeight, e1rmFloorAdjusted: true, e1rmFloorFatigueAdjusted: floorWasFatigueAdjusted }
     }
   }
 
@@ -933,7 +1131,7 @@ function applyPerSetE1rmFloor(suggestion, expectedE1rmKg, objectiveProfile, snap
 
 // ─── Reasoning builder ────────────────────────────────────────────────────────
 
-function buildCurrentSetReason(setIndex, suggestion, analysis, fatiguePct) {
+function buildCurrentSetReason(setIndex, suggestion, analysis, fatiguePct, crossExerciseFatiguePct = 0) {
   const previousSetNumber = setIndex
   const fallbackNote = analysis.isFallbackFromPrior
     ? ` (Using Set ${setIndex}'s history as a baseline — first time doing this many sets.)`
@@ -941,15 +1139,20 @@ function buildCurrentSetReason(setIndex, suggestion, analysis, fatiguePct) {
   const fatigueNote = isFiniteNumber(fatiguePct) && fatiguePct > 0
     ? ` Reduced ${Math.round(fatiguePct * 100)}% for carry-over fatigue from Set ${previousSetNumber}.`
     : ''
+  const crossFatigueNote = isFiniteNumber(crossExerciseFatiguePct) && crossExerciseFatiguePct > 0
+    ? ` Pre-fatigued ${Math.round(crossExerciseFatiguePct * 100)}% from overlapping muscles worked earlier this session.`
+    : ''
   const floorNote = suggestion.e1rmFloorAdjusted
-    ? ` Adjusted to maintain your expected 1RM for this set.`
+    ? suggestion.e1rmFloorFatigueAdjusted
+      ? ` Adjusted to keep your fatigue-adjusted target from dropping too far.`
+      : ` Adjusted to maintain your expected 1RM for this set.`
     : ''
 
   if (setIndex === 0 || suggestion.action === 'deload') {
-    return `${suggestion.reasoning}${fallbackNote}${floorNote}`
+    return `${suggestion.reasoning}${crossFatigueNote}${fallbackNote}${floorNote}`
   }
 
-  return `${suggestion.reasoning}${fatigueNote}${fallbackNote}${floorNote}`
+  return `${suggestion.reasoning}${fatigueNote}${crossFatigueNote}${fallbackNote}${floorNote}`
 }
 
 // ─── Main: buildCurrentSetSuggestion ─────────────────────────────────────────
@@ -962,7 +1165,16 @@ export function buildCurrentSetSuggestion({
   planTargetReps = null,
   planRepRange = '',
   userBodyweightKg = null,
+  userGender = null,
   exerciseName = null,
+  priorExercises = [],
+  currentPrimaryMuscles = [],
+  currentSecondaryMuscles = [],
+  customIncrementKg = null,
+  customStartingWeightKg = null,
+  planPeriodizationStyle = null,
+  planIntensityTag = null,
+  planProgressionBias = null,
 }) {
   if (!currentSets.length) return null
 
@@ -975,6 +1187,12 @@ export function buildCurrentSetSuggestion({
   let previousActualE1rmKg = null
   let previousPlannedReps = null
   let previousActualReps = null
+  const crossPct = computeSessionPreFatiguePct(priorExercises, currentPrimaryMuscles, currentSecondaryMuscles)
+  let effectiveCrossPct = crossPct
+  // Capture Set 1's actual suggestion (after all adjustments) to use as the
+  // baseline for cross-exercise fatigue correction at setIndex=1.
+  let set1SuggestedE1rmKg = null
+  let set1SuggestedReps = null
 
   for (let setIndex = 0; setIndex <= activeSetIndex; setIndex++) {
     let setHistory = getSetHistoryByIndex(sessions, setIndex)
@@ -987,7 +1205,8 @@ export function buildCurrentSetSuggestion({
 
     const analysis = analyzeSetHistory(
       setHistory, setIndex, equipment, unitPreference,
-      planRange, userBodyweightKg, exerciseName, isFallbackFromPrior
+      planRange, userBodyweightKg, userGender, exerciseName, isFallbackFromPrior, customIncrementKg, customStartingWeightKg,
+      planPeriodizationStyle, planIntensityTag, planProgressionBias
     )
 
     const rawSuggestion = buildPerSetSuggestion(setIndex, analysis)
@@ -996,6 +1215,25 @@ export function buildCurrentSetSuggestion({
     let fatiguePct = 0
 
     if (setIndex > 0) {
+      // After Set 1 is done, use its actual performance to correct the cross-exercise
+      // fatigue estimate. If you beat the adjusted suggestion, the original estimate
+      // was too aggressive — recalculate from the model inverse. Only fires once
+      // (setIndex === 1) and only when ratio > 1; underperformance is handled by
+      // the within-exercise cascade below.
+      if (setIndex === 1 && crossPct > 0) {
+        if (analysis.isBodyweightOnly) {
+          if (isFiniteNumber(set1SuggestedReps) && set1SuggestedReps > 0 && isFiniteNumber(previousActualReps)) {
+            const ratio = previousActualReps / set1SuggestedReps
+            if (ratio > 1) effectiveCrossPct = Math.max(0, 1 - ratio * (1 - crossPct))
+          }
+        } else {
+          if (isFiniteNumber(set1SuggestedE1rmKg) && set1SuggestedE1rmKg > 0 && isFiniteNumber(previousActualE1rmKg)) {
+            const ratio = previousActualE1rmKg / set1SuggestedE1rmKg
+            if (ratio > 1) effectiveCrossPct = Math.max(0, 1 - ratio * (1 - crossPct))
+          }
+        }
+      }
+
       if (analysis.isBodyweightOnly) {
         const rawFatigue = isFiniteNumber(previousPlannedReps) && previousPlannedReps > 0 && isFiniteNumber(previousActualReps)
           ? Math.max(0, (previousPlannedReps - previousActualReps) / previousPlannedReps)
@@ -1020,8 +1258,13 @@ export function buildCurrentSetSuggestion({
         )
         fatiguePct = adjusted.fatigueAdjustmentPct ?? 0
       }
+      adjusted = effectiveCrossPct > 0
+        ? applyCrossExercisePreFatigue(adjusted, effectiveCrossPct, analysis.objectiveProfile, analysis.snapWeight)
+        : { ...adjusted, crossExerciseFatiguePct: 0 }
     } else {
-      adjusted = { ...rawSuggestion, fatigueAdjustmentPct: 0 }
+      adjusted = effectiveCrossPct > 0
+        ? { ...applyCrossExercisePreFatigue(rawSuggestion, effectiveCrossPct, analysis.objectiveProfile, analysis.snapWeight), fatigueAdjustmentPct: 0 }
+        : { ...rawSuggestion, fatigueAdjustmentPct: 0, crossExerciseFatiguePct: 0 }
     }
 
     const final = applyPerSetE1rmFloor(
@@ -1033,11 +1276,24 @@ export function buildCurrentSetSuggestion({
       planRange !== null
     )
 
+    // Capture what was actually suggested on Set 1 (after all adjustments including
+    // cross-exercise fatigue) so setIndex=1 can compare actual vs adjusted suggestion,
+    // not actual vs historical baseline.
+    if (setIndex === 0) {
+      if (analysis.isBodyweightOnly) {
+        set1SuggestedReps = isFiniteNumber(final.reps) ? final.reps : null
+      } else if (isFiniteNumber(final.weightKg) && isFiniteNumber(final.reps)) {
+        set1SuggestedE1rmKg = calcOrmKg(final.weightKg, final.reps)
+      }
+    }
+
     // Update planned values for next set's fatigue calculation
     if (analysis.isBodyweightOnly) {
       previousPlannedReps = final.reps
     } else if (isFiniteNumber(final.weightKg) && isFiniteNumber(final.reps)) {
-      previousPlannedE1rmKg = calcOrmKg(final.weightKg, final.reps)
+      previousPlannedE1rmKg = isFiniteNumber(analysis.expectedE1rmKg) && analysis.expectedE1rmKg > 0
+        ? analysis.expectedE1rmKg
+        : calcOrmKg(final.weightKg, final.reps)
     }
 
     if (setIndex < activeSetIndex) {
@@ -1057,9 +1313,11 @@ export function buildCurrentSetSuggestion({
         action: final.action,
         suggestedWeightKg: analysis.isBodyweightOnly ? 0 : final.weightKg,
         suggestedReps: final.reps,
-        reasoning: buildCurrentSetReason(setIndex, final, analysis, fatiguePct),
+        planMode: final.planMode,
+        reasoning: buildCurrentSetReason(setIndex, final, analysis, fatiguePct, final.crossExerciseFatiguePct ?? 0),
         confidence: analysis.confidence,
         isBodyweightOnly: analysis.isBodyweightOnly,
+        crossExerciseFatiguePct: final.crossExerciseFatiguePct ?? 0,
       }
     }
   }

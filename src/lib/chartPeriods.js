@@ -6,7 +6,7 @@ export const CHART_PERIOD_OPTIONS = [
   { value: 'all', label: 'All', days: null },
 ]
 
-export const DEFAULT_HOME_WEIGHT_PERIOD = '1m'
+export const DEFAULT_HOME_WEIGHT_PERIOD = '3m'
 
 const CHART_PERIOD_DAYS = Object.fromEntries(
   CHART_PERIOD_OPTIONS

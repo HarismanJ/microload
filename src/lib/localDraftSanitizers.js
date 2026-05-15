@@ -40,7 +40,7 @@ function sanitizeStrengthSet(set = {}) {
   const restNumber = parsedRest === null || parsedRest === undefined ? null : finiteNumber(parsedRest, null)
 
   return {
-    reps: Number.isInteger(parsedReps) && parsedReps >= 1 && parsedReps <= MAX_REPS ? String(parsedReps) : '',
+    reps: Number.isInteger(parsedReps) && parsedReps >= 1 ? String(Math.min(parsedReps, MAX_REPS)) : '',
     weight: weightText.length <= 16 ? weightText : '',
     done: Boolean(set.done),
     completedAt: set.completedAt || set.completed_at || null,

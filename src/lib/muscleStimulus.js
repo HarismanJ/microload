@@ -1,0 +1,1 @@
+export const SECONDARY_MUSCLE_CREDIT = 0.33

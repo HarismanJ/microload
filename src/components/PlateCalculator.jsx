@@ -45,16 +45,32 @@ export default function PlateCalculator({ unit, equipment, currentWeight, onConf
 
   const [barIndex, setBarIndex] = useState(() => getInitialState().barIndex)
   const [platesPerSide, setPlatesPerSide] = useState(() => getInitialState().platesPerSide)
+  const [customBarInput, setCustomBarInput] = useState('')
   const [visible, setVisible] = useState(false)
   const [exiting, setExiting] = useState(false)
   const sheetRef = useRef(null)
+
+  const maxBarWeight = unit === 'lbs' ? 45 : 20
+
+  function validateCustomBar(val) {
+    const parsed = parseFloat(val)
+    if (val === '' || !Number.isFinite(parsed)) return 'Enter a number'
+    if (parsed < 0) return 'Must be 0 or more'
+    if (parsed > maxBarWeight) return `Max ${maxBarWeight} ${unit}`
+    return ''
+  }
+
+  const customBarError = barIndex === -1 ? validateCustomBar(customBarInput) : ''
+  const customBarWeightValue = barIndex === -1
+    ? (customBarError === '' ? parseFloat(customBarInput) : 0)
+    : 0
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => setVisible(true))
     return () => cancelAnimationFrame(frame)
   }, [])
 
-  const barWeight = isBodyweight ? 0 : barOptions[barIndex].weight
+  const barWeight = isBodyweight ? 0 : barIndex === -1 ? customBarWeightValue : barOptions[barIndex].weight
   const perSideTotal = platesPerSide.reduce((s, p) => s + p, 0)
   const total = isBodyweight ? perSideTotal : platesToWeight(barWeight, platesPerSide)
 
@@ -107,7 +123,30 @@ export default function PlateCalculator({ unit, equipment, currentWeight, onConf
                   <span className="plate-calc-bar-weight">{opt.weight} {unit}</span>
                 </button>
               ))}
+              <button
+                className={`plate-calc-bar-btn ${barIndex === -1 ? 'active' : ''}`}
+                onClick={() => setBarIndex(-1)}
+              >
+                Custom
+                <span className="plate-calc-bar-weight">? {unit}</span>
+              </button>
             </div>
+            {barIndex === -1 && (
+              <div className="plate-calc-custom-bar">
+                <input
+                  className={`plate-calc-custom-bar-input${customBarError ? ' error' : ''}`}
+                  type="number"
+                  inputMode="decimal"
+                  placeholder={`Bar weight (0–${maxBarWeight} ${unit})`}
+                  min="0"
+                  max={String(maxBarWeight)}
+                  value={customBarInput}
+                  onChange={e => setCustomBarInput(e.target.value)}
+                  autoFocus
+                />
+                {customBarError && <span className="plate-calc-custom-bar-error">{customBarError}</span>}
+              </div>
+            )}
           </>
         )}
 
@@ -156,7 +195,7 @@ export default function PlateCalculator({ unit, equipment, currentWeight, onConf
         <button
           className="plate-calc-confirm"
           onClick={() => onConfirm(total)}
-          disabled={total <= 0}
+          disabled={total <= 0 || (barIndex === -1 && customBarError !== '')}
         >
           Use {formatWeight(total)} {unit}
         </button>

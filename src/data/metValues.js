@@ -36,12 +36,59 @@ export const CARDIO_MET = {
   'Battle Ropes':     10.0,
 }
 
-// Returns the strength MET tier based on total muscle involvement.
-// These are whole-session METs (rest time included) from the Compendium,
-// so they must be applied to total session duration, not per-set time.
+// Relative caloric cost per muscle group, normalised to Biceps = 1.0.
+// Derived from published segment-mass data (De Leva 1996; Winter 1990) combined
+// with fibre-type modifiers (Type II > Type I energy cost per gram).
+// Secondary muscles are weighted at 0.5× — synergists do roughly half the work
+// of primary movers.
+const MUSCLE_MASS_WEIGHT = {
+  'Quads':         4.2,
+  'Glutes':        3.8,
+  'Hamstrings':    3.0,
+  'Adductors':     2.2,
+  'Lats':          2.0,
+  'Upper Back':    1.9,
+  'Chest':         1.8,
+  'Traps':         1.8,
+  'Lower Back':    1.7,
+  'Calves':        1.5,  // large mass but ~80% Type I (soleus) — lower energy/gram
+  'Upper Chest':   1.5,
+  'Core':          1.4,  // ~60% Type I postural fibres
+  'Triceps':       1.4,
+  'Lower Chest':   1.4,
+  'Forearms':      1.3,
+  'Obliques':      1.1,
+  'Biceps':        1.0,  // baseline
+  'Abductors':     0.9,
+  'Rhomboids':     0.8,
+  'Front Delts':   0.5,
+  'Lateral Delts': 0.5,
+  'Rear Delts':    0.5,
+  'Neck':          0.4,
+}
+const FALLBACK_MUSCLE_WEIGHT = 1.0
+
+// Returns a whole-session strength MET for the exercise (rest time included),
+// calibrated to the Compendium of Physical Activities resistance-training range
+// (3.5–6.0 MET).
+//
+// Weighted score = Σ(primary weights) + 0.5 × Σ(secondary weights).
+// MET is mapped via a saturation curve so it scales continuously rather than
+// jumping between three tiers:
+//   score ≈ 1  (bicep curl)   → MET ≈ 3.75
+//   score ≈ 3  (bench press)  → MET ≈ 4.5
+//   score ≈ 11 (squat)        → MET ≈ 5.4
+//   score ≈ 13 (deadlift)     → MET ≈ 5.4
 export function getMuscleCountMET(exercise) {
-  const total = (exercise.primary_muscles?.length || 0) + (exercise.secondary_muscles?.length || 0)
-  if (total >= 5) return 5.5  // compound: squat, deadlift, clean…
-  if (total >= 3) return 4.5  // moderate: bench, row, OHP…
-  return 3.5                  // isolation: curl, lateral raise…
+  const primary   = exercise.primary_muscles   || []
+  const secondary = exercise.secondary_muscles || []
+
+  const score =
+    primary.reduce((s, m) => s + (MUSCLE_MASS_WEIGHT[m] ?? FALLBACK_MUSCLE_WEIGHT), 0) +
+    secondary.reduce((s, m) => s + 0.5 * (MUSCLE_MASS_WEIGHT[m] ?? FALLBACK_MUSCLE_WEIGHT), 0)
+
+  if (score === 0) return 4.0   // no muscle data — use generic strength MET
+
+  // Michaelis–Menten saturation: asymptotes toward 6.0; k=3 calibrated to Compendium
+  return Math.min(6.0, 3.0 + (score / (score + 3)) * 3.0)
 }
