@@ -137,4 +137,56 @@ describe('detectOvertrain', () => {
     expect(result.primarySignal.type).toBe('overuse')
     expect(result.signals.map(signal => signal.type)).toEqual(['overuse', 'volume_spike'])
   })
+
+  it('detects moderate and low overuse severity', () => {
+    const moderate = detectOvertrain({
+      currentWorkload: {
+        groups: [makeGroup('chest', { heatBucket: 5, targetRatio: 3.5, effectiveSets: 35, weeklyTarget: 10 })],
+      },
+      now: NOW,
+    })
+    const low = detectOvertrain({
+      currentWorkload: {
+        groups: [makeGroup('chest', { heatBucket: 5, targetRatio: 2.5, effectiveSets: 25, weeklyTarget: 10 })],
+      },
+      now: NOW,
+    })
+
+    expect(moderate.primarySignal).toMatchObject({ type: 'overuse', severity: 'moderate', key: 'chest' })
+    expect(low.primarySignal).toMatchObject({ type: 'overuse', severity: 'low', key: 'chest' })
+  })
+
+  it('detects low volume spike severity and moderate and low high-frequency severity', () => {
+    // spikePct = (13-8)/8 = 0.625 ≤ 0.75 → 'low' (line 18)
+    const spike = detectOvertrain({
+      currentWorkload: { groups: [makeGroup('lats', { effectiveSets: 13 })] },
+      priorWorkload: { groups: [makeGroup('lats', { effectiveSets: 8 })] },
+      now: NOW,
+    })
+    expect(spike.primarySignal).toMatchObject({ type: 'volume_spike', severity: 'low' })
+
+    // trainedDayCount=5, hoursSinceLast=30h (>= 24 and < 36) → 'moderate' (line 29)
+    const freqModerate = detectOvertrain({
+      currentWorkload: {
+        groups: [makeGroup('hamstrings', {
+          trainedDayCount: 5,
+          lastTrainedAt: '2026-05-13T06:00:00.000Z',
+        })],
+      },
+      now: NOW,
+    })
+    expect(freqModerate.primarySignal).toMatchObject({ type: 'high_frequency', severity: 'moderate' })
+
+    // trainedDayCount=4 → fails >= 5 checks → 'low' (line 30)
+    const freqLow = detectOvertrain({
+      currentWorkload: {
+        groups: [makeGroup('hamstrings', {
+          trainedDayCount: 4,
+          lastTrainedAt: '2026-05-13T06:00:00.000Z',
+        })],
+      },
+      now: NOW,
+    })
+    expect(freqLow.primarySignal).toMatchObject({ type: 'high_frequency', severity: 'low' })
+  })
 })

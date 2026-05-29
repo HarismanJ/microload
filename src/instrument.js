@@ -16,7 +16,7 @@ Sentry.init({
   tracesSampleRate: import.meta.env.MODE === 'production' ? 0.1 : 1.0,
   tracePropagationTargets: [
     'localhost',
-    /^https:\/\/zheocsxrwynbnvwpwfhk\.supabase\.co/,
+    new RegExp(`^${import.meta.env.VITE_SUPABASE_URL}`),
   ],
 
   // Session Replay — record all sessions that hit an error, 10% otherwise

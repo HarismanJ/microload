@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, lazy, Suspense, useMemo } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, lazy, Suspense, useMemo } from 'react'
+import { push as pushBack, remove as removeBack } from '../lib/backStack'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
 import Model from 'react-body-highlighter'
@@ -334,8 +335,35 @@ function TierSwiper({ thresholds, isBW, bodyweightKg, currentTierIdx, fmt, useLb
   )
 }
 
-export default function Ranks({ refreshTick = 0 }) {
+function RanksSkeleton() {
+  return (
+    <div className="lift-cards" role="status" aria-label="Loading ranks">
+      {[0, 1, 2, 3, 4].map(i => (
+        <div key={i} className="lift-card" style={{ '--card-index': i }} aria-hidden="true">
+          <div className="lift-card-top">
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="ranks-skeleton-block ranks-skeleton-name" />
+              <div className="ranks-skeleton-block ranks-skeleton-category" />
+            </div>
+            <div className="lift-right">
+              <div className="ranks-skeleton-block ranks-skeleton-orm" />
+              <div className="ranks-skeleton-block ranks-skeleton-ratio" />
+            </div>
+          </div>
+          <div className="lift-tier-row">
+            <div className="ranks-skeleton-block ranks-skeleton-badge" />
+          </div>
+          <div className="ranks-skeleton-block ranks-skeleton-progress" />
+          <div className="ranks-skeleton-block ranks-skeleton-pct" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBodyweightTick = 0 }) {
   const userId = useCurrentUserId()
+  const muscleMapRef = useRef(null)
   const [profile, setProfile] = useState(null)
   const [lifts, setLifts] = useState([])
   const [rankDisplayMode, setRankDisplayMode] = useState(readRankDisplayMode)
@@ -343,6 +371,7 @@ export default function Ranks({ refreshTick = 0 }) {
   const [loadError, setLoadError] = useState(null)
   const [muscleLoadingActive, setMuscleLoadingActive] = useState(true)
   const [muscleRevealActive, setMuscleRevealActive] = useState(false)
+  const [rankLegendOpen, setRankLegendOpen] = useState(false)
   const [detailExerciseId, setDetailExerciseId] = useState(null)
   const [search, setSearch] = useState('')
   const [selectedMuscleGroup, setSelectedMuscleGroup] = useState(null)
@@ -354,12 +383,31 @@ export default function Ranks({ refreshTick = 0 }) {
   const [topSetSaving, setTopSetSaving] = useState(false)
   const [topSetError, setTopSetError] = useState('')
   const [topSetNotice, setTopSetNotice] = useState('')
+  const [skeletonFading, setSkeletonFading] = useState(false)
+  const [skeletonVisible, setSkeletonVisible] = useState(true)
   const [ormCalcOpen, setOrmCalcOpen] = useState(false)
   const [ormWeight, setOrmWeight] = useState('')
   const [ormReps, setOrmReps] = useState('')
   const [ormUnit, setOrmUnit] = useState('kg')
   const ormCalcRef = useRef(null)
   useFocusTrap(ormCalcRef, { active: ormCalcOpen, onEscape: () => setOrmCalcOpen(false) })
+
+  useEffect(() => {
+    if (!detailExerciseId) return
+    const id = pushBack(() => setDetailExerciseId(null))
+    return () => removeBack(id)
+  }, [detailExerciseId])
+
+  useLayoutEffect(() => {
+    if (loading) {
+      setSkeletonFading(false)
+      setSkeletonVisible(true)
+      return
+    }
+    setSkeletonFading(true)
+    const timer = setTimeout(() => setSkeletonVisible(false), 680)
+    return () => clearTimeout(timer)
+  }, [loading])
 
   useEffect(() => {
     try {
@@ -390,6 +438,7 @@ export default function Ranks({ refreshTick = 0 }) {
       if (saveError) throw saveError
       invalidateCache('ranks', 'profile', 'home', getCalendarMonthCacheKey(timestamp))
       setProfile(p => ({ ...p, bodyweight: val }))
+      onBodyweightChanged?.()
       setBwInput('')
     } catch (error) {
       setBwError(error?.message || 'Could not save your bodyweight.')
@@ -515,6 +564,19 @@ export default function Ranks({ refreshTick = 0 }) {
     return () => clearTimeout(timer)
   }, [refreshTick, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (scrollToBodyweightTick === 0) return undefined
+    const frame = requestAnimationFrame(() => {
+      const el = document.querySelector('.ranks-bw-prompt')
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      } else {
+        document.querySelector('.content')?.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [scrollToBodyweightTick])
+
   function openTopSetEditor(lift) {
     setEditingLiftId(lift.exerciseId)
     setTopSetForm({
@@ -592,6 +654,8 @@ export default function Ranks({ refreshTick = 0 }) {
       muscles: group.chartMuscles,
       frequency: group.chartFrequency,
     }))
+  const hasAnyMuscleRank = muscleGroupRanks.some(group => group.contributionCount > 0)
+  const showMuscleRankPreview = !loading && !hasAnyMuscleRank
   const muscleChartSignature = muscleGroupRanks
     .map(group => `${group.key}:${group.tier}:${group.chartFrequency}`)
     .join('|')
@@ -842,7 +906,7 @@ export default function Ranks({ refreshTick = 0 }) {
         <ExerciseDetail
           exerciseId={detailExerciseId}
           rankMode={rankDisplayMode}
-          onBack={() => setDetailExerciseId(null)}
+          onBack={() => window.history.back()}
         />
       </Suspense>
     )
@@ -983,20 +1047,27 @@ export default function Ranks({ refreshTick = 0 }) {
         <div className="ranks-notice ranks-notice-success">{topSetNotice}</div>
       )}
 
-      <details className="ranks-dropdown">
-        <summary className="ranks-dropdown-summary">
+      <div className={`ranks-dropdown${rankLegendOpen ? ' open' : ''}`}>
+        <button
+          type="button"
+          className="ranks-dropdown-summary"
+          aria-expanded={rankLegendOpen}
+          onClick={() => setRankLegendOpen(open => !open)}
+        >
           <span className="ranks-dropdown-label">Rank Legend</span>
           <span className="ranks-dropdown-value">{TIER_GROUPS.length} tiers</span>
-        </summary>
-        <div className="tier-legend">
-          {TIER_GROUPS.map(g => (
-            <div key={g} className="tier-legend-item">
-              <RankBadge tier={g} size={22} />
-              <span>{g}</span>
-            </div>
-          ))}
-        </div>
-      </details>
+        </button>
+        {rankLegendOpen && (
+          <div className="tier-legend">
+            {TIER_GROUPS.map(g => (
+              <div key={g} className="tier-legend-item">
+                <RankBadge tier={g} size={22} />
+                <span>{g}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="ranks-muscle-panel">
         <div className="ranks-muscle-panel-top">
@@ -1025,10 +1096,10 @@ export default function Ranks({ refreshTick = 0 }) {
           </div>
         </label>
 
-        <div className={`ranks-muscle-map-shell ${muscleLoadingActive ? 'ranks-muscle-map-shell-loading' : ''} ${muscleRevealActive ? 'ranks-muscle-map-shell-revealing' : ''}`}>
+        <div ref={muscleMapRef} className={`ranks-muscle-map-shell ${muscleLoadingActive ? 'ranks-muscle-map-shell-loading' : ''} ${muscleRevealActive ? 'ranks-muscle-map-shell-revealing' : ''} ${showMuscleRankPreview ? 'ranks-muscle-map-shell-empty' : ''}`}>
           <div className="ranks-muscle-models">
             <div
-              className={`ranks-muscle-model ${muscleLoadingActive ? 'ranks-muscle-model-loading' : ''} ${muscleRevealActive ? 'ranks-muscle-model-revealing' : ''}`}
+              className={`ranks-muscle-model ${muscleLoadingActive ? 'ranks-muscle-model-loading' : ''} ${muscleRevealActive ? 'ranks-muscle-model-revealing' : ''} ${showMuscleRankPreview ? 'ranks-muscle-model-empty' : ''}`}
               style={{
                 ...(muscleLoadingActive ? { '--loading-delay': '0ms' } : {}),
                 ...(muscleRevealActive ? { '--reveal-delay': '0ms' } : {}),
@@ -1063,7 +1134,7 @@ export default function Ranks({ refreshTick = 0 }) {
               </div>
             </div>
             <div
-              className={`ranks-muscle-model ${muscleLoadingActive ? 'ranks-muscle-model-loading' : ''} ${muscleRevealActive ? 'ranks-muscle-model-revealing' : ''}`}
+              className={`ranks-muscle-model ${muscleLoadingActive ? 'ranks-muscle-model-loading' : ''} ${muscleRevealActive ? 'ranks-muscle-model-revealing' : ''} ${showMuscleRankPreview ? 'ranks-muscle-model-empty' : ''}`}
               style={{
                 ...(muscleLoadingActive ? { '--loading-delay': '150ms' } : {}),
                 ...(muscleRevealActive ? { '--reveal-delay': '80ms' } : {}),
@@ -1156,118 +1227,123 @@ export default function Ranks({ refreshTick = 0 }) {
         maxLength={VALIDATION_LIMITS.searchMaxLength}
       />
 
-      {loading ? (
-        <LoadingSpinner fullPage />
-      ) : loadError ? (
-        <div className="ranks-empty">{loadError}</div>
-      ) : filteredLifts.length === 0 ? (
-        <div className="ranks-empty">
-          {selectedMuscleGroupData
-            ? `No exercises match ${selectedMuscleGroupData.label.toLowerCase()}${search.trim() ? ` for "${search.trim()}"` : ''}.`
-            : search.trim()
-              ? `No exercises match "${search.trim()}".`
-              : 'No exercises found.'}
-        </div>
-      ) : (
-        <div className="lift-cards">
-          {filteredLifts.map(lift => {
-            const thresholds = lift.thresholds
-            const isLogged = lift.ormKg !== null
-            const cardRank = lift.cardRank
-            const isEditing = editingLiftId === lift.exerciseId
+      <div className="ranks-cards-shell">
+        {skeletonVisible && (
+          <div className={'ranks-skeleton-overlay' + (skeletonFading ? ' ranks-skeleton-overlay--exit' : '')}>
+            <RanksSkeleton />
+          </div>
+        )}
+        {!loading && (loadError ? (
+          <div className="ranks-empty">{loadError}</div>
+        ) : filteredLifts.length === 0 ? (
+          <div className="ranks-empty">
+            {selectedMuscleGroupData
+              ? `No exercises match ${selectedMuscleGroupData.label.toLowerCase()}${search.trim() ? ` for "${search.trim()}"` : ''}.`
+              : search.trim()
+                ? `No exercises match "${search.trim()}".`
+                : 'No exercises found.'}
+          </div>
+        ) : (
+          <div className="lift-cards">
+            {filteredLifts.map((lift, index) => {
+              const thresholds = lift.thresholds
+              const isLogged = lift.ormKg !== null
+              const cardRank = lift.cardRank
+              const isEditing = editingLiftId === lift.exerciseId
 
-            // Unranked: not logged yet, or no bodyweight
-            if (!isLogged || !bodyweightKg) {
+              // Unranked: not logged yet, or no bodyweight
+              if (!isLogged || !bodyweightKg) {
+                return (
+                  <div key={lift.name} className="lift-card" style={{ '--card-index': index }}>
+                    <div className="lift-card-top">
+                      <div>
+                        <div className="lift-name">{lift.name}</div>
+                        <div className="lift-category">{lift.category}</div>
+                      </div>
+                      <button className="info-btn" onClick={() => setDetailExerciseId(lift.exerciseId)}>i</button>
+                    </div>
+                    <div className="lift-tier-row">
+                      <div className="tier-badge" style={{ background: '#4b556322', color: '#4b5563' }}>
+                        <RankBadge tier="Unranked" size={18} />
+                        Unranked
+                      </div>
+                    </div>
+                    {lift.category !== 'Cardio' && (
+                      !bodyweightKg
+                        ? <div className="lift-no-bw">Add bodyweight in Profile to see targets</div>
+                        : thresholds && <TierSwiper thresholds={thresholds} isBW={lift.equipment === 'Bodyweight'} bodyweightKg={bodyweightKg} currentTierIdx={null} fmt={fmt} useLbs={useLbs} />
+                    )}
+                    {lift.category !== 'Cardio' && <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
+                      {isEditing ? 'Cancel' : isLogged ? 'Update top set' : 'Add top set'}
+                    </button>}
+                    {lift.category !== 'Cardio' && isEditing && renderImportPanel({
+                      lift,
+                      isBW: lift.equipment === 'Bodyweight',
+                      isLogged,
+                      description: lift.equipment === 'Bodyweight'
+                        ? 'Enter the added or assisted weight for your best set. Use a negative number for assisted machine reps.'
+                        : "Enter your best set and we'll use it as your imported top set.",
+                    })}
+                  </div>
+                )
+              }
+
+              // Ranked
+              const { isBW, ratio, tier, color, progress, isMax, nextTier, tierIdx } = cardRank
+
+
               return (
-                <div key={lift.name} className="lift-card">
+                <div key={lift.name} className="lift-card" style={{ '--card-index': index }}>
                   <div className="lift-card-top">
                     <div>
                       <div className="lift-name">{lift.name}</div>
                       <div className="lift-category">{lift.category}</div>
                     </div>
-                    <button className="info-btn" onClick={() => setDetailExerciseId(lift.exerciseId)}>i</button>
-                  </div>
-                  <div className="lift-tier-row">
-                    <div className="tier-badge" style={{ background: '#4b556322', color: '#4b5563' }}>
-                      <RankBadge tier="Unranked" size={18} />
-                      Unranked
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div className="lift-right">
+                        <div className="lift-orm">{fmt(lift.ormKg)}</div>
+                        <div className="lift-ratio">{ratio.toFixed(2)}× BW</div>
+                      </div>
+                      <button className="info-btn" onClick={() => setDetailExerciseId(lift.exerciseId)}>i</button>
                     </div>
                   </div>
-                  {lift.category !== 'Cardio' && (
-                    !bodyweightKg
-                      ? <div className="lift-no-bw">Add bodyweight in Profile to see targets</div>
-                      : thresholds && <TierSwiper thresholds={thresholds} isBW={lift.equipment === 'Bodyweight'} bodyweightKg={bodyweightKg} currentTierIdx={null} fmt={fmt} useLbs={useLbs} />
-                  )}
-                  {lift.category !== 'Cardio' && <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
-                    {isEditing ? 'Cancel' : isLogged ? 'Update top set' : 'Add top set'}
-                  </button>}
-                  {lift.category !== 'Cardio' && isEditing && renderImportPanel({
+
+                  <div className="lift-tier-row">
+                    <div className="tier-badge" style={{ background: color + '22', color }}>
+                      <RankBadge tier={tierGroup(tier)} size={18} />
+                      {tier}
+                    </div>
+                    {nextTier && (
+                      <span className="lift-next-label">
+                        → <span style={{ color: tierColor(nextTier) }}>{nextTier}</span>
+                      </span>
+                    )}
+                    {isMax && <span className="lift-next-label" style={{ color: TIER_COLORS.Elite }}>Max Rank</span>}
+                  </div>
+
+                  <div className="lift-progress-track">
+                    <div className="lift-progress-fill" style={{ width: `${progress}%`, background: color }} />
+                  </div>
+                  <div className="lift-progress-pct">{isMax ? '100%' : `${progress}%`}</div>
+
+                  {thresholds && <TierSwiper thresholds={thresholds} isBW={isBW} bodyweightKg={bodyweightKg} currentTierIdx={tierIdx} fmt={fmt} useLbs={useLbs} />}
+                  <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
+                    {isEditing ? 'Cancel' : 'Update top set'}
+                  </button>
+                  {isEditing && renderImportPanel({
                     lift,
-                    isBW: lift.equipment === 'Bodyweight',
-                    isLogged,
-                    description: lift.equipment === 'Bodyweight'
-                      ? 'Enter the added or assisted weight for your best set. Use a negative number for assisted machine reps.'
-                      : "Enter your best set and we’ll use it as your imported top set.",
+                    isBW,
+                    isLogged: true,
+                    description: isBW
+                      ? 'Enter the added or assisted weight for your imported best set. Use a negative number for assisted machine reps.'
+                      : 'Enter a better top set to update your best lift and rank.',
                   })}
                 </div>
               )
-            }
-
-            // Ranked
-            const { isBW, ratio, tier, color, progress, isMax, nextTier, tierIdx } = cardRank
-
-
-            return (
-              <div key={lift.name} className="lift-card">
-                <div className="lift-card-top">
-                  <div>
-                    <div className="lift-name">{lift.name}</div>
-                    <div className="lift-category">{lift.category}</div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div className="lift-right">
-                      <div className="lift-orm">{fmt(lift.ormKg)}</div>
-                      <div className="lift-ratio">{ratio.toFixed(2)}× BW</div>
-                    </div>
-                    <button className="info-btn" onClick={() => setDetailExerciseId(lift.exerciseId)}>i</button>
-                  </div>
-                </div>
-
-                <div className="lift-tier-row">
-                  <div className="tier-badge" style={{ background: color + '22', color }}>
-                    <RankBadge tier={tierGroup(tier)} size={18} />
-                    {tier}
-                  </div>
-                  {nextTier && (
-                    <span className="lift-next-label">
-                      → <span style={{ color: tierColor(nextTier) }}>{nextTier}</span>
-                    </span>
-                  )}
-                  {isMax && <span className="lift-next-label" style={{ color: TIER_COLORS.Elite }}>Max Rank</span>}
-                </div>
-
-                <div className="lift-progress-track">
-                  <div className="lift-progress-fill" style={{ width: `${progress}%`, background: color }} />
-                </div>
-                <div className="lift-progress-pct">{isMax ? '100%' : `${progress}%`}</div>
-
-                {thresholds && <TierSwiper thresholds={thresholds} isBW={isBW} bodyweightKg={bodyweightKg} currentTierIdx={tierIdx} fmt={fmt} useLbs={useLbs} />}
-                <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>
-                  {isEditing ? 'Cancel' : 'Update top set'}
-                </button>
-                {isEditing && renderImportPanel({
-                  lift,
-                  isBW,
-                  isLogged: true,
-                  description: isBW
-                    ? 'Enter the added or assisted weight for your imported best set. Use a negative number for assisted machine reps.'
-                    : 'Enter a better top set to update your best lift and rank.',
-                })}
-              </div>
-            )
-          })}
-        </div>
-      )}
+            })}
+          </div>
+        ))}
+      </div>
     </div>
 
     {ormCalcOpen && createPortal(

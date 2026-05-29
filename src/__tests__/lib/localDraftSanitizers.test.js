@@ -38,6 +38,130 @@ describe('sanitizeWorkoutDraft', () => {
     expect(sanitizeWorkoutDraft({ workoutExercises: [] }, VERSION)).toBeNull()
   })
 
+  it('preserves valid drop groups and repairs malformed strength set grouping', () => {
+    const sanitized = sanitizeWorkoutDraft(makeDraft({
+      workoutExercises: [{
+        id: 'ex-1',
+        name: 'Bench',
+        category: 'Strength',
+        sets: [
+          { reps: '8', weight: '100', setType: 'normal', setGroupIndex: 3 },
+          { reps: '8', weight: '80', set_type: 'dropset', set_group_index: 3 },
+          { reps: '6', weight: '70', setType: 'dropset', setGroupIndex: 9 },
+          { reps: '6', weight: '60', setType: 'xyz', setGroupIndex: -1 },
+        ],
+      }],
+    }), VERSION)
+
+    const [first, second, third, fourth] = sanitized.workoutExercises[0].sets
+    expect(first.setType).toBe('normal')
+    expect(first.setGroupIndex).toBe(3)
+    expect(second.setType).toBe('dropset')
+    expect(second.setGroupIndex).toBe(3)
+    expect(third).toMatchObject({
+      reps: '6',
+      weight: '70',
+      setType: 'normal',
+      setGroupIndex: null,
+    })
+    expect(fourth.setType).toBe('normal')
+    expect(fourth.setGroupIndex).toBeNull()
+  })
+
+  it('preserves valid superset groups and repairs orphan or malformed links', () => {
+    const sanitized = sanitizeWorkoutDraft(makeDraft({
+      workoutExercises: [
+        {
+          id: 'bench',
+          name: 'Bench',
+          category: 'Strength',
+          supersetGroupId: 'superset-a',
+          sets: [{ reps: '8', weight: '100', setType: 'superset' }],
+        },
+        {
+          id: 'row',
+          name: 'Row',
+          category: 'Strength',
+          supersetGroupId: 'superset-a',
+          sets: [{ reps: '10', weight: '80', setType: 'superset' }],
+        },
+        {
+          id: 'curl',
+          name: 'Curl',
+          category: 'Strength',
+          supersetGroupId: 'orphaned',
+          sets: [{ reps: '12', weight: '30', setType: 'superset' }],
+        },
+        {
+          id: 'run',
+          name: 'Run',
+          category: 'Cardio',
+          supersetGroupId: 'cardio-group',
+          sets: [{ duration: 600 }],
+        },
+      ],
+    }), VERSION)
+
+    expect(sanitized.workoutExercises[0].supersetGroupId).toBe('superset-a')
+    expect(sanitized.workoutExercises[1].supersetGroupId).toBe('superset-a')
+    expect(sanitized.workoutExercises[2].supersetGroupId).toBeNull()
+    expect(sanitized.workoutExercises[2].sets[0].setType).toBe('normal')
+    expect(sanitized.workoutExercises[3].supersetGroupId).toBeNull()
+  })
+
+  it('preserves plan progression metadata and set progression events for resumed workouts', () => {
+    const sanitized = sanitizeWorkoutDraft(makeDraft({
+      sourcePlanId: 'plan-1',
+      sourcePlanDayId: 'day-2',
+      sourcePlanWeek: 4.6,
+      sourcePlanDeloadWeek: 1,
+      workoutExercises: [{
+        id: 'ex-1',
+        name: 'Bench',
+        category: 'Strength',
+        planSource: 'training_plan',
+        planId: 'plan-1',
+        planDayId: 'day-2',
+        planWeek: 4.6,
+        planTargetReps: 8,
+        planRepRange: '6-10',
+        planPeriodizationStyle: 'linear',
+        planIntensityTag: 'heavy',
+        planProgressionBias: 'load_first',
+        planDeloadWeek: 1,
+        planDeloadReason: 'scheduled',
+        sets: [
+          { reps: '8', weight: '100', progressionEvent: 'deload' },
+          { reps: '8', weight: '95', progression_event: 'reacclimate' },
+          { reps: '8', weight: '90', progressionEvent: 'fatigue_adjusted' },
+          { reps: '8', weight: '85', progressionEvent: 'unexpected' },
+        ],
+      }],
+    }), VERSION)
+
+    expect(sanitized).toMatchObject({
+      sourcePlanId: 'plan-1',
+      sourcePlanDayId: 'day-2',
+      sourcePlanWeek: 5,
+      sourcePlanDeloadWeek: true,
+    })
+    expect(sanitized.workoutExercises[0]).toMatchObject({
+      planSource: 'training_plan',
+      planId: 'plan-1',
+      planDayId: 'day-2',
+      planWeek: 5,
+      planTargetReps: 8,
+      planRepRange: '6-10',
+      planPeriodizationStyle: 'linear',
+      planIntensityTag: 'heavy',
+      planProgressionBias: 'load_first',
+      planDeloadWeek: true,
+      planDeloadReason: 'scheduled',
+    })
+    expect(sanitized.workoutExercises[0].sets.map(set => set.progressionEvent))
+      .toEqual(['deload', 'reacclimate', 'fatigue_adjusted', null])
+  })
+
   it('strips excess exercises and clamps unsafe set fields', () => {
     const workoutExercises = Array.from({ length: 101 }, (_, index) => ({
       id: `exercise-${index}`,

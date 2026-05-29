@@ -63,7 +63,7 @@ function linearRegression(points) {
   return { slope, intercept }
 }
 
-export default function WeightChart({ data, unit = 'kg', height = 130, tickCount = 3, padding = 'default', animationReady = true, showTrend = false, goalWeightKg = null, showGoal = false, trendModeConfig = null, showTrendMode = false }) {
+export default function WeightChart({ data, unit = 'kg', height = 130, tickCount = 3, padding = 'default', animationReady = true, animationKey = 0, showTrend = false, goalWeightKg = null, showGoal = false, trendModeConfig = null, showTrendMode = false }) {
   const containerRef = useRef(null)
   const gradientBaseId = useId()
   const [containerWidth, setContainerWidth] = useState(0)
@@ -96,16 +96,29 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
   }, [])
 
   useEffect(() => {
-    if (!data?.length) return undefined
+    if (!data?.length) {
+      setLineDrawn(false)
+      return undefined
+    }
 
-    if (!animationReady) return undefined
+    if (!animationReady) {
+      setLineDrawn(false)
+      return undefined
+    }
 
-    const animationFrame = requestAnimationFrame(() => {
-      setLineDrawn(true)
+    setLineDrawn(false)
+    let secondFrame = null
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        setLineDrawn(true)
+      })
     })
 
-    return () => cancelAnimationFrame(animationFrame)
-  }, [animationReady, dataSignature, containerWidth, unit, height, tickCount, data?.length])
+    return () => {
+      cancelAnimationFrame(firstFrame)
+      if (secondFrame !== null) cancelAnimationFrame(secondFrame)
+    }
+  }, [animationReady, animationKey, dataSignature, containerWidth, unit, height, tickCount, data?.length])
 
   if (!data || data.length === 0) {
     return <div className="chart-empty">No weight history yet</div>
@@ -328,6 +341,12 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
             : `${formatWeightTick(absDelta, niceStep)} ${unit} ${isAhead ? 'ahead' : 'behind'}`
 
           const labelAnchor = x1 > padL + plotW * 0.55 ? 'end' : 'start'
+          // Place label on the side opposite the trend line so they don't collide.
+          const trendYAtLatest = trendWeightAtX ? yAt(trendWeightAtX(x1)) : null
+          const placeLabelBelow = trendYAtLatest !== null && trendYAtLatest <= y1 + 2
+          const labelY = placeLabelBelow
+            ? Math.min(y1 + 12, padT + plotH - 1)
+            : Math.max(y1 - 5, padT + 8)
 
           return (
             <>
@@ -339,10 +358,9 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
                 strokeLinecap="round"
                 opacity="0.85"
               />
-              <circle cx={x1} cy={y1} r="3" fill="#fb923c" opacity="0.9" />
               <text
                 x={x1 - (labelAnchor === 'end' ? 5 : -5)}
-                y={y1 - 5}
+                y={labelY}
                 fontSize="7.5"
                 fill={paceColor}
                 textAnchor={labelAnchor}

@@ -1,8 +1,8 @@
 import '../styles/LoadingSpinner.css'
 
-export default function LoadingSpinner({ size = 'md', fullPage = false }) {
+export default function LoadingSpinner({ size = 'md', fullPage = false, color }) {
   const spinner = (
-    <div className={`spinner spinner-${size}`} role="status" aria-label="Loading">
+    <div className={`spinner spinner-${size}`} role="status" aria-label="Loading" style={color ? { '--spinner-color': color } : undefined}>
       <div className="spinner-logo-shell">
         <div className="spinner-logo-glow" />
         <div className="spinner-logo" aria-hidden="true">

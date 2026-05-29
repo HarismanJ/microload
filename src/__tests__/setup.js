@@ -34,6 +34,21 @@ vi.mock('@capacitor/core', () => ({
     isNativePlatform: vi.fn(() => false),
     registerPlugin: vi.fn(name => ({ name })),
   },
+  registerPlugin: vi.fn(name => ({ name })),
+}))
+
+vi.mock('@revenuecat/purchases-capacitor', () => ({
+  Purchases: {
+    configure: vi.fn(() => Promise.resolve()),
+    setLogLevel: vi.fn(() => Promise.resolve()),
+    getCustomerInfo: vi.fn(() => Promise.resolve({ customerInfo: { entitlements: { active: {} } } })),
+    getOfferings: vi.fn(() => Promise.resolve({ offerings: { current: null } })),
+    purchasePackage: vi.fn(() => Promise.resolve({ customerInfo: { entitlements: { active: {} } } })),
+    restorePurchases: vi.fn(() => Promise.resolve({ customerInfo: { entitlements: { active: {} } } })),
+    logIn: vi.fn(() => Promise.resolve({ customerInfo: { entitlements: { active: {} } }, created: false })),
+    logOut: vi.fn(() => Promise.resolve({ customerInfo: { entitlements: { active: {} } } })),
+  },
+  LOG_LEVEL: { DEBUG: 'DEBUG', INFO: 'INFO', WARN: 'WARN', ERROR: 'ERROR' },
 }))
 
 vi.mock('@capacitor/local-notifications', () => ({

@@ -1,0 +1,10 @@
+{
+  "entry": ["src/main.jsx"],
+  "project": ["src/**/*.{js,jsx}", "supabase/**/*.ts", "e2e/**/*.js"],
+  "ignore": [
+    "android/**",
+    "ios/**",
+    "public/**",
+    "dist/**"
+  ]
+}

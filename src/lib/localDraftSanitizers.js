@@ -1,5 +1,6 @@
 import { VALIDATION_LIMITS, trimToMax } from './inputValidation'
 import { MAX_REPS } from './liftMath'
+import { repairDropSetGroups, repairSupersetExerciseGroups } from './workoutSets'
 
 const MAX_DRAFT_EXERCISES = 100
 const MAX_DRAFT_SETS_PER_EXERCISE = 100
@@ -32,12 +33,27 @@ function sanitizeTimestamp(value, fallback = Date.now()) {
   return clamp(numeric, earliest, latest)
 }
 
+const VALID_SET_TYPES = new Set(['normal', 'warmup', 'dropset', 'superset'])
+const VALID_PROGRESSION_EVENTS = new Set(['deload', 'reacclimate', 'fatigue_adjusted'])
+
+function sanitizeProgressionEvent(value) {
+  const event = String(value ?? '')
+  return VALID_PROGRESSION_EVENTS.has(event) ? event : null
+}
+
 function sanitizeStrengthSet(set = {}) {
   const repsText = String(set.reps ?? '')
   const parsedReps = Number.parseInt(repsText, 10)
   const weightText = String(set.weight ?? '')
   const parsedRest = set.restBeforeSeconds ?? set.rest_before_seconds
   const restNumber = parsedRest === null || parsedRest === undefined ? null : finiteNumber(parsedRest, null)
+
+  const rawSetType = String(set.is_warmup ? 'warmup' : (set.setType ?? set.set_type ?? 'normal'))
+  const setType = VALID_SET_TYPES.has(rawSetType) ? rawSetType : 'normal'
+
+  const rawGroupIndex = set.setGroupIndex ?? set.set_group_index ?? null
+  const parsedGroupIndex = rawGroupIndex !== null ? Math.round(finiteNumber(rawGroupIndex, -1)) : null
+  const setGroupIndex = parsedGroupIndex !== null && parsedGroupIndex >= 0 ? parsedGroupIndex : null
 
   return {
     reps: Number.isInteger(parsedReps) && parsedReps >= 1 ? String(Math.min(parsedReps, MAX_REPS)) : '',
@@ -47,6 +63,9 @@ function sanitizeStrengthSet(set = {}) {
     restBeforeSeconds: restNumber === null
       ? null
       : clamp(Math.round(restNumber), VALIDATION_LIMITS.restSecondsMin, VALIDATION_LIMITS.restSecondsMax),
+    progressionEvent: sanitizeProgressionEvent(set.progressionEvent ?? set.progression_event),
+    setType,
+    setGroupIndex,
   }
 }
 
@@ -66,6 +85,7 @@ function sanitizeWorkoutExercise(exercise = {}) {
   const sanitizedSets = sets.length
     ? sets.map(set => isCardio ? sanitizeCardioSet(set) : sanitizeStrengthSet(set))
     : [isCardio ? sanitizeCardioSet() : sanitizeStrengthSet()]
+  const repairedSets = isCardio ? sanitizedSets : repairDropSetGroups(sanitizedSets)
 
   return {
     id: exercise.id === null || exercise.id === undefined ? null : safeString(exercise.id, MAX_ID_LENGTH),
@@ -73,6 +93,7 @@ function sanitizeWorkoutExercise(exercise = {}) {
     category,
     equipment: safeString(exercise.equipment, 80),
     unit: exercise.unit === 'lbs' ? 'lbs' : 'kg',
+    supersetGroupId: safeString(exercise.supersetGroupId, MAX_ID_LENGTH) || null,
     restSeconds: clamp(
       Math.round(finiteNumber(exercise.restSeconds ?? exercise.default_rest_seconds, 90)),
       VALIDATION_LIMITS.restSecondsMin,
@@ -97,7 +118,12 @@ function sanitizeWorkoutExercise(exercise = {}) {
       ? clamp(Math.round(Number(exercise.planTargetReps)), 1, MAX_REPS)
       : null,
     planRepRange: safeString(exercise.planRepRange, 20),
-    sets: sanitizedSets,
+    planPeriodizationStyle: safeString(exercise.planPeriodizationStyle, 40),
+    planIntensityTag: safeString(exercise.planIntensityTag, 40),
+    planProgressionBias: safeString(exercise.planProgressionBias, 40),
+    planDeloadWeek: Boolean(exercise.planDeloadWeek),
+    planDeloadReason: safeString(exercise.planDeloadReason, 40),
+    sets: repairedSets,
   }
 }
 
@@ -142,7 +168,7 @@ export function sanitizeWorkoutDraft(rawDraft, expectedVersion) {
   if (!isPlainObject(rawDraft) || rawDraft.version !== expectedVersion) return null
 
   const workoutExercises = Array.isArray(rawDraft.workoutExercises)
-    ? rawDraft.workoutExercises.slice(0, MAX_DRAFT_EXERCISES).map(sanitizeWorkoutExercise)
+    ? repairSupersetExerciseGroups(rawDraft.workoutExercises.slice(0, MAX_DRAFT_EXERCISES).map(sanitizeWorkoutExercise))
     : []
 
   return {
@@ -161,6 +187,12 @@ export function sanitizeWorkoutDraft(rawDraft, expectedVersion) {
       VALIDATION_LIMITS.restSecondsMax
     ),
     roomId: rawDraft.roomId ? safeString(rawDraft.roomId, MAX_ID_LENGTH) : undefined,
+    sourcePlanId: rawDraft.sourcePlanId ? safeString(rawDraft.sourcePlanId, MAX_ID_LENGTH) : null,
+    sourcePlanDayId: rawDraft.sourcePlanDayId ? safeString(rawDraft.sourcePlanDayId, 40) : null,
+    sourcePlanWeek: Number.isFinite(Number(rawDraft.sourcePlanWeek))
+      ? clamp(Math.round(Number(rawDraft.sourcePlanWeek)), 1, 52)
+      : null,
+    sourcePlanDeloadWeek: Boolean(rawDraft.sourcePlanDeloadWeek),
   }
 }
 

@@ -73,6 +73,7 @@ function loadCatalogDefaults() {
         user_id: null,
         primary_muscles: ex.primaryMuscles,
         secondary_muscles: ex.secondaryMuscles,
+        bilateral: ex.bilateral ?? null,
       }))
     )
   }
@@ -84,20 +85,23 @@ function isMissingExerciseUserColumn(error) {
   return message.includes('user_id') && message.includes('exercises')
 }
 
-export function invalidateExercisesCache(userId) {
-  invalidateCache(`${EXERCISES_CACHE_KEY}:${userId || 'anon'}`)
-}
-
 export async function fetchExercises(userId) {
   const cacheKey = `${EXERCISES_CACHE_KEY}:${userId || 'anon'}`
 
   const cached = getCached(cacheKey)
   if (cached) return cached
 
-  // Fetch IDs and catalog defaults in parallel — catalog metadata never changes
-  const [catalogDefaults, { data: idRows, error: idError }] = await Promise.all([
+  // Fetch system IDs, catalog defaults, and custom exercises all in parallel
+  const [
+    catalogDefaults,
+    { data: idRows, error: idError },
+    { data: custom, error: customError },
+  ] = await Promise.all([
     loadCatalogDefaults(),
     supabase.from('exercises').select('id, name').is('user_id', null),
+    userId
+      ? supabase.from('exercises').select(CUSTOM_EXERCISE_SELECT).eq('user_id', userId)
+      : Promise.resolve({ data: [], error: null }),
   ])
 
   if (idError) throw idError
@@ -120,17 +124,10 @@ export async function fetchExercises(userId) {
 
   let result = [...defaultExercises, ...cardioExercises]
 
-  if (userId) {
-    const { data: custom, error: customError } = await supabase
-      .from('exercises')
-      .select(CUSTOM_EXERCISE_SELECT)
-      .eq('user_id', userId)
-
-    if (customError) {
-      if (!isMissingExerciseUserColumn(customError)) throw customError
-    } else if (custom?.length) {
-      result = [...defaultExercises, ...cardioExercises, ...custom]
-    }
+  if (customError) {
+    if (!isMissingExerciseUserColumn(customError)) throw customError
+  } else if (custom?.length) {
+    result = [...defaultExercises, ...cardioExercises, ...custom]
   }
 
   result.sort((a, b) => a.name.localeCompare(b.name))
@@ -161,34 +158,3 @@ export async function createCustomExercise(userId, payload) {
   return data
 }
 
-export async function fetchStandardExercisesByNames(names) {
-  const uniqueNames = [...new Set(names || [])]
-  if (!uniqueNames.length) return []
-
-  const primary = await supabase
-    .from('exercises')
-    .select('id, name, category, equipment, user_id')
-    .in('name', uniqueNames)
-    .order('name')
-
-  if (primary.error) {
-    if (!isMissingExerciseUserColumn(primary.error)) throw primary.error
-
-    const fallback = await supabase
-      .from('exercises')
-      .select('id, name, category, equipment')
-      .in('name', uniqueNames)
-      .order('name')
-
-    if (fallback.error) throw fallback.error
-    return fallback.data ?? []
-  }
-
-  const byName = new Map()
-  for (const row of primary.data ?? []) {
-    if (!byName.has(row.name) || row.user_id === null) {
-      byName.set(row.name, row)
-    }
-  }
-  return [...byName.values()]
-}

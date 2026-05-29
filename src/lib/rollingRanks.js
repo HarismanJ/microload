@@ -2,10 +2,10 @@ import { TIERS, tierColor } from './strengthStandards'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-export const ACTIVE_RANK_ALPHA = 0.22
-export const ACTIVE_RANK_INACTIVITY_GRACE_DAYS = 30
-export const ACTIVE_RANK_DECAY_PER_DAY = 0.03
-export const ACTIVE_RANK_MAX_DECAY = 6
+const ACTIVE_RANK_ALPHA = 0.22
+const ACTIVE_RANK_INACTIVITY_GRACE_DAYS = 30
+const ACTIVE_RANK_DECAY_PER_DAY = 0.03
+const ACTIVE_RANK_MAX_DECAY = 6
 export const ACTIVE_RANK_MODE = 'active'
 export const ALL_TIME_RANK_MODE = 'all_time'
 

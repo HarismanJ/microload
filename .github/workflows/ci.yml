@@ -7,6 +7,72 @@ on:
     branches: [main]
 
 jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+        env:
+          CI: 'true'
+          VITE_SUPABASE_URL: ${{ secrets.CI_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.CI_SUPABASE_ANON_KEY }}
+          VITE_SENTRY_DSN: ''
+          VITE_USDA_API_KEY: 'test-key-for-testing'
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SERVICE_ROLE_KEY }}
+          E2E_USER_EMAIL: ${{ secrets.CI_E2E_USER_EMAIL }}
+          E2E_USER_PASSWORD: ${{ secrets.CI_E2E_USER_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  rls:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:rls
+        env:
+          CI: 'true'
+          VITE_SUPABASE_URL: ${{ secrets.CI_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.CI_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SERVICE_ROLE_KEY }}
+          E2E_USER_EMAIL: ${{ secrets.CI_E2E_USER_EMAIL }}
+          E2E_USER_PASSWORD: ${{ secrets.CI_E2E_USER_PASSWORD }}
+
+  delete-account:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:delete-account
+        env:
+          CI: 'true'
+          VITE_SUPABASE_URL: ${{ secrets.CI_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.CI_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.CI_SUPABASE_SERVICE_ROLE_KEY }}
+          E2E_USER_EMAIL: ${{ secrets.CI_E2E_USER_EMAIL }}
+          E2E_USER_PASSWORD: ${{ secrets.CI_E2E_USER_PASSWORD }}
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -22,6 +88,13 @@ jobs:
           VITE_SENTRY_DSN: ''
           VITE_SUPABASE_URL: 'https://placeholder.supabase.co'
           VITE_SUPABASE_ANON_KEY: 'placeholder'
+      - run: npm run test:coverage -- --reporter=dot
+        env:
+          VITE_SENTRY_DSN: ''
+          VITE_SUPABASE_URL: 'https://placeholder.supabase.co'
+          VITE_SUPABASE_ANON_KEY: 'placeholder'
+          VITE_USDA_API_KEY: 'test-key-for-testing'
+      - run: node -e "const r=require('./coverage/coverage-summary.json');const pct=r.total.lines.pct;if(pct<90){console.error('Coverage '+pct+'% is below 90% threshold');process.exit(1)}console.log('Coverage '+pct+'% OK')"
       - run: npm run build
         env:
           VITE_SENTRY_DSN: ''

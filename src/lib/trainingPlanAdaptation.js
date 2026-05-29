@@ -12,9 +12,17 @@ function countPlannedSets(day) {
   return (day?.exercises || []).reduce((total, exercise) => total + (Number(exercise.sets) || 1), 0)
 }
 
+function isPlannedCompletedSet(exercise, set) {
+  if (!set?.done) return false
+  if (exercise?.category === 'Cardio') return true
+
+  const setType = set.is_warmup ? 'warmup' : (set.setType ?? set.set_type ?? 'normal')
+  return setType !== 'dropset' && setType !== 'warmup'
+}
+
 function countCompletedSets(exercises = []) {
   return exercises.reduce((total, exercise) => (
-    total + (exercise.sets || []).filter(set => set?.done).length
+    total + (exercise.sets || []).filter(set => isPlannedCompletedSet(exercise, set)).length
   ), 0)
 }
 
@@ -43,7 +51,7 @@ function getStrengthCompletion(exercises = []) {
     const range = parseRepRange(exercise.planRepRange, exercise.planTargetReps)
     if (!range) return
     ;(exercise.sets || []).forEach(set => {
-      if (!set?.done) return
+      if (!isPlannedCompletedSet(exercise, set)) return
       const reps = Number(set.reps)
       if (!Number.isFinite(reps)) return
       targetableSets += 1
@@ -94,12 +102,12 @@ export function buildPlanAdaptation({
     adjustments.push(createAdjustment(
       'trim_duration',
       'Tighten session length',
-      'This session ran long, so trim the final accessory or shorten accessory rest targets.',
+      'This session ran long, so the final accessory will be removed from the next pass.',
       { durationRatio, dayId: day.id }
     ))
   }
 
-  if (strengthCompletion.targetableSets >= 3 && strengthCompletion.hitTopRangeSets / strengthCompletion.targetableSets >= 0.75) {
+  if (completionRate >= 0.7 && strengthCompletion.targetableSets >= 3 && strengthCompletion.hitTopRangeSets / strengthCompletion.targetableSets >= 0.75) {
     adjustments.push(createAdjustment(
       'increase_target',
       'Progress next targets',
@@ -196,6 +204,7 @@ export function applyPlanAdaptation(plan, adaptation) {
     days: (plan.days || []).map(day => {
       if (day.id !== dayId) return day
       let exercises = day.exercises || []
+      let volumeReduced = false
       actionable.forEach(adjustment => {
         if (adjustment.type === 'increase_target') {
           exercises = exercises.map(exercise => (
@@ -204,8 +213,9 @@ export function applyPlanAdaptation(plan, adaptation) {
               : exercise
           ))
         }
-        if (adjustment.type === 'reduce_volume' || adjustment.type === 'hold_or_reduce') {
+        if ((adjustment.type === 'reduce_volume' || adjustment.type === 'hold_or_reduce') && !volumeReduced) {
           exercises = exercises.map(adjustExerciseForReducedVolume)
+          volumeReduced = true
         }
         if (adjustment.type === 'trim_duration') {
           exercises = exercises.length > 3 ? exercises.slice(0, -1) : exercises

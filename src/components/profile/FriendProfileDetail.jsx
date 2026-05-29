@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getCached, setCached } from '../../lib/cache'
+import { computeStreak } from '../../lib/streakUtils'
 import Model from 'react-body-highlighter'
 import { supabase } from '../../lib/supabase'
 import { useCurrentUserId } from '../../context/UserContext'
@@ -156,43 +157,16 @@ function getDisplayName(profile) {
   return profile?.full_name || profile?.username || 'Friend'
 }
 
-function localDate(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-function getWorkoutStreakFromSessions(allSessions = []) {
-  const sortedWorkoutDays = [...new Set((allSessions || []).map(session => localDate(new Date(session.started_at))))]
-    .map(dateStr => new Date(`${dateStr}T12:00:00`))
-    .sort((a, b) => b - a)
-
-  let streak = 0
-  if (sortedWorkoutDays.length > 0) {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    const daysSinceLatestWorkout = Math.floor((today - sortedWorkoutDays[0]) / 86400000)
-
-    if (daysSinceLatestWorkout <= 3) {
-      streak = 1
-      for (let index = 1; index < sortedWorkoutDays.length; index += 1) {
-        const gapDays = Math.floor((sortedWorkoutDays[index - 1] - sortedWorkoutDays[index]) / 86400000) - 1
-        if (gapDays > 3) break
-        streak += 1
-      }
-    }
-  }
-
-  return streak
-}
-
-async function loadRankBundle(userId, { fallbackProfile = null, includeSessions = false } = {}) {
+async function loadRankBundle(userId, { currentUserId = null, fallbackProfile = null } = {}) {
   const resolvedAnchors = await getAnchors()
   const anchorNames = Object.keys(resolvedAnchors.male)
   const anchorNameSet = new Set(anchorNames)
-  const oneYearAgo = new Date()
-  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
+  const isSelf = userId === currentUserId
 
   const queries = [
-    supabase.from('profiles').select('full_name, username, unit_preference, gender, bodyweight').eq('id', userId).single(),
+    isSelf
+      ? supabase.from('profiles').select('id, full_name, username, unit_preference, gender, bodyweight, streak_start_date, streak_last_workout_at').eq('id', userId).single()
+      : supabase.rpc('get_friend_rank_profile', { p_profile_id: userId }),
     supabase
       .from('exercise_prs')
       .select('exercise_id, best_1rm_kg')
@@ -208,24 +182,13 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
     fetchExerciseRankStates(userId),
   ]
 
-  if (includeSessions) {
-    queries.push(
-      supabase
-        .from('workout_sessions')
-        .select('started_at')
-        .eq('user_id', userId)
-        .not('finished_at', 'is', null)
-        .gte('started_at', oneYearAgo.toISOString())
-    )
-  }
-
-  const [profileRes, prsRes, exerciseRows, weightLogRes, rankStatesResult, sessionsRes] = await Promise.all(queries)
+  const [profileRes, prsRes, exerciseRows, weightLogRes, rankStatesResult] = await Promise.all(queries)
   if (profileRes.error) throw profileRes.error
   if (prsRes.error) throw prsRes.error
-  if (sessionsRes?.error) throw sessionsRes.error
 
   // Use profile.bodyweight if set, otherwise fall back to most recent weight log
-  const profileData = profileRes.data || fallbackProfile || {}
+  const rpcProfile = Array.isArray(profileRes.data) ? profileRes.data[0] : profileRes.data
+  const profileData = { ...(fallbackProfile || {}), ...(rpcProfile || {}), id: userId }
   if (!profileData.bodyweight && weightLogRes.data?.length > 0) {
     const latest = weightLogRes.data[0]
     profileData.bodyweight = latest.weight
@@ -273,7 +236,7 @@ async function loadRankBundle(userId, { fallbackProfile = null, includeSessions 
   return {
     profile: profileData,
     lifts,
-    workoutStreak: includeSessions ? getWorkoutStreakFromSessions(sessionsRes?.data || []) : 0,
+    workoutStreak: computeStreak(profileData.streak_start_date, profileData.streak_last_workout_at),
   }
 }
 
@@ -429,14 +392,14 @@ export default function FriendProfileDetail({ friendId, fallbackProfile = null, 
             }
           : null
 
-        const friendCacheKey = `ranks:friend:${friendId}`
+        const friendCacheKey = `ranks:friend:v2:${friendId}`
         const cachedFriend = getCached(friendCacheKey)
 
         const [friendBundle, selfBundle] = await Promise.all([
           cachedFriend
             ? Promise.resolve(cachedFriend)
-            : loadRankBundle(friendId, { fallbackProfile, includeSessions: true }),
-          cachedSelf ? Promise.resolve(cachedSelf) : (currentUserId ? loadRankBundle(currentUserId) : Promise.resolve(null)),
+            : loadRankBundle(friendId, { currentUserId, fallbackProfile }),
+          cachedSelf ? Promise.resolve(cachedSelf) : (currentUserId ? loadRankBundle(currentUserId, { currentUserId }) : Promise.resolve(null)),
         ])
 
         if (!cachedFriend) {

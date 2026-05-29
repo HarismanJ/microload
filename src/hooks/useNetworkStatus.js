@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Network } from '@capacitor/network'
+import { App as CapApp } from '@capacitor/app'
 
 export function useNetworkStatus() {
   const [isOnline, setIsOnline] = useState(true)
@@ -7,7 +8,12 @@ export function useNetworkStatus() {
   const wasOfflineRef = useRef(false)
 
   useEffect(() => {
-    let backOnlineTimer
+    if (!justCameOnline) return undefined
+    const t = setTimeout(() => setJustCameOnline(false), 2500)
+    return () => clearTimeout(t)
+  }, [justCameOnline])
+
+  useEffect(() => {
     let offlineTimer
     let listenerHandle
 
@@ -16,17 +22,26 @@ export function useNetworkStatus() {
         clearTimeout(offlineTimer)
         if (wasOfflineRef.current) {
           setJustCameOnline(true)
-          backOnlineTimer = setTimeout(() => setJustCameOnline(false), 2500)
         }
         wasOfflineRef.current = false
         setIsOnline(true)
       } else {
-        clearTimeout(backOnlineTimer)
         offlineTimer = setTimeout(() => {
           wasOfflineRef.current = true
           setIsOnline(false)
           setJustCameOnline(false)
         }, 3000)
+      }
+    }
+
+    let appStateHandle
+
+    async function recheckStatus() {
+      try {
+        const status = await Network.getStatus()
+        applyStatus(status.connected)
+      } catch {
+        applyStatus(navigator.onLine)
       }
     }
 
@@ -38,6 +53,11 @@ export function useNetworkStatus() {
 
         listenerHandle = await Network.addListener('networkStatusChange', s => {
           applyStatus(s.connected)
+        })
+
+        // Re-check on foreground — networkStatusChange can miss events while backgrounded
+        appStateHandle = await CapApp.addListener('appStateChange', ({ isActive }) => {
+          if (isActive) recheckStatus()
         })
       } catch {
         // Fallback for plain browser / unit tests
@@ -59,9 +79,9 @@ export function useNetworkStatus() {
     init()
 
     return () => {
-      clearTimeout(backOnlineTimer)
       clearTimeout(offlineTimer)
       listenerHandle?.remove()
+      appStateHandle?.remove()
     }
   }, [])
 

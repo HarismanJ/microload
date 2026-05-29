@@ -145,7 +145,8 @@ export function buildWeeklyMuscleWorkload({ sessions = [], sets = [], exercises 
   sets.forEach(set => {
     const session = sessionsById.get(set.session_id)
     const exercise = exercisesById.get(set.exercise_id)
-    if (!session || !exercise || exercise.category === 'Cardio' || set.is_warmup) return
+    const setType = set.is_warmup ? 'warmup' : (set.set_type ?? set.setType ?? 'normal')
+    if (!session || !exercise || exercise.category === 'Cardio' || setType === 'warmup' || setType === 'dropset') return
 
     const completedAt = set.completed_at || session.finished_at || session.started_at
     const day = completedAt ? localDateString(new Date(completedAt)) : null
@@ -213,7 +214,7 @@ export async function fetchWeeklyMuscleWorkload(userId, date = new Date()) {
   const [{ data: sessions, error: sessionsError }, exercises] = await Promise.all([
     supabase
       .from('workout_sessions')
-      .select('id, started_at, finished_at')
+      .select('id, started_at, finished_at, workout_sets!workout_sets_session_id_fkey(id, session_id, exercise_id, completed_at, is_warmup, set_type)')
       .eq('user_id', userId)
       .not('finished_at', 'is', null)
       .gte('finished_at', range.startIso)
@@ -222,19 +223,14 @@ export async function fetchWeeklyMuscleWorkload(userId, date = new Date()) {
   ])
   if (sessionsError) throw sessionsError
 
-  const sessionIds = (sessions || []).map(session => session.id).filter(Boolean)
-  if (!sessionIds.length) return emptyWorkload(range)
+  const validSessions = (sessions || []).filter(session => session.id)
+  if (!validSessions.length) return emptyWorkload(range)
 
-  const { data: sets, error: setsError } = await supabase
-    .from('workout_sets')
-    .select('id, session_id, exercise_id, completed_at, is_warmup')
-    .eq('user_id', userId)
-    .in('session_id', sessionIds)
-  if (setsError) throw setsError
+  const sets = validSessions.flatMap(session => session.workout_sets || [])
 
   return buildWeeklyMuscleWorkload({
-    sessions: sessions || [],
-    sets: sets || [],
+    sessions: validSessions,
+    sets,
     exercises: exercises || [],
     range,
   })

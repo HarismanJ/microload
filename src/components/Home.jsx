@@ -1,4 +1,6 @@
-import { useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useMemo, useCallback } from 'react'
+import { localDate } from '../lib/dateUtils'
+import { computeStreak } from '../lib/streakUtils'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
 import Model from 'react-body-highlighter'
@@ -9,7 +11,6 @@ import { WEIGHT_TREND_PRESETS, getPresetRate } from '../lib/weightTrend'
 import { applyMuscleWorkloadGoal, fetchWeeklyMuscleWorkload, getLocalTrainingWeekRange, MUSCLE_WORKLOAD_GROUPS } from '../lib/muscleWorkload'
 import { SECONDARY_MUSCLE_CREDIT } from '../lib/muscleStimulus'
 import { detectOvertrain } from '../lib/overtrain'
-import LoadingSpinner from './LoadingSpinner'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import BodyWeightDetail from './profile/BodyWeightDetail'
 import WorkoutCalendar from './profile/WorkoutCalendar'
@@ -20,14 +21,42 @@ import '../styles/Home.css'
 
 const BODY_WEIGHT_CHART_UNIT_KEY = 'bodyWeightChartUnitOverride'
 const HOME_STARTUP_SNAPSHOT_TTL_MS = 15 * 60 * 1000
-
-function localDate(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-}
+const HOME_CACHE_KEY = 'home'
+const HOME_CACHE_VERSION = 10
+const DEFAULT_TODAY_NUTRITION = { calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 }
 
 function todayStr() {
   return localDate()
 }
+
+function getWarmHomeData(userId, useStartupSnapshot) {
+  if (useStartupSnapshot) return null
+  const cached = getCached(HOME_CACHE_KEY)
+  return cached?.version === HOME_CACHE_VERSION && cached?.userId === userId ? cached : null
+}
+
+function buildTodayNutrition(prof, nutLogs) {
+  const calGoal = prof?.calories_goal || 2000
+  const protGoal = prof?.protein_goal || 150
+  const carbGoal = prof?.carbs_goal || 200
+  const fatGoal = prof?.fat_goal || 65
+
+  if (!nutLogs?.length) {
+    return { calories: 0, protein: 0, carbs: 0, fat: 0, goal: calGoal, proteinGoal: protGoal, carbsGoal: carbGoal, fatGoal }
+  }
+
+  return {
+    calories: nutLogs.reduce((s, l) => s + (l.calories || 0), 0),
+    protein: nutLogs.reduce((s, l) => s + (l.protein || 0), 0),
+    carbs: nutLogs.reduce((s, l) => s + (l.carbs || 0), 0),
+    fat: nutLogs.reduce((s, l) => s + (l.fat || 0), 0),
+    goal: calGoal,
+    proteinGoal: protGoal,
+    carbsGoal: carbGoal,
+    fatGoal,
+  }
+}
+
 
 function formatWeightLogLabel(timestamp) {
   return new Date(timestamp).toLocaleString('en-US', {
@@ -66,20 +95,126 @@ MUSCLE_WORKLOAD_GROUPS.forEach(group => {
   group.chartMuscles.forEach(m => CHART_MUSCLE_TO_GROUP_KEY.set(m, group.key))
 })
 
+const POSTERIOR_CHART_MUSCLES = new Set([
+  'back-deltoids', 'triceps', 'forearm', 'adductor',
+  'calves', 'gluteal', 'hamstring', 'lower-back', 'trapezius', 'upper-back',
+])
+
 let ghostChartHasPlayed = false
+let ghostChartInterrupted = false
 let nutGlowHasPlayed = false
 let burnGlowHasPlayed = false
 let muscleRevealHasPlayed = false
 let lastHomeUserId = null
+const GHOST_CHART_DRAW_TOTAL_MS = 1920
+const GHOST_CHART_ERASE_FALLBACK_MS = 1400
+const GHOST_CHART_DONE_TOTAL_MS = GHOST_CHART_DRAW_TOTAL_MS + GHOST_CHART_ERASE_FALLBACK_MS
 
-export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted, workoutActive = false, onOvertrain, isVisible = true, appForegroundTick = 0 }) {
-  const [profile, setProfile]         = useState(null)
-  const [todayNut, setTodayNut]       = useState({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: 2000, proteinGoal: 150, carbsGoal: 200, fatGoal: 65 })
-  const [workoutStreak, setWorkoutStreak] = useState(0)
-  const [weightLogs, setWeightLogs] = useState([])
-  const [ghostChartPhase, setGhostChartPhase] = useState('idle') // 'idle' | 'drawing' | 'erasing' | 'done'
+function SkeletonBlock({ className = '' }) {
+  return <span className={`home-skeleton-block ${className}`} aria-hidden="true" />
+}
+
+function HomeSkeleton() {
+  const calendarCells = Array.from({ length: 35 }, (_, index) => index)
+
+  return (
+    <div className="home-screen home-screen-skeleton" aria-hidden="true">
+      <div className="home-today-col" aria-hidden="true">
+        <div className="home-today-split">
+          <div className="home-today-card home-skeleton-card home-skeleton-nutrition">
+            <div className="home-today-card-header">
+              <SkeletonBlock className="home-skeleton-icon" />
+              <SkeletonBlock className="home-skeleton-label" />
+            </div>
+            <SkeletonBlock className="home-skeleton-value" />
+            <SkeletonBlock className="home-skeleton-subtitle" />
+            <SkeletonBlock className="home-skeleton-bar" />
+            <div className="home-skeleton-macros">
+              {[0, 1, 2].map(index => (
+                <div className="home-skeleton-macro" key={index}>
+                  <div className="home-skeleton-macro-top">
+                    <SkeletonBlock className="home-skeleton-macro-label" />
+                    <SkeletonBlock className="home-skeleton-macro-value" />
+                  </div>
+                  <SkeletonBlock className="home-skeleton-track" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="home-today-card home-skeleton-card home-skeleton-burn">
+            <div className="home-today-card-header">
+              <SkeletonBlock className="home-skeleton-label home-skeleton-label-short" />
+            </div>
+            <div className="home-skeleton-ring">
+              <SkeletonBlock className="home-skeleton-ring-center" />
+            </div>
+            <SkeletonBlock className="home-skeleton-subtitle home-skeleton-subtitle-center" />
+          </div>
+        </div>
+      </div>
+
+      <div className="home-insights-grid" aria-hidden="true">
+        <div className="home-section home-section-weight">
+          <div className="home-weight-card home-skeleton-card home-skeleton-weight">
+            <div className="home-weight-cap home-skeleton-cap">
+              <SkeletonBlock className="home-skeleton-cap-line" />
+              <SkeletonBlock className="home-skeleton-cap-subline" />
+            </div>
+            <div className="home-skeleton-chart" />
+          </div>
+        </div>
+
+        <div className="home-section home-section-calendar">
+          <div className="cal-card cal-card-compact cal-card-hybrid cal-card-loading home-skeleton-calendar">
+            <div className="cal-nav">
+              <SkeletonBlock className="home-skeleton-cal-arrow" />
+              <SkeletonBlock className="home-skeleton-cal-title" />
+              <SkeletonBlock className="home-skeleton-cal-arrow" />
+            </div>
+            <div className="cal-body cal-body-loading">
+              <div className="cal-day-headers">
+                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, index) => (
+                  <div className="cal-day-header" key={`${day}-${index}`}>{day}</div>
+                ))}
+              </div>
+              <div className="cal-grid">
+                {calendarCells.map(index => (
+                  <div
+                    className="cal-cell cal-cell-loading"
+                    key={index}
+                    style={{ '--cal-load-delay': `${(index % 7) * 70}ms` }}
+                  >
+                    <span className="cal-day-num cal-day-num-loading" />
+                    <div className="cal-dots cal-dots-loading">
+                      <span className="cal-dot cal-dot-loading" />
+                      <span className="cal-dot cal-dot-loading" />
+                      <span className="cal-dot cal-dot-loading" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onStreakMetaChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted, onBodyweightChanged, workoutActive = false, bottomBannerVisible = false, onOvertrain, isVisible = true, appForegroundTick = 0 }) {
+  const initialHomeDataRef = useRef(getWarmHomeData(userId, useStartupSnapshot))
+  const hasWarmInitialHomeData = Boolean(initialHomeDataRef.current)
+  const [profile, setProfile]         = useState(() => initialHomeDataRef.current?.prof ?? null)
+  const [renderedHomeUserId, setRenderedHomeUserId] = useState(() => initialHomeDataRef.current?.userId ?? null)
+  const [todayNut, setTodayNut]       = useState(() => initialHomeDataRef.current ? buildTodayNutrition(initialHomeDataRef.current.prof, initialHomeDataRef.current.nutLogs) : DEFAULT_TODAY_NUTRITION)
+  const [workoutStreak, setWorkoutStreak] = useState(() => initialHomeDataRef.current ? computeStreak(initialHomeDataRef.current.prof?.streak_start_date, initialHomeDataRef.current.prof?.streak_last_workout_at) : 0)
+  const [weightLogs, setWeightLogs] = useState(() => initialHomeDataRef.current?.weightLogs ?? [])
+  const [ghostChartPhase, setGhostChartPhase] = useState(() => (ghostChartHasPlayed || ghostChartInterrupted) ? 'done' : 'idle') // 'idle' | 'drawing' | 'erasing' | 'done'
+  const [ghostChartRunId, setGhostChartRunId] = useState(0)
   const [appReturnTick, setAppReturnTick] = useState(0)
-  const [loading, setLoading]         = useState(true)
+  const [, setLoading]                 = useState(() => !hasWarmInitialHomeData)
+  const [initialShellReady, setInitialShellReady] = useState(() => hasWarmInitialHomeData)
   const [loadError, setLoadError]     = useState(false)
   const [showWeightDetail, setShowWeightDetail] = useState(false)
   const [weightSheetUnit, setWeightSheetUnit] = useState(() => loadStoredBodyWeightChartUnit())
@@ -115,12 +250,15 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [weightDeleteError, setWeightDeleteError] = useState('')
   const [selectedDay, setSelectedDay] = useState(null) // { sessionIds, dateStr }
   const burnSheetJustOpenedRef = useRef(false)
-  const [calendarInitialReady, setCalendarInitialReady] = useState(false)
+
   const [isPhoneWidth, setIsPhoneWidth] = useState(() => (
     typeof window !== 'undefined' ? window.innerWidth <= 640 : false
   ))
-  const [burnedToday, setBurnedToday] = useState(0)
-  const [burnGoal, setBurnGoal] = useState(null)
+  const [viewportHeight, setViewportHeight] = useState(() => (
+    typeof window !== 'undefined' ? (window.visualViewport?.height || window.innerHeight) : 780
+  ))
+  const [burnedToday, setBurnedToday] = useState(() => (initialHomeDataRef.current?.todaySessions || []).reduce((sum, s) => sum + (s.calories_burned || 0), 0))
+  const [burnGoal, setBurnGoal] = useState(() => initialHomeDataRef.current?.prof?.calories_burned_goal || null)
   const [burnGoalSheetOpen, setBurnGoalSheetOpen] = useState(false)
   const [burnGoalInput, setBurnGoalInput] = useState('')
   const [burnGoalError, setBurnGoalError] = useState('')
@@ -129,8 +267,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     const saved = localStorage.getItem('liftlog:burnWidgetSide')
     return saved === 'muscle-front' || saved === 'muscle-back' ? saved : 'calories'
   })
-  const [weeklyMuscleWorkload, setWeeklyMuscleWorkload] = useState(null)
-  const [priorWeekMuscleWorkload, setPriorWeekMuscleWorkload] = useState(null)
+  const [weeklyMuscleWorkload, setWeeklyMuscleWorkload] = useState(() => initialHomeDataRef.current?.weeklyMuscleWorkload ?? null)
+  const [priorWeekMuscleWorkload, setPriorWeekMuscleWorkload] = useState(() => initialHomeDataRef.current?.priorWeekMuscleWorkload ?? null)
   const [muscleRevealStep, setMuscleRevealStep] = useState(0)
   const [muscleDetailOpen, setMuscleDetailOpen] = useState(false)
   const [muscleDetailSelectedKey, setMuscleDetailSelectedKey] = useState(null)
@@ -143,6 +281,45 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const muscleTouchRef = useRef({ startY: null, dragging: false })
   const prevBurnWidgetSideRef = useRef(burnWidgetSide)
   const muscleRevealStepRef = useRef(0)
+  const ghostChartPhaseRef = useRef(ghostChartPhase)
+  const ghostChartEraseTimerRef = useRef(null)
+  const ghostChartDoneTimerRef = useRef(null)
+  const lastHandledAppForegroundTickRef = useRef(appForegroundTick)
+  // Incremented by the on-demand wide-weight effect each time it writes new data.
+  // load() snapshots this before Promise.all and compares after to detect a race.
+  const weightDataVersionRef = useRef(0)
+  // Holds the actual wide weight rows written by the on-demand effect.
+  // Set synchronously inside .then() so any stale async closure can read it via .current.
+  const wideWeightLogsRef = useRef(null)
+  const lockedContentHeightRef = useRef(null)
+  const clearGhostChartTimers = useCallback(() => {
+    clearTimeout(ghostChartEraseTimerRef.current)
+    clearTimeout(ghostChartDoneTimerRef.current)
+    ghostChartEraseTimerRef.current = null
+    ghostChartDoneTimerRef.current = null
+  }, [])
+
+  const finishGhostChartAnimation = useCallback(() => {
+    clearGhostChartTimers()
+    ghostChartHasPlayed = true
+    ghostChartInterrupted = true
+    ghostChartPhaseRef.current = 'done'
+    setGhostChartPhase('done')
+  }, [clearGhostChartTimers])
+
+  const handleGhostChartAnimationEnd = useCallback((event) => {
+    if (event.animationName === 'ghost-draw' && ghostChartPhaseRef.current === 'drawing') {
+      clearTimeout(ghostChartEraseTimerRef.current)
+      ghostChartEraseTimerRef.current = null
+      ghostChartPhaseRef.current = 'erasing'
+      setGhostChartPhase('erasing')
+      return
+    }
+
+    if (event.animationName === 'ghost-erase' && ghostChartPhaseRef.current === 'erasing') {
+      finishGhostChartAnimation()
+    }
+  }, [finishGhostChartAnimation])
 
   const handleMuscleTouchStart = (e) => {
     if (muscleDetailModalRef.current?.scrollTop !== 0) return
@@ -181,40 +358,55 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const [burnRingAnimatedIn, setBurnRingAnimatedIn] = useState(false)
   const [nutGlowActive, setNutGlowActive] = useState(false)
   const [burnGlowActive, setBurnGlowActive] = useState(false)
-  const [animReady, setAnimReady] = useState(false)
-  const entryAnimationReady = !loading && calendarInitialReady && splashDone && introMotionReady && isVisible
+  const [animReady, setAnimReady] = useState(() => hasWarmInitialHomeData)
+  const [skeletonDone, setSkeletonDone] = useState(() => hasWarmInitialHomeData)
+  const [skeletonOut, setSkeletonOut] = useState(() => hasWarmInitialHomeData)
+  const hasRenderableHomeData = profile !== null && renderedHomeUserId === userId
+  const entryAnimationReady = hasRenderableHomeData && splashDone && introMotionReady && isVisible
   const widgetAnimationReady = animReady
 
   useLayoutEffect(() => {
     if (lastHomeUserId !== userId) {
       lastHomeUserId = userId
       ghostChartHasPlayed = false
+      ghostChartInterrupted = false
       nutGlowHasPlayed = false
       burnGlowHasPlayed = false
       muscleRevealHasPlayed = false
       muscleRevealStepRef.current = 0
+      clearGhostChartTimers()
+      setGhostChartPhase('idle')
+      setGhostChartRunId(0)
       setMuscleRevealStep(0)
+      setSkeletonDone(false)
+      setSkeletonOut(false)
     }
-  }, [userId])
+  }, [clearGhostChartTimers, userId])
 
   useEffect(() => {
-    const onResize = () => setIsPhoneWidth(window.innerWidth <= 640)
+    const onResize = () => {
+      setIsPhoneWidth(window.innerWidth <= 640)
+      setViewportHeight(window.visualViewport?.height || window.innerHeight)
+    }
+
     window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    window.visualViewport?.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      window.visualViewport?.removeEventListener('resize', onResize)
+    }
   }, [])
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     const contentNode = document.querySelector('.content')
     if (!(contentNode instanceof HTMLElement)) return undefined
-
-    const shouldLockHomeScroll = isPhoneWidth && !selectedDay && !showWeightDetail && !workoutActive
-    contentNode.classList.toggle('content-home-locked', shouldLockHomeScroll)
-    if (shouldLockHomeScroll) contentNode.scrollTop = 0
-
-    return () => {
-      contentNode.classList.remove('content-home-locked')
+    const shouldLock = isVisible && isPhoneWidth && !selectedDay && !showWeightDetail && !workoutActive && !bottomBannerVisible
+    contentNode.classList.toggle('content-home-locked', shouldLock)
+    if (shouldLock) {
+      contentNode.scrollTop = 0
+      lockedContentHeightRef.current = contentNode.clientHeight
     }
-  }, [isPhoneWidth, selectedDay, showWeightDetail, workoutActive])
+    return () => { contentNode.classList.remove('content-home-locked') }
+  }, [isVisible, isPhoneWidth, selectedDay, showWeightDetail, workoutActive, bottomBannerVisible])
 
   function handleDeletedWorkout({ remainingSessionIds = [], dateStr }) {
     setSelectedDay({ sessionIds: remainingSessionIds, dateStr })
@@ -223,7 +415,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     onWorkoutDeleted?.()
   }
 
-  function applyData({ prof, nutLogs, allSessions, weightLogs: logs, weeklyMuscleWorkload: muscleWorkload, priorWeekMuscleWorkload }) {
+  function applyData({ userId: dataUserId, prof, nutLogs, todaySessions, weightLogs: logs, weeklyMuscleWorkload: muscleWorkload, priorWeekMuscleWorkload }) {
+    setRenderedHomeUserId(dataUserId || userId)
     setProfile(prof)
     setWeightLogs(logs || [])
     setBurnGoal(prof?.calories_burned_goal || null)
@@ -262,10 +455,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       setTrendModeInput('')
       setTrendRateInput('')
     }
-    const todayForBurn = todayStr()
-    const todayBurned = (allSessions || [])
-      .filter(s => s.finished_at && localDate(new Date(s.finished_at)) === todayForBurn)
-      .reduce((sum, s) => sum + (s.calories_burned || 0), 0)
+    const todayBurned = (todaySessions || []).reduce((sum, s) => sum + (s.calories_burned || 0), 0)
     setBurnedToday(todayBurned)
 
     const calGoal  = prof?.calories_goal || 2000
@@ -285,93 +475,86 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       setTodayNut({ calories: 0, protein: 0, carbs: 0, fat: 0, goal: calGoal, proteinGoal: protGoal, carbsGoal: carbGoal, fatGoal: fatGoal })
     }
 
-    const sortedWorkoutDays = [...new Set((allSessions || []).map(session => localDate(new Date(session.started_at))))]
-      .map(dateStr => new Date(`${dateStr}T12:00:00`))
-      .sort((a, b) => b - a)
-
-    let streak = 0
-    if (sortedWorkoutDays.length > 0) {
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      const daysSinceLatestWorkout = Math.floor((today - sortedWorkoutDays[0]) / 86400000)
-
-      if (daysSinceLatestWorkout <= 3) {
-        // Find the oldest workout still within the continuous streak window
-        let oldestInWindow = sortedWorkoutDays[0]
-        for (let index = 1; index < sortedWorkoutDays.length; index += 1) {
-          const gapDays = Math.floor((sortedWorkoutDays[index - 1] - sortedWorkoutDays[index]) / 86400000) - 1
-          if (gapDays > 3) break
-          oldestInWindow = sortedWorkoutDays[index]
-        }
-        // Streak = calendar days from first workout in window to today (inclusive)
-        const oldestMidnight = new Date(oldestInWindow)
-        oldestMidnight.setHours(0, 0, 0, 0)
-        streak = Math.floor((today - oldestMidnight) / 86400000) + 1
-      }
-    }
-
+    const streak = computeStreak(prof?.streak_start_date, prof?.streak_last_workout_at)
     setWorkoutStreak(streak)
+    onStreakMetaChange?.({ startDate: prof?.streak_start_date ?? null, lastWorkoutAt: prof?.streak_last_workout_at ?? null })
   }
 
   async function load() {
     const today = todayStr()
-    const cacheKey = 'home'
-    const cacheVersion = 9
     const requireFreshInitialData = useStartupSnapshot
     let hasWarmData = false
     setLoadError(false)
+    // Snapshot the ref BEFORE the first await. Refs are shared across renders so
+    // reading .current after the await always gives the live value — unlike state
+    // or props which are captured in the closure and go stale.
+    const weightVersionSnapshot = weightDataVersionRef.current
 
     try {
-      const cached = getCached(cacheKey)
-      if (cached?.version === cacheVersion && cached?.userId === userId) {
+      const cached = getCached(HOME_CACHE_KEY)
+      if (cached?.version === HOME_CACHE_VERSION && cached?.userId === userId) {
         applyData(cached)
         hasWarmData = true
+      }
+
+      if (!hasWarmData && useStartupSnapshot) {
+        const storedSnapshot = getStartupSnapshot(HOME_CACHE_KEY, userId)
+        if (storedSnapshot?.version === HOME_CACHE_VERSION && storedSnapshot?.userId === userId) {
+          setCached(HOME_CACHE_KEY, storedSnapshot)
+          applyData(storedSnapshot)
+          hasWarmData = true
+        }
+      }
+
+      setInitialShellReady(true)
+
+      if (hasWarmData) {
         if (!requireFreshInitialData) {
           setLoading(false)
           return
         }
       }
 
-      if (!hasWarmData && useStartupSnapshot) {
-        const storedSnapshot = getStartupSnapshot(cacheKey, userId)
-        if (storedSnapshot?.version === cacheVersion && storedSnapshot?.userId === userId) {
-          setCached(cacheKey, storedSnapshot)
-          applyData(storedSnapshot)
-          hasWarmData = true
-        }
+      // Build the weight query to match the currently viewed period.
+      // loadLatest() is a useEffectEvent so it always sees the latest weightPeriod —
+      // this prevents a background refresh from truncating wider data the user is viewing.
+      let weightQuery = supabase.from('body_weight_logs')
+        .select('id, weight, unit, logged_at')
+        .eq('user_id', userId)
+        .order('logged_at', { ascending: true })
+      if (weightPeriod !== 'all') {
+        const weightDays = weightPeriod === '1y' ? 365 : 90
+        const weightFetchStart = new Date()
+        weightFetchStart.setDate(weightFetchStart.getDate() - weightDays)
+        weightQuery = weightQuery.gte('logged_at', weightFetchStart.toISOString())
       }
-
-      const oneYearAgo = new Date()
-      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
 
       const priorWeekDate = new Date(Date.now() - 7 * 86400000)
       const priorWeekMuscleKey = `muscle-workload:prior:${getLocalTrainingWeekRange(priorWeekDate).startIso.slice(0, 10)}`
       const cachedPriorWeekMuscle = getCached(priorWeekMuscleKey)
 
+      const tomorrow = localDate(new Date(Date.now() + 86400000))
+
       const [
         profileResponse,
         nutritionResponse,
-        sessionsResponse,
+        todaySessionsResponse,
         weightResponse,
         weeklyMuscleWorkloadResult,
         priorWeekMuscleWorkloadResult,
       ] = await Promise.all([
         supabase.from('profiles')
-          .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight, calories_burned_goal, gender, weight_goal_kg, weight_trend_mode, weight_trend_rate_kg_per_week, weight_trend_anchor_date, weight_trend_anchor_weight_kg')
+          .select('full_name, username, calories_goal, protein_goal, carbs_goal, fat_goal, unit_preference, bodyweight, calories_burned_goal, gender, weight_goal_kg, weight_trend_mode, weight_trend_rate_kg_per_week, weight_trend_anchor_date, weight_trend_anchor_weight_kg, streak_start_date, streak_last_workout_at')
           .eq('id', userId).single(),
         supabase.from('nutrition_logs')
           .select('calories, protein, carbs, fat')
           .eq('user_id', userId).eq('log_date', today),
         supabase.from('workout_sessions')
-          .select('started_at, finished_at, calories_burned')
+          .select('calories_burned')
           .eq('user_id', userId)
-          .not('finished_at', 'is', null)
-          .gte('started_at', oneYearAgo.toISOString()),
-        supabase.from('body_weight_logs')
-          .select('id, weight, unit, logged_at')
-          .eq('user_id', userId)
-          .gte('logged_at', oneYearAgo.toISOString())
-          .order('logged_at', { ascending: true }),
+          .gte('finished_at', `${today}T00:00:00`)
+          .lt('finished_at', `${tomorrow}T00:00:00`),
+        weightQuery,
         fetchWeeklyMuscleWorkload(userId),
         cachedPriorWeekMuscle ?? fetchWeeklyMuscleWorkload(userId, priorWeekDate),
       ])
@@ -379,34 +562,48 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
       const loadError = profileResponse.error
         || nutritionResponse.error
-        || sessionsResponse.error
+        || todaySessionsResponse.error
         || weightResponse.error
       if (loadError) throw loadError
 
+      // If the on-demand effect wrote wider weight data while Promise.all was in
+      // flight, use that data in the result so both the cache and applyData receive
+      // the correct wide rows — not the narrow fetch we issued.
+      // wideWeightLogsRef is a ref so .current is always live even in a stale closure.
+      const onDemandRanMidFlight = weightDataVersionRef.current !== weightVersionSnapshot
       const result = {
-        version: cacheVersion,
+        version: HOME_CACHE_VERSION,
         userId,
         prof: profileResponse.data,
         nutLogs: nutritionResponse.data,
-        allSessions: sessionsResponse.data,
+        todaySessions: todaySessionsResponse.data,
         weeklyMuscleWorkload: weeklyMuscleWorkloadResult,
         priorWeekMuscleWorkload: priorWeekMuscleWorkloadResult,
-        weightLogs: weightResponse.data?.map(log => ({
-          id: log.id,
-          weight: log.weight,
-          unit: log.unit,
-          date: log.logged_at.slice(0, 10),
-          loggedAt: log.logged_at,
-        })) || [],
+        weightLogs: onDemandRanMidFlight
+          ? (wideWeightLogsRef.current ?? weightResponse.data?.map(log => ({
+              id: log.id,
+              weight: log.weight,
+              unit: log.unit,
+              date: log.logged_at.slice(0, 10),
+              loggedAt: log.logged_at,
+            })) ?? [])
+          : (weightResponse.data?.map(log => ({
+              id: log.id,
+              weight: log.weight,
+              unit: log.unit,
+              date: log.logged_at.slice(0, 10),
+              loggedAt: log.logged_at,
+            })) || []),
         today,
       }
-      setCached('home', result)
-      setStartupSnapshot(cacheKey, result, HOME_STARTUP_SNAPSHOT_TTL_MS, userId)
+      setCached(HOME_CACHE_KEY, result)
+      setStartupSnapshot(HOME_CACHE_KEY, result, HOME_STARTUP_SNAPSHOT_TTL_MS, userId)
       applyData(result)
     } catch (error) {
       console.error('Home load failed:', error)
       setLoadError(true)
     } finally {
+      setInitialShellReady(true)
       setLoading(false)
     }
   }
@@ -414,10 +611,13 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const loadLatest = useEffectEvent(() => { load() })
 
   useEffect(() => {
-    setCalendarInitialReady(false)
+    if (!hasWarmInitialHomeData) {
+      setInitialShellReady(false)
+      setLoading(true)
+    }
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [userId])
+  }, [hasWarmInitialHomeData, userId])
 
   useEffect(() => {
     if (weightRefreshTick === 0) return
@@ -430,23 +630,40 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [workoutRefreshTick])
 
   useEffect(() => {
-    if (weightPeriod !== 'all') return
+    if (weightPeriod !== 'all' && weightPeriod !== '1y') return
+    let cancelled = false
     setWeightAllLoading(true)
-    supabase.from('body_weight_logs')
+    let query = supabase.from('body_weight_logs')
       .select('id, weight, unit, logged_at')
       .eq('user_id', userId)
       .order('logged_at', { ascending: true })
+    if (weightPeriod === '1y') {
+      const oneYearAgo = new Date()
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1)
+      query = query.gte('logged_at', oneYearAgo.toISOString())
+    }
+    query
       .then(({ data }) => {
-        if (!data) return
-        setWeightLogs(data.map(log => ({
+        if (cancelled || !data) return
+        const wideLogs = data.map(log => ({
           id: log.id,
           weight: log.weight,
           unit: log.unit,
           date: log.logged_at.slice(0, 10),
           loggedAt: log.logged_at,
-        })))
+        }))
+        // Write ref synchronously so any in-flight load() can read it via .current
+        // regardless of which render closure is executing.
+        wideWeightLogsRef.current = wideLogs
+        weightDataVersionRef.current++
+        // Keep the cache consistent so cache-hit paths in load() always serve
+        // the widest data that has been fetched, not a stale narrow result.
+        const currentCache = getCached(HOME_CACHE_KEY)
+        if (currentCache) setCached(HOME_CACHE_KEY, { ...currentCache, weightLogs: wideLogs })
+        setWeightLogs(wideLogs)
       })
-      .finally(() => setWeightAllLoading(false))
+      .finally(() => { if (!cancelled) setWeightAllLoading(false) })
+    return () => { cancelled = true; setWeightAllLoading(false) }
   }, [weightPeriod, userId])
 
   useEffect(() => {
@@ -454,9 +671,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [onWorkoutStreakChange, workoutStreak])
 
   useEffect(() => {
-    if (loading || !calendarInitialReady) return
+    if (!initialShellReady) return
     onInitialReady?.()
-  }, [calendarInitialReady, loading, onInitialReady])
+  }, [initialShellReady, onInitialReady])
 
   useEffect(() => {
     if (!entryAnimationReady) {
@@ -477,7 +694,14 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   }, [entryAnimationReady])
 
   useEffect(() => {
-    if (loading || !widgetAnimationReady || selectedDay || showWeightDetail) {
+    if (!entryAnimationReady || skeletonDone) return
+    setSkeletonOut(true)
+    const timer = setTimeout(() => setSkeletonDone(true), 780)
+    return () => clearTimeout(timer)
+  }, [entryAnimationReady, skeletonDone])
+
+  useEffect(() => {
+    if (!hasRenderableHomeData || !widgetAnimationReady || selectedDay || showWeightDetail) {
       setBarsAnimatedIn(false)
       return undefined
     }
@@ -485,10 +709,10 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setBarsAnimatedIn(false)
     const timer = setTimeout(() => setBarsAnimatedIn(true), 120)
     return () => clearTimeout(timer)
-  }, [loading, widgetAnimationReady, selectedDay, showWeightDetail, todayNut.calories, todayNut.protein, todayNut.carbs, todayNut.fat, appReturnTick])
+  }, [hasRenderableHomeData, widgetAnimationReady, selectedDay, showWeightDetail, todayNut.calories, todayNut.protein, todayNut.carbs, todayNut.fat, appReturnTick])
 
   useEffect(() => {
-    if (loading || !widgetAnimationReady || selectedDay || showWeightDetail || burnWidgetSide !== 'calories') {
+    if (!hasRenderableHomeData || !widgetAnimationReady || selectedDay || showWeightDetail || burnWidgetSide !== 'calories') {
       setBurnRingAnimatedIn(false)
       return undefined
     }
@@ -496,49 +720,97 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     setBurnRingAnimatedIn(false)
     const timer = setTimeout(() => setBurnRingAnimatedIn(true), 120)
     return () => clearTimeout(timer)
-  }, [loading, widgetAnimationReady, selectedDay, showWeightDetail, burnWidgetSide, burnedToday, burnGoal, appReturnTick])
+  }, [hasRenderableHomeData, widgetAnimationReady, selectedDay, showWeightDetail, burnWidgetSide, burnedToday, burnGoal, appReturnTick])
 
   useEffect(() => {
     if (!isVisible) return
     nutGlowHasPlayed = false
     burnGlowHasPlayed = false
     muscleRevealHasPlayed = false
+    muscleRevealStepRef.current = 0
+    setMuscleRevealStep(0)
     setAppReturnTick(t => t + 1)
   }, [isVisible])
 
   useEffect(() => {
     if (!appForegroundTick || !isVisible) return
+    if (lastHandledAppForegroundTickRef.current === appForegroundTick) return
+    lastHandledAppForegroundTickRef.current = appForegroundTick
+    clearGhostChartTimers()
     ghostChartHasPlayed = false
+    ghostChartInterrupted = false
+    ghostChartPhaseRef.current = 'idle'
+    setGhostChartPhase('idle')
     nutGlowHasPlayed = false
     burnGlowHasPlayed = false
     muscleRevealHasPlayed = false
     setAppReturnTick(t => t + 1)
-  }, [appForegroundTick, isVisible])
+  }, [appForegroundTick, isVisible, clearGhostChartTimers])
 
   useEffect(() => {
-    if (loading || !widgetAnimationReady || weightLogs.length > 0 || ghostChartHasPlayed) return
+    ghostChartPhaseRef.current = ghostChartPhase
+  }, [ghostChartPhase])
+
+  useEffect(() => {
+    if (!isVisible || !hasRenderableHomeData || !widgetAnimationReady || weightLogs.length > 0 || ghostChartHasPlayed) return
+    clearGhostChartTimers()
     ghostChartHasPlayed = true
+    setGhostChartRunId(id => id + 1)
+    ghostChartPhaseRef.current = 'drawing'
     setGhostChartPhase('drawing')
-    const eraseTimer = setTimeout(() => setGhostChartPhase('erasing'), 1200)
-    const doneTimer  = setTimeout(() => setGhostChartPhase('done'), 2800)
-    return () => { clearTimeout(eraseTimer); clearTimeout(doneTimer) }
-  }, [loading, widgetAnimationReady, weightLogs.length, appReturnTick])
+    ghostChartEraseTimerRef.current = setTimeout(() => {
+      ghostChartEraseTimerRef.current = null
+      ghostChartPhaseRef.current = 'erasing'
+      setGhostChartPhase('erasing')
+    }, GHOST_CHART_DRAW_TOTAL_MS)
+    ghostChartDoneTimerRef.current = setTimeout(() => {
+      ghostChartDoneTimerRef.current = null
+      ghostChartPhaseRef.current = 'done'
+      setGhostChartPhase('done')
+    }, GHOST_CHART_DONE_TOTAL_MS)
+    return () => {
+      const wasAnimating = ghostChartPhaseRef.current === 'drawing' || ghostChartPhaseRef.current === 'erasing'
+      clearGhostChartTimers()
+      if (wasAnimating) {
+        ghostChartHasPlayed = true
+        ghostChartInterrupted = true
+        ghostChartPhaseRef.current = 'done'
+      }
+    }
+  }, [isVisible, hasRenderableHomeData, widgetAnimationReady, weightLogs.length, appReturnTick, clearGhostChartTimers])
 
   useEffect(() => {
-    if (loading || !widgetAnimationReady || !nutEmpty || nutGlowHasPlayed) return
+    if (isVisible) return
+    if (ghostChartPhase !== 'drawing' && ghostChartPhase !== 'erasing') return
+    finishGhostChartAnimation()
+  }, [finishGhostChartAnimation, ghostChartPhase, isVisible])
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') return
+      const phase = ghostChartPhaseRef.current
+      if (phase !== 'drawing' && phase !== 'erasing') return
+      finishGhostChartAnimation()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [finishGhostChartAnimation])
+
+  useEffect(() => {
+    if (!hasRenderableHomeData || !widgetAnimationReady || !nutEmpty || nutGlowHasPlayed) return
     nutGlowHasPlayed = true
     setNutGlowActive(true)
     const t = setTimeout(() => setNutGlowActive(false), 2800)
     return () => clearTimeout(t)
-  }, [loading, widgetAnimationReady, nutEmpty, appReturnTick])
+  }, [hasRenderableHomeData, widgetAnimationReady, nutEmpty, appReturnTick])
 
   useEffect(() => {
-    if (loading || !widgetAnimationReady || burnedToday !== 0 || burnGlowHasPlayed) return
+    if (!hasRenderableHomeData || !widgetAnimationReady || burnedToday !== 0 || burnGlowHasPlayed) return
     burnGlowHasPlayed = true
     setBurnGlowActive(true)
     const t = setTimeout(() => setBurnGlowActive(false), 2800)
     return () => clearTimeout(t)
-  }, [loading, widgetAnimationReady, burnedToday, appReturnTick])
+  }, [hasRenderableHomeData, widgetAnimationReady, burnedToday, appReturnTick])
 
   const goalAdjustedWeeklyMuscleWorkload = useMemo(
     () => applyMuscleWorkloadGoal(weeklyMuscleWorkload, muscleWorkloadGoal),
@@ -552,6 +824,9 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const goalChartData = muscleWorkloadGroups
     .filter(g => g.heatBucket > 0)
     .map(g => ({ name: g.label, muscles: g.chartMuscles, frequency: g.heatBucket }))
+  const visibleGoalChartData = burnWidgetSide === 'muscle-back'
+    ? goalChartData.filter(g => g.muscles.some(m => POSTERIOR_CHART_MUSCLES.has(m)))
+    : goalChartData
   const muscleDetailRows = [...muscleWorkloadGroups]
     .filter(group => group.effectiveSets > 0)
     .sort((a, b) => b.targetRatio - a.targetRatio || b.effectiveSets - a.effectiveSets || a.label.localeCompare(b.label))
@@ -571,8 +846,8 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       muscleRevealStepRef.current = 0
       setMuscleRevealStep(0)
     }
-    if (loading || !widgetAnimationReady || !goalChartData.length || muscleRevealHasPlayed) return
-    const total = goalChartData.length
+    if (!hasRenderableHomeData || !widgetAnimationReady || !visibleGoalChartData.length || muscleRevealHasPlayed) return
+    const total = visibleGoalChartData.length
     if (muscleRevealStepRef.current >= total) {
       muscleRevealHasPlayed = true
       return
@@ -588,7 +863,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       }
     }, MUSCLE_REVEAL_STEP_MS)
     return () => clearInterval(id)
-  }, [loading, widgetAnimationReady, appReturnTick, burnWidgetSide, goalChartData.length])
+  }, [hasRenderableHomeData, widgetAnimationReady, appReturnTick, burnWidgetSide, visibleGoalChartData.length])
 
 
   useEffect(() => {
@@ -616,6 +891,13 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     const profileUnit = profile?.unit_preference || unit
     const timestamp = new Date().toISOString()
     const nextBodyweight = Math.round(convertWeight(val, unit, profileUnit) * 10) / 10
+    const previousBodyweight = profile?.bodyweight ?? null
+    const tempId = `_opt_${Date.now()}`
+    const optimisticEntry = { id: tempId, weight: val, unit, date: timestamp.slice(0, 10), loggedAt: timestamp }
+
+    setWeightLogs(prev => [...prev, optimisticEntry])
+    setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
+    setBwInput('')
 
     try {
       const [{ data: inserted, error: insertError }, { error: profileError }] = await Promise.all([
@@ -629,17 +911,22 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
       if (insertError || profileError || !inserted) throw (insertError || profileError || new Error('Could not save your body weight.'))
 
+      setWeightLogs(prev => prev.map(log =>
+        log.id === tempId
+          ? { id: inserted.id, weight: inserted.weight, unit: inserted.unit, date: inserted.logged_at.slice(0, 10), loggedAt: inserted.logged_at }
+          : log
+      ))
       invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(timestamp))
-      setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
-      setWeightLogs(prev => [...prev, {
-        id: inserted.id,
-        weight: inserted.weight,
-        unit: inserted.unit,
-        date: inserted.logged_at.slice(0, 10),
-        loggedAt: inserted.logged_at,
-      }])
-      setBwInput('')
+      onBodyweightChanged?.()
     } catch (error) {
+      setWeightLogs(prev => prev.filter(log => log.id !== tempId))
+      setProfile(current => {
+        if (!current) return current
+        return current.bodyweight === nextBodyweight
+          ? { ...current, bodyweight: previousBodyweight }
+          : current
+      })
+      setBwInput(String(val))
       setBwError(error?.message || 'Could not save your body weight.')
     } finally {
       setBwSaving(false)
@@ -812,23 +1099,36 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
     const removedLog = weightLogs.find(log => log.id === logId)
     const remainingLogs = weightLogs.filter(log => log.id !== logId)
-    const latestRemainingLog = remainingLogs.at(-1)
-    const nextBodyweight = latestRemainingLog
-      ? convertWeight(latestRemainingLog.weight, latestRemainingLog.unit || profile?.unit_preference || 'kg', profile?.unit_preference || 'kg')
-      : null
 
     try {
-      const [{ error: deleteError }, { error: profileError }] = await Promise.all([
+      // Fetch true latest remaining row from DB (not in-memory) so profiles.bodyweight
+      // is correct even when the startup window only loaded 90 days of history.
+      const [{ error: deleteError }, { data: latestRows, error: latestError }] = await Promise.all([
         supabase.from('body_weight_logs').delete().eq('id', logId),
-        supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId),
+        supabase.from('body_weight_logs')
+          .select('weight, unit')
+          .eq('user_id', userId)
+          .neq('id', logId)
+          .order('logged_at', { ascending: false })
+          .limit(1),
       ])
 
-      if (deleteError || profileError) throw (deleteError || profileError)
+      if (deleteError) throw deleteError
+      if (latestError) throw latestError
+
+      const latestRemainingLog = latestRows?.[0] ?? null
+      const nextBodyweight = latestRemainingLog
+        ? convertWeight(latestRemainingLog.weight, latestRemainingLog.unit || profile?.unit_preference || 'kg', profile?.unit_preference || 'kg')
+        : null
+
+      const { error: profileError } = await supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId)
+      if (profileError) throw profileError
 
       invalidateCache('profile', 'ranks', 'home', getCalendarMonthCacheKey(removedLog?.loggedAt || removedLog?.date || new Date()))
       setWeightLogs(remainingLogs)
       setProfile(current => current ? { ...current, bodyweight: nextBodyweight } : current)
       setWeightDeleteTargetId(null)
+      onBodyweightChanged?.()
     } catch (error) {
       setWeightDeleteError(error?.message || 'Could not delete this weight log.')
     } finally {
@@ -845,9 +1145,11 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const burnDash = burnPct * BURN_C
   const calBarWidth = `${barsAnimatedIn ? calPct * 100 : 0}%`
   const activeWeightUnit = weightSheetUnit || profile?.unit_preference || 'kg'
-  const homeChartHeight = isPhoneWidth ? 162 : 388
+  const homeChartHeight = isPhoneWidth ? Math.round(Math.min(188, Math.max(108, viewportHeight * 0.202))) : 388
   const homeChartTickCount = 5
   const homeChartPadding = isPhoneWidth ? 'tight-mobile' : 'tight'
+  const ghostChartAnimating = ghostChartPhase === 'drawing' || ghostChartPhase === 'erasing'
+  const showGhostChartEmptyLabel = ghostChartPhase === 'done' || (ghostChartHasPlayed && !ghostChartAnimating)
 
   const filteredWeightLogs = useMemo(() => {
     return filterByChartPeriod(weightLogs, weightPeriod, log => log.loggedAt || log.date)
@@ -873,9 +1175,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     }))
   }, [goalAdjustedWeeklyMuscleWorkload, goalAdjustedPriorMuscleWorkload, onOvertrain])
 
-  if (loading) return <LoadingSpinner fullPage />
-
-  if (loadError && !profile) {
+  if (loadError && !hasRenderableHomeData) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 16, padding: 32, textAlign: 'center' }}>
         <p style={{ color: 'var(--muted)', fontSize: 15, margin: 0 }}>Failed to load. Check your connection and try again.</p>
@@ -993,7 +1293,21 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
   return (
     <>
-    <div className={`home-screen${animReady ? ' home-screen--ready' : ''}`}>
+    <div className="home-container">
+      {!skeletonDone && (
+        <div
+          className={`home-skeleton-overlay${skeletonOut ? ' home-skeleton-overlay--exit' : ''}`}
+          role="status"
+          aria-label="Loading Home"
+          aria-live="polite"
+        >
+          <HomeSkeleton />
+        </div>
+      )}
+    <div
+      className={`home-screen${animReady ? ' home-screen--ready' : ''}`}
+      style={bottomBannerVisible && isPhoneWidth ? { minHeight: lockedContentHeightRef.current ?? 'calc(100% + 52px)' } : undefined}
+    >
 
       {/* ── Today snapshot ── */}
       <div className="home-today-col">
@@ -1136,7 +1450,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                 </div>
                 <div className={`home-muscle-mini-models${hasWeeklyMuscleWork ? '' : ' home-muscle-mini-models-empty'}`} aria-hidden="true">
                   <Model
-                    data={goalChartData.slice(0, muscleRevealStep)}
+                    data={visibleGoalChartData.slice(0, muscleRevealStep)}
                     type={burnWidgetSide === 'muscle-front' ? 'anterior' : 'posterior'}
                     bodyColor="rgba(255, 255, 255, 0.14)"
                     highlightedColors={MUSCLE_HEAT_COLORS}
@@ -1177,6 +1491,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
             {weightLogs.length > 0
               ? <div className="home-weight-chart-wrap">
                   <WeightChart
+                    key={`home-weight-chart-${appReturnTick}`}
                     data={filteredWeightLogs}
                     unit={activeWeightUnit}
                     height={homeChartHeight}
@@ -1191,23 +1506,28 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
                   />
                 </div>
               : <div className="home-chart-empty">
-                  {/* Ghost chart skeleton — matches real chart paddings */}
-                  <svg className="home-chart-ghost" viewBox="0 0 300 162" width="100%" height={homeChartHeight} style={{ display: 'block' }}>
-                    {/* Ghost polyline — realistic weight trend with natural variation */}
-                    <polyline
-                      className={`home-chart-ghost-path home-chart-ghost-path--${ghostChartPhase}`}
-                      points="30,118 55,124 80,110 105,115 130,100 155,88 175,92 200,75 225,68 250,58 275,45 292,38"
-                      fill="none"
-                      stroke="var(--blue)"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      pathLength="1"
-                      strokeDasharray="1"
-                      strokeDashoffset="1"
-                    />
-                  </svg>
-                  <div className={`home-chart-empty-label${ghostChartPhase === 'done' || (ghostChartHasPlayed && ghostChartPhase === 'idle') ? ' home-chart-empty-label--visible' : ''}`}>
+                  <div className="home-chart-ghost-frame" style={{ height: homeChartHeight }}>
+                    {ghostChartAnimating && (
+                      <div
+                        key={ghostChartRunId}
+                        className={`home-chart-ghost-mask home-chart-ghost-mask--${ghostChartPhase}`}
+                        onAnimationEnd={handleGhostChartAnimationEnd}
+                      >
+                        <svg className="home-chart-ghost" viewBox="0 0 300 162" width="100%" height="100%" style={{ display: 'block' }}>
+                          <polyline
+                            className="home-chart-ghost-path"
+                            points="30,118 55,124 80,110 105,115 130,100 155,88 175,92 200,75 225,68 250,58 275,45 292,38"
+                            fill="none"
+                            stroke="var(--blue)"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                  <div className={`home-chart-empty-label${showGhostChartEmptyLabel ? ' home-chart-empty-label--visible' : ''}`}>
                     <span>No weight history yet</span>
                     <span className="home-chart-empty-sublabel">Tap here or use the + button to add an entry</span>
                   </div>
@@ -1221,12 +1541,12 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
             variant="hybrid"
             visualLoading={!widgetAnimationReady}
             refreshKey={calendarRefreshKey}
-            onInitialLoadComplete={() => setCalendarInitialReady(true)}
             onDayClick={(sessionIds, dateStr) => setSelectedDay({ sessionIds, dateStr })}
           />
         </div>
       </div>
 
+    </div>
     </div>
     {burnGoalSheetOpen && createPortal(
       <div

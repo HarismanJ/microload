@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
+import LoadingSpinner from './LoadingSpinner'
 import { Capacitor } from '@capacitor/core'
 import { SocialLogin } from '@capgo/capacitor-social-login'
 import { supabase } from '../lib/supabase'
+import { markIntentionalLogout } from '../lib/purchases'
 import { VALIDATION_LIMITS, validateEmail, validatePassword } from '../lib/inputValidation'
 
 const GOOGLE_WEB_CLIENT_ID = '1052822933922-r7sa24t8buocnadn6emof98hp6dmndjo.apps.googleusercontent.com'
@@ -139,7 +141,11 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
         }
         const { error } = await supabase.auth.updateUser({ password })
         if (error) setError(error.message)
-        else { setMessage('Password updated. You can now sign in.'); onRecoveryDone?.() }
+        else {
+          localStorage.removeItem('microload:pendingRecovery')
+          setMessage('Password updated. You can now sign in.')
+          onRecoveryDone?.()
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
         if (error) setError(error.message)
@@ -208,7 +214,7 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
         {mode === 'reset' && (
           <div style={{ marginBottom: 20 }}>
             <button
-              onClick={() => supabase.auth.signOut()}
+              onClick={() => { markIntentionalLogout(); supabase.auth.signOut() }}
               style={{ background: 'none', border: 'none', color: 'var(--blue)', fontSize: 14, cursor: 'pointer', padding: 0 }}
             >
               ← Back to Sign In
@@ -342,7 +348,7 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
               opacity: loading ? 0.7 : 1, marginTop: 4
             }}
           >
-            {loading ? '...' : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'reset' ? 'Update Password' : 'Send Reset Link'}
+            {loading ? <LoadingSpinner size="xs" color="currentColor" /> : mode === 'signin' ? 'Sign In' : mode === 'signup' ? 'Create Account' : mode === 'reset' ? 'Update Password' : 'Send Reset Link'}
           </button>
         </form>
 

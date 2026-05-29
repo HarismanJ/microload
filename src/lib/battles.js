@@ -1,6 +1,6 @@
 import { supabase } from './supabase'
 import { calculateSetEstimatedOrm } from './orm'
-import { DEFAULT_BODYWEIGHT_KG, getSetVolumeKg, toKg } from './liftMath'
+import { DEFAULT_BODYWEIGHT_KG, getSetTrainingVolumeKg, getSetVolumeKg, toKg } from './liftMath'
 import { CARDIO_MET } from '../data/metValues'
 
 const BATTLE_HEAD_TO_HEAD_TABLE = 'battle_head_to_head'
@@ -9,8 +9,8 @@ const SCORE_TIE_SHARE_THRESHOLD = 0.025
 const MAX_BATTLE_HIGHLIGHTS = 8
 
 export const BATTLE_MODES = ['strength', 'hybrid', 'cardio']
-export const DEFAULT_BATTLE_MODE = 'hybrid'
-export const BATTLE_SCORE_TOTAL = 100
+const DEFAULT_BATTLE_MODE = 'hybrid'
+const BATTLE_SCORE_TOTAL = 100
 export const BATTLE_SCORING_VERSION = 'weighted_v1'
 export const BATTLE_SCORE_WEIGHTS = {
   strength: {
@@ -37,7 +37,7 @@ export const BATTLE_SCORE_WEIGHTS = {
   },
 }
 
-export function normalizeBattleMode(mode) {
+function normalizeBattleMode(mode) {
   return BATTLE_MODES.includes(mode) ? mode : DEFAULT_BATTLE_MODE
 }
 
@@ -52,9 +52,16 @@ async function fetchProfilesByIds(ids) {
   if (!ids.length) return {}
 
   const { data, error } = await supabase
-    .from('profiles')
-    .select('id, username, full_name, bodyweight, unit_preference')
-    .in('id', ids)
+    .rpc('get_public_profiles', { p_profile_ids: ids })
+
+  if (error) throw error
+
+  return Object.fromEntries((data ?? []).map(profile => [profile.id, profile]))
+}
+
+async function fetchBattleProfileInputs(roomId) {
+  const { data, error } = await supabase
+    .rpc('get_battle_profile_inputs', { p_room_id: roomId })
 
   if (error) throw error
 
@@ -175,6 +182,17 @@ function completionBreadthScore(stats) {
   return (Number(stats.totalSets) || 0) + (Number(stats.totalExercises) || 0)
 }
 
+function getBattleSetType(set) {
+  if (set?.is_warmup || set?.isWarmup || set?.setType === 'warmup' || set?.set_type === 'warmup') return 'warmup'
+  return set?.setType ?? set?.set_type ?? 'normal'
+}
+
+function isBattleWorkingSet(set) {
+  if (set?.category === 'Cardio' || set?.durationSeconds > 0) return true
+  const setType = getBattleSetType(set)
+  return setType !== 'warmup' && setType !== 'dropset'
+}
+
 function getModeWeights(mode) {
   return BATTLE_SCORE_WEIGHTS[normalizeBattleMode(mode)]
 }
@@ -209,7 +227,7 @@ export function buildBattleMetrics(mode, yourStats, opponentStats) {
     : null
 
   const common = {
-    strengthVolume: () => createMetric('strength_volume_bw', 'Strength Volume / BW', yourStrengthVolumeBw, opponentStrengthVolumeBw, 'x BW volume', { category: 'strength', weight: weights.strength_volume_bw }),
+    strengthVolume: () => createMetric('strength_volume_bw', 'Effective Volume / BW', yourStrengthVolumeBw, opponentStrengthVolumeBw, 'x BW effective volume', { category: 'strength', weight: weights.strength_volume_bw }),
     topSetStrength: () => createMetric('top_set_strength_bw', 'Top Set Strength / BW', yourTopSetBw, opponentTopSetBw, 'x BW strength', { category: 'strength', weight: weights.top_set_strength_bw, unavailableText: 'Needs completed strength sets from both lifters' }),
     matchedStrength: () => createMetric('shared_or_matched_strength_bw', 'Shared/Matched Top Set / BW', yourMatchedStrengthBw, opponentMatchedStrengthBw, 'x BW strength', { category: 'strength', weight: weights.shared_or_matched_strength_bw, unavailableText: 'Needs at least one shared or matching strength lift' }),
     strengthDensity: () => createMetric('strength_density', 'Strength Density', yourStrengthDensity, opponentStrengthDensity, 'x BW / min', { category: 'density', weight: weights.strength_density, unavailableText: 'Needs strength work and workout time from both lifters' }),
@@ -358,38 +376,6 @@ async function loadStoredHeadToHeadSummaries(userId, opponentIds) {
   return { rowsByOpponent, missingTable: false }
 }
 
-async function upsertHeadToHeadSummaries(userId, summariesByOpponent = {}) {
-  const payload = Object.entries(summariesByOpponent)
-    .filter(([opponentId]) => Boolean(opponentId))
-    .map(([opponentId, summary]) => ({
-      user_id: userId,
-      opponent_id: opponentId,
-      wins: Number(summary?.wins) || 0,
-      losses: Number(summary?.losses) || 0,
-      ties: Number(summary?.ties) || 0,
-      total: Number(summary?.total) || 0,
-      last_battle_at: summary?.lastBattleAt || null,
-      last_outcome: summary?.lastOutcome || null,
-    }))
-
-  if (!userId || payload.length === 0) {
-    return { missingTable: false }
-  }
-
-  const { error } = await supabase
-    .from(BATTLE_HEAD_TO_HEAD_TABLE)
-    .upsert(payload, { onConflict: 'user_id,opponent_id' })
-
-  if (error) {
-    if (isMissingBattleHeadToHeadTable(error)) {
-      return { missingTable: true }
-    }
-    throw error
-  }
-
-  return { missingTable: false }
-}
-
 async function findPendingBattleInviteBetween(userA, userB) {
   const { data, error } = await supabase
     .from('battle_invites')
@@ -478,109 +464,127 @@ export async function loadLatestDeclinedBattleInvite(userId) {
   }
 }
 
-async function loadHeadToHeadByOpponentLegacy(userId, opponentIds) {
-  if (!userId || !opponentIds?.length) return {}
-
-  const pairClauses = opponentIds.flatMap(opponentId => [
-    `and(challenger_id.eq.${userId},challenged_id.eq.${opponentId})`,
-    `and(challenger_id.eq.${opponentId},challenged_id.eq.${userId})`,
-  ])
-
-  const { data, error } = await supabase
-    .from('workout_rooms')
-    .select('id, challenger_id, challenged_id, finalized_at, ended_at, created_at, status')
-    .or(pairClauses.join(','))
-    .in('status', ['finished', 'cancelled'])
-    .not('finalized_at', 'is', null)
-    .order('finalized_at', { ascending: false })
-
-  if (error) throw error
-
-  const opponentIdSet = new Set(opponentIds)
-  const relevantRooms = (data ?? []).filter(room => {
-    const opponentId = room.challenger_id === userId ? room.challenged_id : room.challenger_id
-    return opponentIdSet.has(opponentId)
-  })
-
-  if (!relevantRooms.length) return {}
-
-  const recaps = await Promise.all(relevantRooms.map(async (room) => {
-    const recap = await loadBattleRecap(room.id, userId)
-    return { room, recap }
-  }))
-
-  const headToHead = {}
-
-  for (const { room, recap } of recaps) {
-    if (!recap || recap.status === 'waiting') continue
-
-    const opponentId = room.challenger_id === userId ? room.challenged_id : room.challenger_id
-    const existing = headToHead[opponentId] || {
-      wins: 0,
-      losses: 0,
-      ties: 0,
-      total: 0,
-      lastBattleAt: null,
-      lastOutcome: null,
-    }
-
-    existing.total += 1
-    if (recap.winner === 'you') existing.wins += 1
-    else if (recap.winner === 'opponent') existing.losses += 1
-    else existing.ties += 1
-
-    if (!existing.lastBattleAt) {
-      existing.lastBattleAt = room.finalized_at || room.ended_at || room.created_at || null
-      existing.lastOutcome = recap.winner === 'you'
-        ? 'win'
-        : recap.winner === 'opponent'
-          ? 'loss'
-          : 'tie'
-    }
-
-    headToHead[opponentId] = existing
-  }
-
-  return headToHead
-}
-
-async function rebuildHeadToHeadSummaries(userId, opponentIds) {
-  const uniqueOpponentIds = [...new Set((opponentIds || []).filter(Boolean))]
-  if (!userId || uniqueOpponentIds.length === 0) {
-    return { summaries: {}, missingTable: false }
-  }
-
-  const legacyHeadToHead = await loadHeadToHeadByOpponentLegacy(userId, uniqueOpponentIds)
-  const rebuilt = Object.fromEntries(
-    uniqueOpponentIds.map(opponentId => [
-      opponentId,
-      legacyHeadToHead[opponentId] || createEmptyHeadToHeadSummary(),
-    ])
-  )
-
-  const { missingTable } = await upsertHeadToHeadSummaries(userId, rebuilt)
-  return { summaries: rebuilt, missingTable }
-}
-
 export async function loadHeadToHeadByOpponent(userId, opponentIds) {
   const uniqueOpponentIds = [...new Set((opponentIds || []).filter(Boolean))]
   if (!userId || uniqueOpponentIds.length === 0) return {}
 
   const stored = await loadStoredHeadToHeadSummaries(userId, uniqueOpponentIds)
-  if (stored.missingTable) {
-    return loadHeadToHeadByOpponentLegacy(userId, uniqueOpponentIds)
-  }
+  return Object.fromEntries(
+    uniqueOpponentIds.map(opponentId => [
+      opponentId,
+      stored.rowsByOpponent[opponentId] || createEmptyHeadToHeadSummary(),
+    ])
+  )
+}
 
-  const missingOpponentIds = uniqueOpponentIds.filter(opponentId => !(opponentId in stored.rowsByOpponent))
-  if (!missingOpponentIds.length) {
-    return stored.rowsByOpponent
-  }
-
-  const { summaries: rebuilt } = await rebuildHeadToHeadSummaries(userId, missingOpponentIds)
+function sanitizeBattleResultStats(stats) {
+  if (!stats) return null
   return {
-    ...stored.rowsByOpponent,
-    ...rebuilt,
+    userId: stats.userId || null,
+    name: stats.name || null,
+    bodyweightKg: Number.isFinite(Number(stats.bodyweightKg)) ? Number(stats.bodyweightKg) : null,
+    totalSets: Number(stats.totalSets) || 0,
+    totalWorkingSets: Number(stats.totalWorkingSets) || 0,
+    totalDropSets: Number(stats.totalDropSets) || 0,
+    totalWarmupSets: Number(stats.totalWarmupSets) || 0,
+    totalExercises: Number(stats.totalExercises) || 0,
+    totalVolume: Number(stats.totalVolume) || 0,
+    totalVolumeKg: Number(stats.totalVolumeKg) || 0,
+    totalLoadVolume: Number(stats.totalLoadVolume) || 0,
+    totalLoadVolumeKg: Number(stats.totalLoadVolumeKg) || 0,
+    strengthVolumeKg: Number(stats.strengthVolumeKg) || 0,
+    cardioDurationSeconds: Number(stats.cardioDurationSeconds) || 0,
+    cardioMetMinutes: Number(stats.cardioMetMinutes) || 0,
+    unit: stats.unit || 'kg',
+    durationSeconds: Number.isFinite(Number(stats.durationSeconds)) ? Number(stats.durationSeconds) : null,
+    finished: Boolean(stats.finished),
+    cancelled: Boolean(stats.cancelled),
+    stale: Boolean(stats.stale),
   }
+}
+
+function sanitizeBattleResultMetric(metric) {
+  return {
+    id: String(metric?.id || '').slice(0, 80),
+    label: String(metric?.label || '').slice(0, 120),
+    category: String(metric?.category || 'general').slice(0, 40),
+    display: String(metric?.display || '').slice(0, 80),
+    weight: Number(metric?.weight) || 0,
+    effectiveWeight: Number(metric?.effectiveWeight) || 0,
+    yourValue: metric?.yourValue === null ? null : Number(metric?.yourValue) || 0,
+    opponentValue: metric?.opponentValue === null ? null : Number(metric?.opponentValue) || 0,
+    yourScore: Number(metric?.yourScore) || 0,
+    opponentScore: Number(metric?.opponentScore) || 0,
+    winner: metric?.winner || null,
+    available: Boolean(metric?.available),
+  }
+}
+
+function buildBattleResultRecapPayload(recap) {
+  return {
+    roomId: recap.roomId,
+    challengerId: recap.challengerId,
+    challengedId: recap.challengedId,
+    status: recap.status,
+    winner: recap.winner,
+    verdict: recap.verdict,
+    points: recap.points || null,
+    scoreTotal: recap.scoreTotal,
+    scoringVersion: recap.scoringVersion,
+    battleMode: recap.battleMode,
+    battleModeLabel: recap.battleModeLabel,
+    sharedExerciseCount: Number(recap.sharedExerciseCount) || 0,
+    bodyweightFallbackUsed: Boolean(recap.bodyweightFallbackUsed),
+    metrics: (recap.metrics || []).map(sanitizeBattleResultMetric),
+    yourStats: sanitizeBattleResultStats(recap.yourStats),
+    opponentStats: sanitizeBattleResultStats(recap.opponentStats),
+    yourHighlights: sanitizeBattleHighlights(recap.yourHighlights),
+    opponentHighlights: sanitizeBattleHighlights(recap.opponentHighlights),
+  }
+}
+
+export async function recordBattleResultAtomic(recap) {
+  if (!recap || !recap.roomId) return null
+  if (recap.status === 'waiting') {
+    return {
+      room_id: recap.roomId,
+      status: 'waiting',
+      outcome: null,
+      winner_id: null,
+      finalized_at: null,
+      inserted: false,
+    }
+  }
+
+  const yourUserId = recap.yourStats?.userId
+  const opponentUserId = recap.opponentStats?.userId
+  const challengerId = recap.challengerId
+  const winnerId = recap.winner === 'you'
+    ? yourUserId
+    : recap.winner === 'opponent'
+      ? opponentUserId
+      : null
+  const youAreChallenger = challengerId === yourUserId
+  const isFinished = recap.status === 'finished'
+  const challengerPoints = isFinished
+    ? (youAreChallenger ? recap.points?.you : recap.points?.opponent)
+    : null
+  const challengedPoints = isFinished
+    ? (youAreChallenger ? recap.points?.opponent : recap.points?.you)
+    : null
+
+  const { data, error } = await supabase.rpc('record_battle_result_atomic', {
+    p_room_id: recap.roomId,
+    p_winner_id: winnerId,
+    p_challenger_points: challengerPoints,
+    p_challenged_points: challengedPoints,
+    p_score_total: recap.scoreTotal || BATTLE_SCORE_TOTAL,
+    p_scoring_version: recap.scoringVersion || BATTLE_SCORING_VERSION,
+    p_recap: buildBattleResultRecapPayload(recap),
+  })
+
+  if (error) throw error
+  return data?.[0] ?? null
 }
 
 export async function loadActiveBattleRoom(userId) {
@@ -639,8 +643,11 @@ export async function loadUnseenBattleResult(userId) {
   const room = data?.[0]
   if (!room) return null
 
-  await syncHeadToHeadSummaryForRoom(room.id, userId)
-  return loadBattleRecap(room.id, userId)
+  const recap = await loadBattleRecap(room.id, userId)
+  if (recap && recap.status !== 'waiting') {
+    await recordBattleResultAtomic(recap)
+  }
+  return recap
 }
 
 export async function markBattleResultSeen(roomId, userId) {
@@ -671,44 +678,15 @@ export async function markBattleResultSeen(roomId, userId) {
 }
 
 export async function respondToBattleInvite(invite, action) {
-  if (action === 'declined') {
-    const { error } = await supabase
-      .from('battle_invites')
-      .update({
-        status: 'declined',
-        responded_at: new Date().toISOString(),
-      })
-      .eq('id', invite.id)
-
-    if (error) throw error
-    return null
-  }
-
-  const { data: room, error: roomError } = await supabase
-    .from('workout_rooms')
-    .insert({
-      invite_id: invite.id,
-      challenger_id: invite.challenger_id,
-      challenged_id: invite.challenged_id,
-      battle_mode: normalizeBattleMode(invite.battle_mode),
-    })
-    .select('id, invite_id, challenger_id, challenged_id, status, battle_mode, created_at, ended_at')
-    .single()
-
-  if (roomError) throw roomError
-
-  const { error: inviteError } = await supabase
-    .from('battle_invites')
-    .update({
-      status: 'accepted',
-      responded_at: new Date().toISOString(),
-      room_id: room.id,
-    })
-    .eq('id', invite.id)
-
-  if (inviteError) throw inviteError
-
-  return room
+  // Both the room insert and the invite update happen inside a single
+  // PostgreSQL transaction via the RPC, preventing phantom battle rooms
+  // from a partial failure between the two old client-side calls.
+  const { data: room, error } = await supabase.rpc('respond_to_battle_invite_atomic', {
+    p_invite_id: invite.id,
+    p_action: action,
+  })
+  if (error) throw new Error(error.message || 'Could not respond to battle invite.')
+  return room ?? null
 }
 
 export async function publishWorkoutRoomEvent(roomId, userId, eventType, payload = {}) {
@@ -724,20 +702,8 @@ export async function publishWorkoutRoomEvent(roomId, userId, eventType, payload
   if (error) throw error
 }
 
-export async function loadLatestOpponentEvent(roomId, userId) {
-  const { data, error } = await supabase
-    .from('workout_room_events')
-    .select('id, room_id, user_id, event_type, payload, created_at')
-    .eq('room_id', roomId)
-    .neq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
 
-  if (error) throw error
-  return data?.[0] ?? null
-}
-
-export async function loadOpponentEvents(roomId, userId, limit = 100) {
+export async function loadOpponentEvents(roomId, userId, limit = 250) {
   const { data, error } = await supabase
     .from('workout_room_events')
     .select('id, room_id, user_id, event_type, payload, created_at')
@@ -748,98 +714,6 @@ export async function loadOpponentEvents(roomId, userId, limit = 100) {
 
   if (error) throw error
   return data ?? []
-}
-
-export async function resolveWorkoutRoomIfComplete(roomId, userId = null) {
-  const { data, error } = await supabase
-    .from('workout_room_events')
-    .select('user_id, event_type, created_at')
-    .eq('room_id', roomId)
-    .order('created_at', { ascending: false })
-    .limit(20)
-
-  if (error) throw error
-
-  const latestByUser = new Map()
-  for (const row of data ?? []) {
-    if (!latestByUser.has(row.user_id)) latestByUser.set(row.user_id, row.event_type)
-  }
-
-  if ([...latestByUser.values()].some(type => type === 'workout_stale')) {
-    const { error: updateError } = await supabase
-      .from('workout_rooms')
-      .update({
-        status: 'cancelled',
-        ended_at: new Date().toISOString(),
-        finalized_at: new Date().toISOString(),
-      })
-      .eq('id', roomId)
-
-    if (updateError) throw updateError
-    if (userId) await syncHeadToHeadSummaryForRoom(roomId, userId)
-    return true
-  }
-
-  if ([...latestByUser.values()].some(type => type === 'workout_cancelled')) {
-    const { error: updateError } = await supabase
-      .from('workout_rooms')
-      .update({
-        status: 'cancelled',
-        ended_at: new Date().toISOString(),
-        finalized_at: new Date().toISOString(),
-      })
-      .eq('id', roomId)
-
-    if (updateError) throw updateError
-    if (userId) await syncHeadToHeadSummaryForRoom(roomId, userId)
-    return true
-  }
-
-  if (
-    latestByUser.size >= 2
-    && [...latestByUser.values()].every(type => type === 'workout_finished' || type === 'workout_cancelled')
-  ) {
-    const { error: updateError } = await supabase
-      .from('workout_rooms')
-      .update({
-        status: 'finished',
-        ended_at: new Date().toISOString(),
-        finalized_at: new Date().toISOString(),
-      })
-      .eq('id', roomId)
-
-    if (updateError) throw updateError
-    if (userId) await syncHeadToHeadSummaryForRoom(roomId, userId)
-    return true
-  }
-
-  return false
-}
-
-export async function syncHeadToHeadSummaryForRoom(roomId, userId) {
-  if (!roomId || !userId) return { missingTable: false }
-
-  const { data: room, error } = await supabase
-    .from('workout_rooms')
-    .select('challenger_id, challenged_id, status')
-    .eq('id', roomId)
-    .single()
-
-  if (error) throw error
-  if (!room || (room.status !== 'finished' && room.status !== 'cancelled')) {
-    return { missingTable: false }
-  }
-
-  const opponentId = room.challenger_id === userId
-    ? room.challenged_id
-    : room.challenged_id === userId
-      ? room.challenger_id
-      : null
-
-  if (!opponentId) return { missingTable: false }
-
-  const { missingTable } = await rebuildHeadToHeadSummaries(userId, [opponentId])
-  return { missingTable }
 }
 
 export async function loadBattleRecap(roomId, userId) {
@@ -862,7 +736,7 @@ export async function loadBattleRecap(roomId, userId) {
 
   const battleMode = normalizeBattleMode(room.battle_mode)
   const opponentId = room.challenger_id === userId ? room.challenged_id : room.challenger_id
-  const profilesById = await fetchProfilesByIds([userId, opponentId])
+  const profilesById = await fetchBattleProfileInputs(roomId)
   const bodyweightsById = resolveBattleBodyweights(profilesById, userId, opponentId)
   const exerciseIds = [...new Set((events ?? [])
     .filter(event => event.event_type === 'set_completed')
@@ -880,9 +754,14 @@ export async function loadBattleRecap(roomId, userId) {
     name: profilesById[id]?.full_name || profilesById[id]?.username || 'Unknown lifter',
     bodyweightKg: bodyweightsById[id],
     totalSets: 0,
+    totalWorkingSets: 0,
+    totalDropSets: 0,
+    totalWarmupSets: 0,
     totalExercises: 0,
     totalVolume: 0,
     totalVolumeKg: 0,
+    totalLoadVolume: 0,
+    totalLoadVolumeKg: 0,
     strengthVolumeKg: 0,
     cardioDurationSeconds: 0,
     cardioMetMinutes: 0,
@@ -938,6 +817,8 @@ export async function loadBattleRecap(roomId, userId) {
           durationSeconds: Number.isFinite(durationSeconds) ? Math.max(0, durationSeconds) : 0,
           met: Number(payload.met) || CARDIO_MET[exerciseName] || FALLBACK_CARDIO_MET,
           isBodyweight: payload.equipment === 'Bodyweight' || exerciseMeta?.equipment === 'Bodyweight',
+          setType: getBattleSetType(payload),
+          is_warmup: Boolean(payload.is_warmup || payload.isWarmup),
         })
       } else {
         stats.setLedger.delete(ledgerKey)
@@ -947,8 +828,13 @@ export async function loadBattleRecap(roomId, userId) {
     if (event.event_type === 'workout_finished') {
       stats.finished = true
       stats.totalSets = payload.totalSets ?? stats.totalSets
+      stats.totalWorkingSets = payload.totalWorkingSets ?? payload.totalSets ?? stats.totalWorkingSets
+      stats.totalDropSets = payload.totalDropSets ?? stats.totalDropSets
+      stats.totalWarmupSets = payload.totalWarmupSets ?? stats.totalWarmupSets
       stats.totalVolume = payload.totalVolume ?? stats.totalVolume
       stats.totalVolumeKg = payload.totalVolumeKg ?? toKg(payload.totalVolume ?? stats.totalVolume, payload.unit || stats.unit || 'kg')
+      stats.totalLoadVolume = payload.totalLoadVolume ?? payload.totalLoadMoved ?? stats.totalLoadVolume
+      stats.totalLoadVolumeKg = payload.totalLoadVolumeKg ?? toKg(payload.totalLoadVolume ?? stats.totalLoadVolume, payload.unit || stats.unit || 'kg')
       stats.unit = payload.unit || stats.unit || 'kg'
       stats.durationSeconds = payload.durationSeconds ?? stats.durationSeconds
       stats.highlights = sanitizeBattleHighlights(payload.highlights)
@@ -970,9 +856,14 @@ export async function loadBattleRecap(roomId, userId) {
   }
 
   for (const stats of statsByUser.values()) {
-    stats.totalSets = stats.setLedger.size
+    stats.totalSets = 0
+    stats.totalWorkingSets = 0
+    stats.totalDropSets = 0
+    stats.totalWarmupSets = 0
     stats.totalVolume = 0
     stats.totalVolumeKg = 0
+    stats.totalLoadVolume = 0
+    stats.totalLoadVolumeKg = 0
     stats.strengthVolumeKg = 0
     stats.cardioDurationSeconds = 0
     stats.cardioMetMinutes = 0
@@ -980,21 +871,38 @@ export async function loadBattleRecap(roomId, userId) {
 
     for (const setEntry of stats.setLedger.values()) {
       if (setEntry.category === 'Cardio' || setEntry.durationSeconds > 0) {
+        stats.totalSets += 1
+        stats.totalWorkingSets += 1
         stats.cardioDurationSeconds += setEntry.durationSeconds
         stats.cardioMetMinutes += (setEntry.met || FALLBACK_CARDIO_MET) * (setEntry.durationSeconds / 60)
         continue
       }
 
-      const setVolumeKg = getSetVolumeKg({
+      const setType = getBattleSetType(setEntry)
+      if (setType === 'dropset') stats.totalDropSets += 1
+      if (setType === 'warmup') stats.totalWarmupSets += 1
+      if (isBattleWorkingSet(setEntry)) {
+        stats.totalSets += 1
+        stats.totalWorkingSets += 1
+      }
+
+      const volumeInput = {
         weight: setEntry.weight,
         reps: setEntry.reps,
         unit: setEntry.unit,
         equipment: setEntry.isBodyweight ? 'Bodyweight' : null,
         bodyweightKg: stats.bodyweightKg,
-      })
-      const setVolume = setEntry.unit === 'lbs'
-        ? setVolumeKg * 2.20462
-        : setVolumeKg
+        setType,
+        is_warmup: setEntry.is_warmup,
+      }
+      const setLoadVolumeKg = getSetVolumeKg(volumeInput)
+      const setTrainingVolumeKg = getSetTrainingVolumeKg(volumeInput)
+      const setLoadVolume = setEntry.unit === 'lbs'
+        ? setLoadVolumeKg * 2.20462
+        : setLoadVolumeKg
+      const setTrainingVolume = setEntry.unit === 'lbs'
+        ? setTrainingVolumeKg * 2.20462
+        : setTrainingVolumeKg
       const orm = calculateSetEstimatedOrm({
         weight: setEntry.weight,
         reps: setEntry.reps,
@@ -1004,9 +912,11 @@ export async function loadBattleRecap(roomId, userId) {
       })
       const ormKg = orm === null ? 0 : toKg(orm, setEntry.unit)
 
-      stats.totalVolume += setVolume
-      stats.totalVolumeKg += setVolumeKg
-      stats.strengthVolumeKg += setVolumeKg
+      stats.totalVolume += setTrainingVolume
+      stats.totalVolumeKg += setTrainingVolumeKg
+      stats.totalLoadVolume += setLoadVolume
+      stats.totalLoadVolumeKg += setLoadVolumeKg
+      stats.strengthVolumeKg += setTrainingVolumeKg
 
       const prior = stats.exerciseStats.get(setEntry.exerciseId) || {
         id: setEntry.exerciseId,
@@ -1022,8 +932,8 @@ export async function loadBattleRecap(roomId, userId) {
         name: setEntry.exerciseName,
         category: setEntry.category,
         isBodyweight: setEntry.isBodyweight,
-        volumeKg: prior.volumeKg + setVolumeKg,
-        bestOrmKg: Math.max(prior.bestOrmKg, ormKg),
+        volumeKg: prior.volumeKg + setTrainingVolumeKg,
+        bestOrmKg: isBattleWorkingSet(setEntry) ? Math.max(prior.bestOrmKg, ormKg) : prior.bestOrmKg,
       })
     }
 
@@ -1080,6 +990,8 @@ export async function loadBattleRecap(roomId, userId) {
 
   return {
     roomId,
+    challengerId: room.challenger_id,
+    challengedId: room.challenged_id,
     battleMode,
     battleModeLabel: getBattleModeLabel(battleMode),
     created_at: room.created_at,

@@ -32,6 +32,24 @@ function getFriendlyFriendsError(err, fallback) {
   return message || fallback
 }
 
+function getRateLimitMessage(err) {
+  if (err?.code !== 'P0001') return null
+  const match = /Rate limit exceeded for (\S+)/i.exec(err.message || '')
+  if (!match) return null
+  switch (match[1]) {
+    case 'friend_request':
+      return 'You\'ve sent a lot of friend requests recently. Please wait a bit before sending more.'
+    case 'friend_request_to_user':
+      return 'You\'ve sent several requests to this user recently. Try a different friend or wait a bit.'
+    case 'battle_invite':
+      return 'You\'ve sent a lot of battle invites recently. Please wait a bit before sending more.'
+    case 'battle_invite_to_user':
+      return 'You\'ve challenged this friend a lot recently. Wait a bit before inviting them again.'
+    default:
+      return 'You\'re doing that a bit too fast. Please wait a moment and try again.'
+  }
+}
+
 export default function FriendsSection({ userId, username, profileLoaded = false, onChallenge, onViewProfile, workoutActive = false }) {
   const [overview, setOverview] = useState({ incoming: [], outgoing: [], friends: [], all: [] })
   const [headToHead, setHeadToHead] = useState({})
@@ -268,7 +286,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
       setSearchError('')
 
       try {
-        const results = await searchFriendProfiles(term, userId)
+        const results = await searchFriendProfiles(term)
         if (!cancelled) {
           setSearchResults(results.filter(profile => !relationByUserId.has(profile.id)))
         }
@@ -309,9 +327,11 @@ export default function FriendsSection({ userId, username, profileLoaded = false
           : `Friend request sent to ${getDisplayName(profile)}. Your list will refresh when the connection settles.`
       )
     } catch (err) {
-      const message = err.code === '23505'
-        ? 'You already have a pending request or friendship with that user.'
-        : getFriendlyFriendsError(err, 'Could not send that friend request.')
+      const rateLimitMessage = getRateLimitMessage(err)
+      const message = rateLimitMessage
+        ?? (err.code === '23505'
+          ? 'You already have a pending request or friendship with that user.'
+          : getFriendlyFriendsError(err, 'Could not send that friend request.'))
       setSearchError(message)
     } finally {
       setActionKey('')
@@ -373,11 +393,13 @@ export default function FriendsSection({ userId, username, profileLoaded = false
       }
       setBattleModeFriendship(null)
     } catch (err) {
-      const message = err.code === '23505'
-        ? 'You already have a pending battle invite with that friend.'
-        : err.code === 'missing_username'
-          ? 'Both friends need usernames before a battle can start.'
-        : getFriendlyFriendsError(err, 'Could not send that battle invite.')
+      const rateLimitMessage = getRateLimitMessage(err)
+      const message = rateLimitMessage
+        ?? (err.code === '23505'
+          ? 'You already have a pending battle invite with that friend.'
+          : err.code === 'missing_username'
+            ? 'Both friends need usernames before a battle can start.'
+          : getFriendlyFriendsError(err, 'Could not send that battle invite.'))
       setError(message)
     } finally {
       setActionKey('')

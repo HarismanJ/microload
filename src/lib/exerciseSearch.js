@@ -104,6 +104,14 @@ export function scoreExerciseMatch(query, exercise) {
   if (name === q) return 100
   if (name.startsWith(q)) return 90
   if (name.includes(q)) return 80
+
+  // Compact comparison: treat spaces as absent so "pullups" matches "Pull Ups"
+  // These slots sit above the all-token tier but below the literal checks above.
+  const compactName = name.replace(/\s+/g, '')
+  const compactQ = q.replace(/\s+/g, '')
+  if (compactName === compactQ) return 98
+  if (compactName.startsWith(compactQ) || compactQ.startsWith(compactName)) return 88
+
   if (tokens.every(token => name.includes(token))) return 70
 
   const exactNameHits = tokens.filter(token => name.includes(token)).length

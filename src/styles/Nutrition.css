@@ -70,13 +70,6 @@
   color: var(--text);
 }
 
-.nut-loading {
-  color: var(--muted);
-  text-align: center;
-  padding: 40px 0;
-  font-size: 14px;
-}
-
 /* ── Summary card ─────────────────────────────────────────────── */
 .nut-summary {
   background: var(--surface);
@@ -86,6 +79,7 @@
   display: flex;
   align-items: center;
   gap: 20px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -208,165 +202,57 @@
   margin-top: 1px;
 }
 
-/* ── Meal sections ───────────────────────────────────────────── */
-.nut-meal-section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  overflow: hidden;
-  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
+/* ── Summary loading state ───────────────────────────────────── */
+@keyframes nut-bar-loading {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
 }
 
-.nut-meal-section:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
-  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
+.nut-summary--loading {
+  pointer-events: none;
 }
 
-.nut-meal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 13px 16px;
+.nut-summary--loading .nut-macro-track {
+  position: relative;
 }
 
-.nut-meal-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 0;
+.nut-summary--loading .nut-macro-track::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 38%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--blue) 38%, rgba(255, 255, 255, 0.14)),
+    transparent
+  );
+  border-radius: 99px;
+  animation: nut-bar-loading 1.5s ease-in-out infinite;
 }
 
-.nut-meal-icon { font-size: 16px; }
-
-.nut-meal-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.nut-summary--loading .nut-macro-track .nut-macro-fill {
+  opacity: 0;
 }
 
-.nut-meal-cals {
-  font-size: 12px;
-  color: var(--muted);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.nut-summary--loading .nut-ring-cal,
+.nut-summary--loading .nut-macro-val,
+.nut-summary--loading .nut-remaining {
+  color: transparent;
+  background: color-mix(in srgb, var(--surface2) 82%, white 6%);
+  border-radius: 5px;
+  user-select: none;
 }
 
-.nut-add-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--blue-dim);
-  border: 1px solid rgba(59,158,255,0.3);
-  color: var(--blue);
-  font-size: 22px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease;
+.nut-summary--loading .nut-ring-wrap {
+  opacity: 0.5;
 }
 
-.nut-add-btn:hover {
-  background: rgba(59,158,255,0.22);
-  transform: translateY(-1px);
-  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.12);
-}
-.nut-add-btn:active { transform: scale(0.90); box-shadow: none; }
-
-.nut-food-list { border-top: 1px solid var(--border); }
-
-.nut-food-item {
-  display: flex;
-  align-items: center;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border);
-  gap: 10px;
-  transition: background 0.26s ease;
-}
-
-.nut-food-item:last-child { border-bottom: none; }
-
-.nut-food-item:hover {
-  background: color-mix(in srgb, var(--surface2) 82%, white 18%);
-}
-.nut-food-item:active { background: color-mix(in srgb, var(--blue) 8%, var(--surface2)); }
-
-.nut-food-info { flex: 1; min-width: 0; }
-
-.nut-food-name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.nut-food-macros {
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 2px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nut-food-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  min-width: 0;
-  max-width: 42%;
-}
-
-.nut-food-cals {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nut-remove-btn {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
-  background: none;
-  border: none;
-  color: var(--muted);
-  font-size: 20px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 1;
-  transition: transform 0.26s ease, color 0.26s ease, background 0.26s ease;
-}
-
-.nut-remove-btn:hover {
-  color: #ef4444;
-  transform: scale(1.08);
-  background: rgba(239, 68, 68, 0.08);
-}
-.nut-remove-btn:active { transform: scale(0.88); color: #ef4444; }
-
-.nut-meal-empty {
-  padding: 10px 16px 13px;
-  font-size: 12px;
-  color: var(--muted);
-  border-top: 1px solid var(--border);
+@media (prefers-reduced-motion: reduce) {
+  .nut-summary--loading .nut-macro-track::after {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 /* ── Unified food feed ───────────────────────────────────────── */
@@ -378,6 +264,7 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -433,10 +320,6 @@
   opacity: 0.94;
 }
 .nut-feed-add-btn:active { transform: scale(0.96); box-shadow: none; opacity: 1; }
-
-.nut-feed-add-btn-inline {
-  align-self: flex-start;
-}
 
 .nut-feed-filters {
   display: flex;
@@ -521,6 +404,15 @@
   gap: 12px;
 }
 
+.nut-feed-list-animated {
+  animation: nut-list-appear 0.2s ease both;
+}
+
+@keyframes nut-list-appear {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 .nut-feed-list-animated .nut-feed-item {
   opacity: 0;
   transform: translateY(10px) scale(0.985);
@@ -570,6 +462,7 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  box-shadow: var(--shadow-card);
   transition: transform 0.26s ease, border-color 0.26s ease, box-shadow 0.26s ease, background 0.26s ease;
 }
 
@@ -716,10 +609,39 @@
   background: color-mix(in srgb, var(--surface2) 74%, white 26%);
   border: 1px dashed color-mix(in srgb, var(--blue) 18%, var(--border));
   border-radius: 18px;
-  padding: 18px;
+  padding: 24px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.nut-empty-demo-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.nut-empty-cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: var(--blue);
+  animation: nut-cursor-blink 0.8s step-end infinite;
+}
+
+@keyframes nut-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nut-empty-cursor { animation: none; }
 }
 
 .nut-feed-empty-title {
@@ -770,6 +692,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  margin-bottom: 4px;
 }
 
 .nut-create-food-btn {
@@ -894,6 +817,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -987,6 +911,7 @@
   flex-direction: column;
   align-items: center;
   gap: 16px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -1055,6 +980,7 @@
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 16px 20px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -1198,6 +1124,7 @@
   padding: 16px 20px 20px;
   opacity: 0;
   transform: translateY(-8px);
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease, opacity 0.32s ease;
 }
 
@@ -1271,98 +1198,6 @@
   color: var(--muted);
 }
 
-/* ── Micronutrients summary ──────────────────────────────────── */
-.nut-micros-summary {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  overflow: hidden;
-  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
-}
-
-.nut-micros-summary:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
-  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
-}
-
-.nut-micros-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 13px 16px;
-  background: none;
-  border: none;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.26s ease, transform 0.26s ease;
-  min-width: 0;
-}
-
-.nut-micros-toggle:hover {
-  background: color-mix(in srgb, var(--surface) 88%, white 12%);
-  transform: translateY(-1px);
-}
-
-.nut-micros-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  border-top: 1px solid var(--border);
-  padding: 4px 16px 12px;
-}
-
-.nut-micro-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.nut-micro-item:last-child { border-bottom: none; }
-
-.nut-micro-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.nut-micro-label {
-  font-size: 12px;
-  color: var(--muted);
-  font-weight: 500;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nut-micro-val {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text);
-  min-width: 0;
-  max-width: 58%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
-
-.nut-micro-goal {
-  font-weight: 400;
-  color: var(--muted);
-}
-
 .nut-micro-track {
   height: 4px;
   background: rgba(255,255,255,0.16);
@@ -1392,6 +1227,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -1815,6 +1651,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -1917,274 +1754,6 @@
 .nut-goals-save:disabled { opacity: 0.6; cursor: not-allowed; }
 .nut-goals-save:hover:not(:disabled) { opacity: 0.85; }
 .nut-goals-save:not(:disabled):active { transform: scale(0.97); }
-
-/* ── AI button in picker header ──────────────────────── */
-
-.nut-ai-btn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(59,158,255,0.15));
-  border: 1px solid rgba(168,85,247,0.4);
-  border-radius: 8px;
-  color: #c084fc;
-  font-size: 12px;
-  font-weight: 700;
-  padding: 0 10px;
-  height: 32px;
-  cursor: pointer;
-  transition: background 0.32s, border-color 0.32s;
-  letter-spacing: 0.3px;
-}
-
-.nut-ai-btn:hover {
-  background: linear-gradient(135deg, rgba(168,85,247,0.25), rgba(59,158,255,0.25));
-  border-color: rgba(168,85,247,0.7);
-}
-
-/* ── AI Food Entry screen ────────────────────────────── */
-
-.ai-entry-subtitle {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 1px;
-}
-
-.ai-entry-badge {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #60a5fa;
-  background: linear-gradient(135deg, rgba(59,158,255,0.12), rgba(34,197,94,0.12));
-  border: 1px solid rgba(59,158,255,0.3);
-  border-radius: 8px;
-  padding: 4px 8px;
-  margin-left: auto;
-}
-
-.ai-entry-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-top: 4px;
-}
-
-.ai-entry-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-}
-
-.ai-entry-textarea {
-  width: 100%;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--text);
-  font-size: 15px;
-  font-family: inherit;
-  padding: 12px 14px;
-  outline: none;
-  resize: none;
-  line-height: 1.5;
-  transition: border-color 0.32s;
-}
-
-.ai-entry-textarea:focus {
-  border-color: #a855f7;
-}
-
-.ai-entry-textarea:disabled {
-  opacity: 0.6;
-}
-
-.ai-entry-examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.ai-entry-example-chip {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  color: var(--muted);
-  font-size: 11px;
-  padding: 4px 10px;
-  cursor: pointer;
-  transition: background 0.32s, color 0.32s, border-color 0.32s;
-  white-space: nowrap;
-}
-
-.ai-entry-example-chip:hover:not(:disabled) {
-  background: var(--surface);
-  color: var(--text);
-  border-color: rgba(168,85,247,0.4);
-  transform: translateY(-1px);
-}
-
-.ai-entry-example-chip:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.ai-entry-error {
-  font-size: 13px;
-  color: #ef4444;
-  background: rgba(239,68,68,0.08);
-  border: 1px solid rgba(239,68,68,0.2);
-  border-radius: 10px;
-  padding: 10px 12px;
-}
-
-.ai-entry-analyze-btn {
-  width: 100%;
-  background: linear-gradient(135deg, #a855f7, #3b9eff);
-  border: none;
-  border-radius: 14px;
-  color: white;
-  font-size: 15px;
-  font-weight: 600;
-  padding: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  transition: opacity 0.26s ease, transform 0.26s ease, box-shadow 0.26s ease;
-}
-
-.ai-entry-analyze-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.ai-entry-analyze-btn:hover:not(:disabled) {
-  opacity: 0.94;
-  transform: translateY(-1px);
-  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.16);
-}
-
-.ai-entry-thinking {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.ai-entry-thinking-dots {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.ai-entry-thinking-dots span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.3);
-  transition: background 0.4s;
-}
-
-.ai-entry-thinking-dots span.lit {
-  background: white;
-}
-
-.ai-entry-disclaimer {
-  font-size: 11px;
-  color: var(--muted);
-  text-align: center;
-  padding-bottom: 4px;
-}
-
-/* ── Usage pips ──────────────────────────────────────── */
-
-.ai-usage-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.ai-usage-pip {
-  width: 28px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  transition: background 0.4s;
-}
-
-.ai-usage-pip.used {
-  background: #a855f7;
-  border-color: #a855f7;
-}
-
-.ai-usage-label {
-  font-size: 11px;
-  color: var(--muted);
-  margin-left: 2px;
-}
-
-/* ── Limit reached card ──────────────────────────────── */
-
-.ai-limit-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 28px 20px;
-  text-align: center;
-  margin-top: 8px;
-  transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease;
-}
-
-.ai-limit-card:hover {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
-  box-shadow: 0 14px 26px rgba(0, 0, 0, 0.15);
-}
-
-.ai-limit-icon {
-  color: var(--muted);
-  opacity: 0.6;
-}
-
-.ai-limit-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.ai-limit-sub {
-  font-size: 13px;
-  color: var(--muted);
-  line-height: 1.5;
-  max-width: 260px;
-}
-
-.ai-limit-back-btn {
-  margin-top: 6px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--blue);
-  font-size: 14px;
-  font-weight: 600;
-  padding: 11px 20px;
-  cursor: pointer;
-  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease;
-}
-
-.ai-limit-back-btn:hover {
-  background: var(--blue-dim);
-  transform: translateY(-1px);
-}
 
 /* ── Scan barcode banner ───────────────────────────────────────── */
 .nut-scan-banner {
@@ -2396,11 +1965,48 @@
   color: #ffd632;
 }
 
+.bs-retry-scan-btn {
+  width: 100%;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--blue) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--border));
+  border-radius: 12px;
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 11px 14px;
+  cursor: pointer;
+  transition: transform 0.22s ease, border-color 0.22s ease, background 0.22s ease;
+}
+
+.bs-retry-scan-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--blue) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--border));
+}
+
+.bs-retry-scan-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.bs-retry-scan-btn + .bs-manual {
+  margin-top: 6px;
+}
+
 .bs-manual {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 0 4px;
+}
+
+.bs-manual + .cf-section {
+  margin-top: 12px;
 }
 
 .bs-manual-label {
@@ -2482,6 +2088,10 @@
   border-radius: 10px;
   padding: 8px 12px;
   margin-bottom: 4px;
+}
+
+.bs-not-found-note + .nut-add-to-log-btn {
+  margin-top: 8px;
 }
 
 .bs-verify-note {
@@ -2662,10 +2272,6 @@
   .nut-feed-card,
   .nut-feed-remove-btn,
   .nut-feed-add-btn,
-  .nut-meal-section,
-  .nut-add-btn,
-  .nut-food-item,
-  .nut-remove-btn,
   .nut-create-food-btn,
   .nut-search-item,
   .nut-serving-card,
@@ -2674,17 +2280,12 @@
   .nut-detail-edit-btn,
   .nut-add-to-log-btn,
   .nut-detail-card,
-  .nut-micros-summary,
-  .nut-micros-toggle,
   .cf-section,
   .cf-toggle-micros,
   .nut-goals-btn,
   .nut-goals-cancel,
   .nut-goals-save,
   .nut-goals-panel,
-  .ai-entry-analyze-btn,
-  .ai-limit-card,
-  .ai-limit-back-btn,
   .nut-scan-banner,
   .nut-expand-chevron,
   .nut-detail-wrap,
@@ -2699,4 +2300,79 @@
     opacity: 1;
     transform: none;
   }
+}
+
+/* ─── Nutrition feed skeleton ────────────────────────────────────────────── */
+@keyframes nut-skeleton-shimmer {
+  0%   { transform: translateX(-125%); }
+  100% { transform: translateX(125%); }
+}
+
+.nut-skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface2) 82%, white 6%);
+}
+.nut-skeleton-block::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    color-mix(in srgb, var(--blue) 22%, white 18%) 48%,
+    transparent 100%
+  );
+  transform: translateX(-125%);
+  animation: nut-skeleton-shimmer 1.45s ease-in-out infinite;
+  animation-delay: calc(var(--feed-index, 0) * 80ms);
+}
+
+.nut-skeleton-dot {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface2) 82%, white 6%);
+  flex-shrink: 0;
+  z-index: 1;
+}
+.nut-skeleton-line {
+  position: absolute;
+  top: 22px;
+  bottom: -12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface2) 82%, white 6%);
+}
+
+.nut-skeleton-food-name { width: 55%;  height: 14px; margin-bottom: 6px; }
+.nut-skeleton-meta      { width: 38%;  height: 11px; }
+.nut-skeleton-kcal      { width: 48px; height: 22px; flex-shrink: 0; }
+.nut-skeleton-pill      { width: 38px; height: 22px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nut-skeleton-block::after { animation: none; }
+}
+
+.nut-feed-shell {
+  position: relative;
+}
+
+.nut-skeleton-overlay {
+  opacity: 1;
+  transition: opacity 0.52s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.nut-skeleton-overlay--exit {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
 }

@@ -1,4 +1,4 @@
-export const SEARCH_ALIAS_REPLACEMENTS = [
+const SEARCH_ALIAS_REPLACEMENTS = [
   ['pb2', 'peanut butter powder'],
   ['pb fit', 'peanut butter powder'],
   ['pbfit', 'peanut butter powder'],

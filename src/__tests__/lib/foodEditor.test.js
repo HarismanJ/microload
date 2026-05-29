@@ -59,6 +59,28 @@ describe('food editor form metadata and defaults', () => {
     expect(EMPTY_FOOD_FORM.fat).toBe('')
     expect(EMPTY_FOOD_FORM.fiber).toBe('')
     expect(EMPTY_FOOD_FORM.iron).toBe('')
+    expect(EMPTY_FOOD_FORM.vitamin_d).toBe('')
+    expect(EMPTY_FOOD_FORM.magnesium).toBe('')
+    expect(EMPTY_FOOD_FORM.zinc).toBe('')
+    expect(EMPTY_FOOD_FORM.folate).toBe('')
+    expect(EMPTY_FOOD_FORM.vitamin_b12).toBe('')
+    expect(EMPTY_FOOD_FORM.vitamin_b6).toBe('')
+  })
+
+  it('exposes form metadata for the 6 newly-wired micros with NUTRITION_FIELD_LIMITS rules', () => {
+    const fieldsByKey = Object.fromEntries(FOOD_FORM_FIELDS.map(field => [field.key, field]))
+
+    expect(fieldsByKey.vitamin_d).toMatchObject({ label: 'Vitamin D', unit: 'mcg', type: 'number' })
+    expect(fieldsByKey.magnesium).toMatchObject({ label: 'Magnesium', unit: 'mg', type: 'number' })
+    expect(fieldsByKey.zinc).toMatchObject({ label: 'Zinc', unit: 'mg', type: 'number' })
+    expect(fieldsByKey.folate).toMatchObject({ label: 'Folate', unit: 'mcg', type: 'number' })
+    expect(fieldsByKey.vitamin_b12).toMatchObject({ label: 'Vitamin B12', unit: 'mcg', type: 'number' })
+    expect(fieldsByKey.vitamin_b6).toMatchObject({ label: 'Vitamin B6', unit: 'mg', type: 'number' })
+
+    for (const key of ['vitamin_d', 'magnesium', 'zinc', 'folate', 'vitamin_b12', 'vitamin_b6']) {
+      expect(fieldsByKey[key].rules).toBeDefined()
+      expect(fieldsByKey[key].rules.max).toBeGreaterThan(0)
+    }
   })
 })
 
@@ -96,6 +118,12 @@ describe('foodToFormValues', () => {
       vitamin_c: 14.44,
       calcium: 302.6,
       iron: 2.345,
+      vitamin_d: 12.34,
+      magnesium: 245.6,
+      zinc: 8.74,
+      folate: 320.4,
+      vitamin_b12: 2.456,
+      vitamin_b6: 1.234,
     })
 
     expect(form).toEqual({
@@ -117,7 +145,24 @@ describe('foodToFormValues', () => {
       vitamin_c: '14.4',
       calcium: '303',
       iron: '2.35',
+      vitamin_d: '12.3',
+      magnesium: '246',
+      zinc: '8.7',
+      folate: '320',
+      vitamin_b12: '2.46',
+      vitamin_b6: '1.23',
     })
+  })
+
+  it('defaults the 6 newly-wired micros to "0" when absent', () => {
+    const form = foodToFormValues({ name: 'No micros' })
+
+    expect(form.vitamin_d).toBe('0')
+    expect(form.magnesium).toBe('0')
+    expect(form.zinc).toBe('0')
+    expect(form.folate).toBe('0')
+    expect(form.vitamin_b12).toBe('0')
+    expect(form.vitamin_b6).toBe('0')
   })
 })
 
@@ -151,6 +196,12 @@ describe('buildFoodPayload', () => {
       vitamin_c: '1.5',
       calcium: '180',
       iron: '0.12',
+      vitamin_d: '1.2',
+      magnesium: '20',
+      zinc: '0.8',
+      folate: '15',
+      vitamin_b12: '0.5',
+      vitamin_b6: '0.07',
     }), 'user-123')
 
     expect(payload).toEqual({
@@ -173,6 +224,34 @@ describe('buildFoodPayload', () => {
       vitamin_c: 1.5,
       calcium: 180,
       iron: 0.12,
+      vitamin_d: 1.2,
+      magnesium: 20,
+      zinc: 0.8,
+      folate: 15,
+      vitamin_b12: 0.5,
+      vitamin_b6: 0.07,
+    })
+  })
+
+  it('defaults the 6 newly-wired micros to 0 when blank or absent', () => {
+    const payload = buildFoodPayload({
+      name: 'Plain',
+      serving_size: '100',
+      serving_unit: 'g',
+      calories: '50',
+      magnesium: '',
+      vitamin_d: null,
+      vitamin_b12: undefined,
+      vitamin_b6: 'bad',
+    }, 'user-789')
+
+    expect(payload).toMatchObject({
+      magnesium: 0,
+      vitamin_d: 0,
+      zinc: 0,
+      folate: 0,
+      vitamin_b12: 0,
+      vitamin_b6: 0,
     })
   })
 
@@ -243,5 +322,39 @@ describe('foodFromFormValues', () => {
       name: 'Greek yogurt',
       persistAsNew: true,
     })
+  })
+
+  it('round-trips the 6 newly-wired micros from form values onto the food object', () => {
+    const nextFood = foodFromFormValues(makeValidForm({
+      vitamin_d: '12',
+      magnesium: '300',
+      zinc: '8',
+      folate: '400',
+      vitamin_b12: '2.4',
+      vitamin_b6: '1.5',
+    }), { id: 'food-2' })
+
+    expect(nextFood).toMatchObject({
+      id: 'food-2',
+      vitamin_d: 12,
+      magnesium: 300,
+      zinc: 8,
+      folate: 400,
+      vitamin_b12: 2.4,
+      vitamin_b6: 1.5,
+    })
+  })
+})
+
+describe('magnesium cap regression (5,000 mg)', () => {
+  it('rejects magnesium values above 5,000', () => {
+    const error = validateNutritionForm(makeValidForm({ magnesium: '5001' }))
+    expect(error).toMatch(/Magnesium/)
+    expect(error).toMatch(/5,000/)
+  })
+
+  it('accepts magnesium values at or below 5,000', () => {
+    expect(validateNutritionForm(makeValidForm({ magnesium: '5000' }))).toBe('')
+    expect(validateNutritionForm(makeValidForm({ magnesium: '4999' }))).toBe('')
   })
 })

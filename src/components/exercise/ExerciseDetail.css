@@ -80,12 +80,6 @@
   margin-top: 2px;
 }
 
-.ex-loading {
-  padding: 60px 0;
-  display: flex;
-  justify-content: center;
-}
-
 /* Dumbbell hint banner */
 .ex-db-hint {
   display: flex;
@@ -250,20 +244,6 @@
   color: var(--muted);
 }
 
-.ex-rank-targets {
-  background: var(--surface2);
-  border-radius: 12px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ex-targets-label {
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .ex-target-chips {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -396,64 +376,6 @@
   font-size: 13px;
   color: var(--muted);
   margin-top: 8px;
-}
-
-/* Tier targets table */
-.ex-tier-table {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.ex-tier-table-header,
-.ex-tier-row {
-  display: grid;
-  grid-template-columns: 1fr repeat(4, 1fr);
-  align-items: center;
-  gap: 4px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid transparent;
-}
-
-.ex-tier-table-header {
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  margin-bottom: 2px;
-}
-
-.ex-tier-table-header span {
-  font-size: 9px;
-  font-weight: 600;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.ex-tier-col-tier {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.ex-tier-col-rep {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text);
-  text-align: right;
-}
-
-.ex-tier-row {
-  background: var(--surface2);
-}
-
-.ex-tier-row-current {
-  background: var(--surface);
-  border-color: var(--border);
 }
 
 .ex-muscle-tooltip {
@@ -707,4 +629,50 @@
     opacity: 1;
     transform: none;
   }
+}
+
+/* ─── Exercise detail skeleton ───────────────────────────────────────────── */
+@keyframes ex-skeleton-shimmer {
+  0%   { transform: translateX(-125%); }
+  100% { transform: translateX(125%); }
+}
+
+.ex-skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface2) 82%, white 6%);
+}
+.ex-skeleton-block::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    color-mix(in srgb, var(--blue) 22%, white 18%) 48%,
+    transparent 100%
+  );
+  transform: translateX(-125%);
+  animation: ex-skeleton-shimmer 1.45s ease-in-out infinite;
+}
+
+.ex-skeleton-root          { display: flex; flex-direction: column; gap: 14px; }
+.ex-skeleton-stat-value    { width: 48px;  height: 16px; margin: 0 auto 3px; }
+.ex-skeleton-stat-label    { width: 60%;   height: 10px; margin: 0 auto; }
+.ex-skeleton-section-title { width: 80px;  height: 11px; }
+.ex-skeleton-best-set      { width: 55%;   height: 26px; }
+.ex-skeleton-rank-badge    { width: 90px;  height: 24px; border-radius: 20px; }
+.ex-skeleton-rank-ratio    { width: 52px;  height: 13px; }
+.ex-skeleton-progress      { height: 6px;  border-radius: 99px; }
+.ex-skeleton-pct           { width: 28px;  height: 11px; }
+.ex-skeleton-period-toggle { width: 80px;  height: 24px; border-radius: 8px; }
+.ex-skeleton-chart         { height: 160px; border-radius: 12px; }
+.ex-skeleton-date          { min-width: 90px; height: 11px; flex-shrink: 0; }
+.ex-skeleton-lift          { flex: 1;      height: 13px; min-width: 80px; }
+.ex-skeleton-orm           { width: 52px;  height: 11px; flex-shrink: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ex-skeleton-block::after { animation: none; }
 }

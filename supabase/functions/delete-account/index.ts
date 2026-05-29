@@ -1,12 +1,15 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { getCorsHeaders, isCorsOriginAllowed } from './cors.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-}
+export async function handleDeleteAccountRequest(req: Request) {
+  const corsHeaders = getCorsHeaders(req)
 
-Deno.serve(async (req) => {
+  if (!isCorsOriginAllowed(req)) {
+    return new Response(JSON.stringify({ error: 'Origin not allowed' }), {
+      status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    })
+  }
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -74,4 +77,6 @@ Deno.serve(async (req) => {
       status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }
-})
+}
+
+Deno.serve(handleDeleteAccountRequest)

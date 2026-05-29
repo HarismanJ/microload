@@ -161,15 +161,19 @@
   border: 1px solid var(--border);
   border-radius: 14px;
   overflow: hidden;
+  box-shadow: var(--shadow-card);
   transition: border-color 0.32s ease, box-shadow 0.32s ease, transform 0.32s ease;
 }
 
-.ranks-dropdown[open] {
+.ranks-dropdown.open {
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
   border-color: color-mix(in srgb, var(--blue) 18%, var(--border));
 }
 
 .ranks-dropdown-summary {
+  width: 100%;
+  border: 0;
+  background: transparent;
   list-style: none;
   display: flex;
   align-items: center;
@@ -178,6 +182,7 @@
   padding: 13px 16px;
   cursor: pointer;
   user-select: none;
+  -webkit-tap-highlight-color: transparent;
   transition: background 0.26s ease, transform 0.26s ease;
 }
 
@@ -192,7 +197,7 @@
   transition: transform 0.26s ease, color 0.26s ease;
 }
 
-.ranks-dropdown[open] .ranks-dropdown-summary::after {
+.ranks-dropdown.open .ranks-dropdown-summary::after {
   transform: rotate(180deg);
   color: var(--blue);
 }
@@ -237,6 +242,7 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -389,6 +395,8 @@
 
 .ranks-muscle-model-stack {
   position: relative;
+  overflow: hidden;
+  border-radius: 14px;
 }
 
 .ranks-muscle-model-base,
@@ -472,6 +480,9 @@
 .ranks-muscle-model-loading .ranks-muscle-model-loader-layer .rbh polygon:nth-child(6n + 5) { animation-delay: calc(var(--loading-delay, 0ms) + 360ms); }
 .ranks-muscle-model-loading .ranks-muscle-model-loader-layer .rbh polygon:nth-child(6n) { animation-delay: calc(var(--loading-delay, 0ms) + 450ms); }
 
+.ranks-muscle-model-empty .ranks-muscle-model-base .rbh polygon {
+  fill: rgba(255, 255, 255, 0.13);
+}
 
 .ranks-muscle-model-base .rbh polygon:hover {
   fill: color-mix(in srgb, #3b9eff 65%, white 35%) !important;
@@ -527,6 +538,7 @@
   font-size: 13px;
   color: var(--muted);
   text-align: center;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease;
 }
 
@@ -549,6 +561,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -662,6 +675,26 @@
   gap: 10px;
 }
 
+.lift-cards .lift-card {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: lift-card-enter 0.52s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: min(calc(var(--card-index, 0) * 40ms), 480ms);
+}
+
+@keyframes lift-card-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lift-cards .lift-card {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .lift-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -670,6 +703,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -761,20 +795,6 @@
   color: var(--muted);
   text-align: right;
   margin-top: -4px;
-}
-
-.lift-targets {
-  background: var(--surface2);
-  border-radius: 12px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.lift-targets-label {
-  font-size: 12px;
-  color: var(--muted);
 }
 
 .lift-target-chips {
@@ -969,6 +989,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: var(--shadow-card);
   transition: transform 0.32s ease, border-color 0.32s ease, box-shadow 0.32s ease, background 0.32s ease;
 }
 
@@ -1264,4 +1285,62 @@
   .lift-import-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─── Ranks skeleton ─────────────────────────────────────────────────────── */
+@keyframes ranks-skeleton-shimmer {
+  0%   { transform: translateX(-125%); }
+  100% { transform: translateX(125%); }
+}
+
+.ranks-skeleton-block {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface2) 82%, white 6%);
+}
+.ranks-skeleton-block::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    110deg,
+    transparent 0%,
+    color-mix(in srgb, var(--blue) 22%, white 18%) 48%,
+    transparent 100%
+  );
+  transform: translateX(-125%);
+  animation: ranks-skeleton-shimmer 1.45s ease-in-out infinite;
+  animation-delay: calc(var(--card-index, 0) * 80ms);
+}
+
+.ranks-skeleton-name     { width: 52%;  height: 15px; margin-bottom: 2px; }
+.ranks-skeleton-category { width: 32%;  height: 12px; }
+.ranks-skeleton-orm      { width: 52px; height: 18px; margin-bottom: 2px; }
+.ranks-skeleton-ratio    { width: 38px; height: 12px; }
+.ranks-skeleton-badge    { width: 90px; height: 24px; border-radius: 20px; }
+.ranks-skeleton-progress { height: 6px; border-radius: 99px; }
+.ranks-skeleton-pct      { width: 28px; height: 11px; margin-top: -4px; margin-left: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ranks-skeleton-block::after { animation: none; }
+}
+
+.ranks-cards-shell {
+  position: relative;
+}
+
+.ranks-skeleton-overlay {
+  opacity: 1;
+  transition: opacity 0.52s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ranks-skeleton-overlay--exit {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
 }

@@ -1,27 +1,15 @@
 import { NUTRITION_FIELD_LIMITS, VALIDATION_LIMITS, trimToMax } from './inputValidation'
+import { applySearchAliases, normalizeSearchValue } from './foodSearch'
 
-const USDA_API_KEY = import.meta.env.VITE_USDA_API_KEY
-if (!USDA_API_KEY) throw new Error('VITE_USDA_API_KEY is not set — add it to your .env file')
 const USDA_SEARCH_URL = 'https://api.nal.usda.gov/fdc/v1/foods/search'
 const USDA_LOCAL_SOFT_LIMIT_PER_HOUR = 1000
 const USDA_LOCAL_THROTTLE_KEY = 'usdaRequestBucket'
 
-const SEARCH_ALIAS_REPLACEMENTS = [
-  ['pb2', 'peanut butter powder'],
-  ['pb fit', 'peanut butter powder'],
-  ['pbfit', 'peanut butter powder'],
-  ['pb', 'peanut butter'],
-  ['greek yoghurt', 'greek yogurt'],
-  ['yoghurt', 'yogurt'],
-  ['garbanzo beans', 'chickpeas'],
-  ['garbanzo bean', 'chickpeas'],
-  ['chick peas', 'chickpeas'],
-  ['aubergine', 'eggplant'],
-  ['courgette', 'zucchini'],
-  ['capsicum', 'bell pepper'],
-  ['minced', 'ground'],
-  ['mince', 'ground'],
-]
+function getUsdaApiKey() {
+  const apiKey = import.meta.env.VITE_USDA_API_KEY
+  if (!apiKey) throw new Error('USDA API key not configured.')
+  return apiKey
+}
 
 const NUTRIENT_NUMBERS = {
   calories: ['208', '958', '957', '2048', '2047'],
@@ -41,6 +29,9 @@ const NUTRIENT_NUMBERS = {
   vitamin_a: ['318', '320'],
   vitamin_c: ['401'],
   vitamin_d: ['324', '328'],
+  folate: ['417', '435'],
+  vitamin_b6: ['415'],
+  vitamin_b12: ['418'],
 }
 
 const NUTRIENT_NAME_ALIASES = {
@@ -61,6 +52,9 @@ const NUTRIENT_NAME_ALIASES = {
   vitamin_a: ['vitamin a rae', 'vitamin a iu'],
   vitamin_c: ['vitamin c total ascorbic acid', 'vitamin c'],
   vitamin_d: ['vitamin d d2 d3', 'vitamin d'],
+  folate: ['folate dfe', 'folate total', 'folate'],
+  vitamin_b6: ['vitamin b 6', 'vitamin b6', 'pyridoxine'],
+  vitamin_b12: ['vitamin b 12', 'vitamin b12', 'cobalamin'],
 }
 
 const LABEL_NUTRIENT_KEYS = {
@@ -80,20 +74,6 @@ function normalizeUnit(unit) {
   return normalized || 'g'
 }
 
-function normalizeSearchValue(value) {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-}
-
-function applySearchAliases(value) {
-  let normalized = ` ${normalizeSearchValue(value)} `
-  for (const [from, to] of SEARCH_ALIAS_REPLACEMENTS) {
-    normalized = normalized.split(` ${from} `).join(` ${to} `)
-  }
-  return normalizeSearchValue(normalized)
-}
 
 function buildUsdaQueries(query) {
   const queries = []
@@ -256,6 +236,9 @@ function mapUsdaFood(food) {
     vitamin_a: clampNumber(getNutrientValue('vitamin_a', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_a.min, NUTRITION_FIELD_LIMITS.vitamin_a.max),
     vitamin_c: clampNumber(getNutrientValue('vitamin_c', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_c.min, NUTRITION_FIELD_LIMITS.vitamin_c.max),
     vitamin_d: clampNumber(getNutrientValue('vitamin_d', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_d.min, NUTRITION_FIELD_LIMITS.vitamin_d.max),
+    folate: clampNumber(getNutrientValue('folate', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.folate.min, NUTRITION_FIELD_LIMITS.folate.max),
+    vitamin_b12: clampNumber(getNutrientValue('vitamin_b12', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_b12.min, NUTRITION_FIELD_LIMITS.vitamin_b12.max),
+    vitamin_b6: clampNumber(getNutrientValue('vitamin_b6', nutrients, labelNutrients), NUTRITION_FIELD_LIMITS.vitamin_b6.min, NUTRITION_FIELD_LIMITS.vitamin_b6.max),
   }
 }
 
@@ -275,9 +258,10 @@ export async function searchUsdaFoods(query, { signal, pageSize = 24 } = {}) {
 
   for (const candidateQuery of candidateQueries) {
     if (signal?.aborted) break
+    const apiKey = getUsdaApiKey()
 
     const params = new URLSearchParams({
-      api_key: USDA_API_KEY,
+      api_key: apiKey,
       query: candidateQuery,
       pageSize: String(requestedPageSize),
     })
@@ -303,8 +287,9 @@ export async function searchUsdaFoods(query, { signal, pageSize = 24 } = {}) {
 export async function lookupUsdaBarcode(barcode, { signal } = {}) {
   const normalizedInput = normalizeBarcode(barcode)
   if (!normalizedInput || normalizedInput.length > 32) return null
+  const apiKey = getUsdaApiKey()
   const params = new URLSearchParams({
-    api_key: USDA_API_KEY,
+    api_key: apiKey,
     query: trimToMax(String(barcode).replace(/\D/g, ''), 32),
     dataType: 'Branded',
     pageSize: '5',

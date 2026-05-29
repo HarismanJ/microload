@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { fmtCompact } from '../lib/liftMath'
+import { TIERS, tierColor, tierGroup } from '../lib/strengthStandards'
+import RankBadge from './RankBadge'
 import '../styles/WorkoutSummary.css'
 
 function fmtTime(s) {
@@ -16,6 +18,12 @@ function fmtVolume(v) {
   if (v >= 1000) return `${(v / 1000).toFixed(1)}k`
   return String(v)
 }
+
+function getSummarySetType(set) {
+  if (set?.is_warmup || set?.setType === 'warmup' || set?.set_type === 'warmup') return 'warmup'
+  return set?.setType ?? set?.set_type ?? 'normal'
+}
+
 
 function fmtMetricValue(metric, value) {
   if (value === null || value === undefined) return '—'
@@ -76,9 +84,97 @@ function getBattleOutcome(battle) {
   }
 }
 
+const STEP_MS = 200
+
+function RankUpCard({ r, i, show }) {
+  const fromGroup = r.from === 'Unranked' ? 'Unranked' : tierGroup(r.from)
+
+  const walkPath = useMemo(() => {
+    const toIdx = TIERS.indexOf(r.to)
+    if (toIdx < 0) return [r.to]
+    if (r.from === 'Unranked') return TIERS.slice(0, toIdx + 1)
+    const fromIdx = TIERS.indexOf(r.from)
+    if (fromIdx < 0 || toIdx <= fromIdx) return [r.to]
+    return TIERS.slice(fromIdx + 1, toIdx + 1)
+  }, [r.from, r.to])
+
+  const [stepIdx, setStepIdx] = useState(0)
+  const [popKey, setPopKey] = useState(0)
+
+  useEffect(() => {
+    if (!show || walkPath.length <= 1) return
+    const startMs = (0.15 + i * 0.1 + 2.17) * 1000
+    let timeoutId = null
+    let cancelled = false
+
+    const scheduleNext = (nextIdx) => {
+      if (cancelled || nextIdx >= walkPath.length) return
+      timeoutId = setTimeout(() => {
+        if (cancelled) return
+        const prevGroup = tierGroup(walkPath[nextIdx - 1])
+        const nextGroup = tierGroup(walkPath[nextIdx])
+        setStepIdx(nextIdx)
+        if (prevGroup !== nextGroup) setPopKey(k => k + 1)
+        scheduleNext(nextIdx + 1)
+      }, STEP_MS)
+    }
+
+    const starter = setTimeout(() => scheduleNext(1), startMs)
+    return () => {
+      cancelled = true
+      clearTimeout(starter)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [show, walkPath, i])
+
+  const currentTier = walkPath[stepIdx]
+  const currentGroup = tierGroup(currentTier)
+  const currentColor = tierColor(currentTier)
+
+  return (
+    <div
+      className={`ws-rankup-card ${show ? 'ws-rankup-in' : ''}`}
+      style={{ '--delay': `${0.15 + i * 0.1}s`, '--tier-color': currentColor }}
+    >
+      <div className="ws-rankup-header">
+        <div className="ws-rankup-arrow">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 19V5M5 12l7-7 7 7"/>
+          </svg>
+        </div>
+        <span className="ws-rankup-exercise">{r.exercise}</span>
+      </div>
+      <div className="ws-rankup-journey">
+        <div className="ws-rankup-from-side">
+          <RankBadge tier={fromGroup} size={20} />
+          <span className="ws-rankup-from-name">{r.from}</span>
+        </div>
+        <div className="ws-rankup-bar-wrap">
+          <div className="ws-rankup-bar-fill" />
+        </div>
+        <div
+          key={popKey}
+          className="ws-rankup-to-side"
+          data-initial={popKey === 0 ? 'true' : undefined}
+        >
+          <RankBadge tier={currentGroup} size={26} />
+          <span className="ws-rankup-to-name">{currentTier}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function WorkoutSummary({ summary, onDismiss }) {
   const [show, setShow] = useState(false)
+  const [expandedExercises, setExpandedExercises] = useState(new Set())
   const wsScreenRef = useRef(null)
+
+  const toggleExercise = name => setExpandedExercises(prev => {
+    const next = new Set(prev)
+    next.has(name) ? next.delete(name) : next.add(name)
+    return next
+  })
 
   useEffect(() => {
     // Slight delay so CSS transition fires
@@ -97,15 +193,27 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     durationSeconds,
     caloriesBurned = 0,
     totalSets,
+    totalWorkingSets,
+    totalDropSets = 0,
     totalVolume,
+    totalLoadVolume = null,
     unit,
     exercises,
     rankUps = [],
+    bodyweightMissing = false,
     newAchievements = [],
     battle = null,
     battleOnly = false,
     planCoaching = null,
   } = summary
+  const displayedWorkingSets = totalWorkingSets ?? totalSets ?? 0
+  const hasDropSets = Number(totalDropSets) > 0
+  const hasStrengthExercises = exercises.some(ex => !ex.isCardio)
+  const setStatValue = hasDropSets ? `${displayedWorkingSets} + ${totalDropSets}` : displayedWorkingSets
+  const setStatLabel = hasDropSets ? 'Working + Drops' : (hasStrengthExercises ? 'Working Sets' : 'Entries')
+  const roundedLoadVolume = totalLoadVolume === null || totalLoadVolume === undefined ? null : Math.round(totalLoadVolume)
+  const roundedTrainingVolume = Math.round(totalVolume || 0)
+  const showLoadMoved = roundedLoadVolume !== null && roundedLoadVolume !== roundedTrainingVolume
   const battleOutcome = getBattleOutcome(battle)
   const battleHighlights = [
     ...(battle?.yourHighlights || []).map(item => ({ ...item, owner: 'You' })),
@@ -131,8 +239,8 @@ export default function WorkoutSummary({ summary, onDismiss }) {
         {!battleOnly && (
           <div className="ws-stats">
             <div className="ws-stat">
-              <div className="ws-stat-value">{totalSets}</div>
-              <div className="ws-stat-label">Sets</div>
+              <div className="ws-stat-value">{setStatValue}</div>
+              <div className="ws-stat-label">{setStatLabel}</div>
             </div>
             <div className="ws-stat-divider" />
             <div className="ws-stat">
@@ -142,8 +250,17 @@ export default function WorkoutSummary({ summary, onDismiss }) {
             <div className="ws-stat-divider" />
             <div className="ws-stat">
               <div className="ws-stat-value">{fmtVolume(totalVolume)}</div>
-              <div className="ws-stat-label">Volume ({unit})</div>
+              <div className="ws-stat-label">Effective Vol ({unit})</div>
             </div>
+            {showLoadMoved && (
+              <>
+                <div className="ws-stat-divider" />
+                <div className="ws-stat">
+                  <div className="ws-stat-value">{fmtVolume(roundedLoadVolume)}</div>
+                  <div className="ws-stat-label">Load Moved ({unit})</div>
+                </div>
+              </>
+            )}
             {caloriesBurned > 0 && (
               <>
                 <div className="ws-stat-divider" />
@@ -284,6 +401,15 @@ export default function WorkoutSummary({ summary, onDismiss }) {
             </div>
           )}
 
+          {/* Bodyweight-missing banner (shown in place of Rank Ups) */}
+          {!battleOnly && bodyweightMissing && hasStrengthExercises && (
+            <div className="ws-section">
+              <div className="ws-rank-bw-warning">
+                Bodyweight must be entered to see ranks.
+              </div>
+            </div>
+          )}
+
           {/* Rank-ups */}
           {!battleOnly && rankUps.length > 0 && (
             <div className="ws-section">
@@ -293,20 +419,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
               </div>
               <div className="ws-rankups">
                 {rankUps.map((r, i) => (
-                  <div
-                    key={r.exercise}
-                    className={`ws-rankup-card ${show ? 'ws-rankup-in' : ''}`}
-                    style={{ '--delay': `${0.15 + i * 0.1}s`, '--tier-color': r.color }}
-                  >
-                    <div className="ws-rankup-arrow">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-                    </div>
-                    <div className="ws-rankup-info">
-                      <div className="ws-rankup-exercise">{r.exercise}</div>
-                      <div className="ws-rankup-from">{r.from}</div>
-                    </div>
-                    <div className="ws-rankup-new">{r.to}</div>
-                  </div>
+                  <RankUpCard key={r.exercise} r={r} i={i} show={show} />
                 ))}
               </div>
             </div>
@@ -321,26 +434,49 @@ export default function WorkoutSummary({ summary, onDismiss }) {
               </div>
               <div className="ws-exercises">
                 {exercises.map(ex => {
-                  if (ex.isCardio) {
-                    const totalMin = Math.round(ex.sets.reduce((sum, s) => sum + (s.durationSeconds || 0), 0) / 60)
-                    return (
-                      <div key={ex.name} className="ws-exercise-row">
-                        <div className="ws-exercise-name">{ex.name}</div>
-                        <div className="ws-exercise-meta">
-                          <span>{ex.sets.length} {ex.sets.length !== 1 ? 'entries' : 'entry'}</span>
-                          {totalMin > 0 && <span className="ws-exercise-top">{totalMin} min</span>}
-                        </div>
-                      </div>
-                    )
-                  }
-                  const top = ex.sets.reduce((best, s) => s.weight > best ? s.weight : best, 0)
+                  const isOpen = expandedExercises.has(ex.name)
                   return (
-                    <div key={ex.name} className="ws-exercise-row">
-                      <div className="ws-exercise-name">{ex.name}</div>
-                      <div className="ws-exercise-meta">
-                        <span>{ex.sets.length} set{ex.sets.length !== 1 ? 's' : ''}</span>
-                        {top > 0 && <span className="ws-exercise-top">{top} {ex.sets[0]?.unit}</span>}
-                      </div>
+                    <div key={ex.name} className="ws-exercise-item">
+                      <button
+                        className={`ws-exercise-header${isOpen ? ' open' : ''}`}
+                        onClick={() => toggleExercise(ex.name)}
+                        aria-expanded={isOpen}
+                      >
+                        <span className="ws-exercise-name">{ex.name}</span>
+                        <svg className="ws-exercise-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="6 9 12 15 18 9"/>
+                        </svg>
+                      </button>
+                      {isOpen && (
+                        <div className="ws-exercise-sets">
+                          {ex.isCardio
+                            ? ex.sets.map((s, i) => {
+                                const sec = s.durationSeconds || 0
+                                const label = sec < 60 ? `${sec}s` : `${Math.round(sec / 60)} min`
+                                return (
+                                  <div key={i} className="ws-exercise-set-row">
+                                    <span className="ws-set-index">{i + 1}</span>
+                                    <span className="ws-set-detail">{label}</span>
+                                  </div>
+                                )
+                              })
+                            : (() => {
+                                let normalCount = 0
+                                return ex.sets.map((s, i) => {
+                                  const type = getSummarySetType(s)
+                                  if (type === 'normal') normalCount++
+                                  const indexLabel = type === 'warmup' ? 'W' : type === 'dropset' ? 'Drop' : String(normalCount)
+                                  return (
+                                    <div key={i} className={`ws-exercise-set-row ws-set-${type}`}>
+                                      <span className="ws-set-index">{indexLabel}</span>
+                                      <span className="ws-set-detail">{s.weight} {s.unit} × {s.reps}</span>
+                                    </div>
+                                  )
+                                })
+                              })()
+                          }
+                        </div>
+                      )}
                     </div>
                   )
                 })}

@@ -16,12 +16,17 @@ export const BAR_OPTIONS_LBS = [
 // Equipment types that use plates and should show the plate icon
 export const PLATE_EQUIPMENT = new Set(['Barbell', 'EZ Bar', 'Smith Machine', 'Plate Loaded'])
 
+// Equipment that shows the plate calculator UI but does NOT get plate-snapping
+// in the progression engine (e.g. weight-stack machines where snapping is wrong).
+export const PLATE_CALCULATOR_EQUIPMENT = new Set([...PLATE_EQUIPMENT, 'Machine'])
+
 // Default bar option index per equipment type
 export const DEFAULT_BAR_INDEX = {
   'Barbell':       0,
   'Smith Machine': 0,
   'EZ Bar':        2,
   'Plate Loaded':  0,
+  'Machine':       0,  // Standard bar (20 kg / 45 lb) as default for plate-loaded machines
 }
 
 /** Total weight = bar + 2 × sum of plates per side */

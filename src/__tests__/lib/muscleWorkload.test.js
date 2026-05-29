@@ -27,11 +27,12 @@ function getGroup(workload, key) {
   return workload.groups.find(group => group.key === key)
 }
 
-function makeSession(id, finishedAt) {
+function makeSession(id, finishedAt, sets = []) {
   return {
     id,
     started_at: finishedAt,
     finished_at: finishedAt,
+    workout_sets: sets,
   }
 }
 
@@ -68,26 +69,15 @@ function makeSessionsQuery(result) {
   return builder
 }
 
-function makeSetsQuery(result) {
-  const builder = {
-    select: vi.fn(() => builder),
-    eq: vi.fn(() => builder),
-    in: vi.fn(() => Promise.resolve(result)),
-  }
-  return builder
-}
-
-function mockWorkloadSupabase({ sessionsResult, setsResult = { data: [], error: null } }) {
+function mockWorkloadSupabase({ sessionsResult }) {
   const sessionsQuery = makeSessionsQuery(sessionsResult)
-  const setsQuery = makeSetsQuery(setsResult)
 
   supabase.from.mockImplementation(table => {
     if (table === 'workout_sessions') return sessionsQuery
-    if (table === 'workout_sets') return setsQuery
     throw new Error(`Unexpected table: ${table}`)
   })
 
-  return { sessionsQuery, setsQuery }
+  return { sessionsQuery }
 }
 
 beforeEach(() => {
@@ -169,22 +159,19 @@ describe('fetchWeeklyMuscleWorkload', () => {
     expect(fetchExercises).not.toHaveBeenCalled()
   })
 
-  it('fetches sessions, exercises, and sets before building weekly workload', async () => {
+  it('fetches sessions with embedded sets before building weekly workload', async () => {
     const range = getLocalTrainingWeekRange(THURSDAY)
     const sessions = [
-      makeSession('s1', '2026-05-14T12:00:00.000Z'),
+      makeSession('s1', '2026-05-14T12:00:00.000Z', [
+        makeSet('set-1', 's1', 'bench', '2026-05-14T12:00:00.000Z'),
+      ]),
       makeSession('', '2026-05-14T13:00:00.000Z'),
-      makeSession('s2', '2026-05-15T12:00:00.000Z'),
+      makeSession('s2', '2026-05-15T12:00:00.000Z', [
+        makeSet('set-2', 's2', 'bench', '2026-05-15T12:00:00.000Z'),
+      ]),
     ]
-    const { sessionsQuery, setsQuery } = mockWorkloadSupabase({
+    const { sessionsQuery } = mockWorkloadSupabase({
       sessionsResult: { data: sessions, error: null },
-      setsResult: {
-        data: [
-          makeSet('set-1', 's1', 'bench', '2026-05-14T12:00:00.000Z'),
-          makeSet('set-2', 's2', 'bench', '2026-05-15T12:00:00.000Z'),
-        ],
-        error: null,
-      },
     })
     fetchExercises.mockResolvedValue([makeExercise('bench')])
 
@@ -192,17 +179,16 @@ describe('fetchWeeklyMuscleWorkload', () => {
     const chest = getGroup(workload, 'chest')
     const shoulders = getGroup(workload, 'front-deltoids')
 
-    expect(supabase.from).toHaveBeenNthCalledWith(1, 'workout_sessions')
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'workout_sets')
-    expect(sessionsQuery.select).toHaveBeenCalledWith('id, started_at, finished_at')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+    expect(supabase.from).toHaveBeenCalledWith('workout_sessions')
+    expect(sessionsQuery.select).toHaveBeenCalledWith(
+      'id, started_at, finished_at, workout_sets!workout_sets_session_id_fkey(id, session_id, exercise_id, completed_at, is_warmup, set_type)'
+    )
     expect(sessionsQuery.eq).toHaveBeenCalledWith('user_id', 'user-1')
     expect(sessionsQuery.not).toHaveBeenCalledWith('finished_at', 'is', null)
     expect(sessionsQuery.gte).toHaveBeenCalledWith('finished_at', range.startIso)
     expect(sessionsQuery.lt).toHaveBeenCalledWith('finished_at', range.endIso)
     expect(fetchExercises).toHaveBeenCalledWith('user-1')
-    expect(setsQuery.select).toHaveBeenCalledWith('id, session_id, exercise_id, completed_at, is_warmup')
-    expect(setsQuery.eq).toHaveBeenCalledWith('user_id', 'user-1')
-    expect(setsQuery.in).toHaveBeenCalledWith('session_id', ['s1', 's2'])
     expect(chest).toMatchObject({
       effectiveSets: 2,
       contributors: [{ name: 'Bench Press', rawSets: 2, creditPerSet: 1, setsCredit: 2 }],
@@ -221,7 +207,7 @@ describe('fetchWeeklyMuscleWorkload', () => {
     })
   })
 
-  it('returns an empty workload without querying sets when no sessions are found', async () => {
+  it('returns an empty workload when no sessions are found in the week', async () => {
     mockWorkloadSupabase({
       sessionsResult: { data: [], error: null },
     })
@@ -255,22 +241,6 @@ describe('fetchWeeklyMuscleWorkload', () => {
     expect(supabase.from).toHaveBeenCalledWith('workout_sessions')
   })
 
-  it('throws when the sets query fails', async () => {
-    const setsError = new Error('sets failed')
-    mockWorkloadSupabase({
-      sessionsResult: {
-        data: [makeSession('s1', '2026-05-14T12:00:00.000Z')],
-        error: null,
-      },
-      setsResult: { data: null, error: setsError },
-    })
-    fetchExercises.mockResolvedValue([makeExercise('bench')])
-
-    await expect(fetchWeeklyMuscleWorkload('user-1', THURSDAY)).rejects.toThrow('sets failed')
-
-    expect(supabase.from).toHaveBeenNthCalledWith(1, 'workout_sessions')
-    expect(supabase.from).toHaveBeenNthCalledWith(2, 'workout_sets')
-  })
 })
 
 describe('applyMuscleWorkloadGoal', () => {
@@ -339,7 +309,7 @@ describe('buildWeeklyMuscleWorkload', () => {
     expect(workload.groups.every(group => group.effectiveSets === 0)).toBe(true)
   })
 
-  it('credits primary and secondary muscles while excluding warmups and cardio', () => {
+  it('credits primary and secondary muscles while excluding warmups, drop sets, and cardio', () => {
     const sessions = [
       makeSession('s1', '2026-05-14T12:00:00.000Z'),
       makeSession('s2', '2026-05-15T12:00:00.000Z'),
@@ -351,6 +321,7 @@ describe('buildWeeklyMuscleWorkload', () => {
     const sets = [
       makeSet('warmup', 's1', 'bench', '2026-05-14T11:50:00.000Z', { is_warmup: true }),
       makeSet('working-1', 's1', 'bench', '2026-05-14T12:00:00.000Z'),
+      makeSet('drop-1', 's1', 'bench', '2026-05-14T12:05:00.000Z', { set_type: 'dropset' }),
       makeSet('working-2', 's2', 'bench', '2026-05-15T12:00:00.000Z'),
       makeSet('cardio', 's2', 'run', '2026-05-15T12:30:00.000Z'),
     ]

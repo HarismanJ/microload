@@ -3,7 +3,8 @@ import { Capacitor } from '@capacitor/core'
 import { BarcodeFormat, BarcodeScanner as NativeBarcodeScanner } from '@capacitor-mlkit/barcode-scanning'
 import { Html5Qrcode } from 'html5-qrcode'
 import { supabase } from '../../lib/supabase'
-import { invalidateCache } from '../../lib/cache'
+import { getCached, invalidateCache, setCached } from '../../lib/cache'
+import { suppressBackHandling } from '../../lib/backStack'
 import { useCurrentUserId } from '../../context/UserContext'
 import {
   buildFoodPayload,
@@ -21,6 +22,7 @@ import LoadingSpinner from '../LoadingSpinner'
 const USE_NATIVE_PHONE_SCANNER = Capacitor.getPlatform() !== 'web'
 const NATIVE_SCANNER = typeof window !== 'undefined' && 'BarcodeDetector' in window
 const FOOD_BARCODE_PATTERN = /^\d{6,14}$/
+const NATIVE_SCAN_TIMEOUT_MS = 60_000
 const NATIVE_SCAN_FORMATS = [
   BarcodeFormat.Ean13,
   BarcodeFormat.Ean8,
@@ -28,6 +30,7 @@ const NATIVE_SCAN_FORMATS = [
   BarcodeFormat.UpcE,
 ]
 const ACCEPTED_WEB_FORMATS = ['ean_13', 'ean_8', 'upc_a', 'upc_e']
+const NATIVE_SCAN_TIMEOUT_CODE = 'NATIVE_SCAN_TIMEOUT'
 
 function getScannedValue(barcode) {
   return String(barcode?.rawValue || barcode?.displayValue || barcode || '').trim()
@@ -47,6 +50,25 @@ function isAcceptedFoodBarcode(barcode) {
     BarcodeFormat.UpcE,
     ...ACCEPTED_WEB_FORMATS,
   ].includes(format)
+}
+
+async function scanNativeWithTimeout(options) {
+  let timeoutId
+  try {
+    return await Promise.race([
+      NativeBarcodeScanner.scan(options),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(async () => {
+          await NativeBarcodeScanner.stopScan().catch(() => {})
+          const error = new Error('Native barcode scanner timed out.')
+          error.code = NATIVE_SCAN_TIMEOUT_CODE
+          reject(error)
+        }, NATIVE_SCAN_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 function parseOFF(product) {
@@ -80,7 +102,7 @@ function parseOFF(product) {
   }
 }
 
-export default function BarcodeScanner({ onSave, onBack }) {
+export default function BarcodeScanner({ onSave, onBack, onRetry, onReviewReady }) {
   const userId = useCurrentUserId()
   const [phase, setPhase] = useState('scanning') // scanning | loading | confirm | error | saving
   const [errorMsg, setErrorMsg] = useState('')
@@ -101,6 +123,33 @@ export default function BarcodeScanner({ onSave, onBack }) {
   const scannedRef = useRef(false)
   const runningRef = useRef(false)
   const trackRef = useRef(null)
+  const releaseNativeBackSuppressionRef = useRef(null)
+  const nativeBackReleaseTimerRef = useRef(null)
+
+  function releaseNativeBackSuppression(delayMs = 0) {
+    if (nativeBackReleaseTimerRef.current) {
+      clearTimeout(nativeBackReleaseTimerRef.current)
+      nativeBackReleaseTimerRef.current = null
+    }
+    if (delayMs > 0) {
+      nativeBackReleaseTimerRef.current = setTimeout(() => {
+        releaseNativeBackSuppressionRef.current?.()
+        releaseNativeBackSuppressionRef.current = null
+        nativeBackReleaseTimerRef.current = null
+      }, delayMs)
+      return
+    }
+    releaseNativeBackSuppressionRef.current?.()
+    releaseNativeBackSuppressionRef.current = null
+  }
+
+  function stopTrackedVideo() {
+    const video = videoRef.current
+    if (!video) return
+    video.srcObject?.getTracks().forEach(t => t.stop())
+    video.srcObject = null
+    videoRef.current = null
+  }
 
   function stopCamera() {
     runningRef.current = false
@@ -112,14 +161,11 @@ export default function BarcodeScanner({ onSave, onBack }) {
       scannerRef.current.stop().catch(() => {})
     }
     if (USE_NATIVE_PHONE_SCANNER) {
+      releaseNativeBackSuppression()
       NativeBarcodeScanner.removeAllListeners().catch(() => {})
       NativeBarcodeScanner.stopScan().catch(() => {})
     }
-    // Stops tracks for both native <video> and html5-qrcode injected video
-    document.querySelectorAll('video').forEach(v => {
-      v.srcObject?.getTracks().forEach(t => t.stop())
-      v.srcObject = null
-    })
+    stopTrackedVideo()
   }
 
   async function startNativePhoneScan() {
@@ -127,6 +173,10 @@ export default function BarcodeScanner({ onSave, onBack }) {
 
     setNativeScanOpening(true)
     setErrorMsg('')
+    releaseNativeBackSuppression()
+    const releaseBackSuppression = suppressBackHandling()
+    releaseNativeBackSuppressionRef.current = releaseBackSuppression
+    let keepSuppressionAfterScan = false
 
     try {
       const { supported } = await NativeBarcodeScanner.isSupported()
@@ -150,7 +200,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
         return
       }
 
-      const { barcodes } = await NativeBarcodeScanner.scan({
+      const { barcodes } = await scanNativeWithTimeout({
         formats: NATIVE_SCAN_FORMATS,
         autoZoom: true,
       })
@@ -165,14 +215,18 @@ export default function BarcodeScanner({ onSave, onBack }) {
 
       scannedRef.current = true
       await lookup(rawValue)
+      keepSuppressionAfterScan = true
     } catch (error) {
       const message = String(error?.message || error || '')
       const cancelled = /cancel|cancell|user.*closed|dismiss/i.test(message)
 
-      if (!cancelled) {
+      if (error?.code === NATIVE_SCAN_TIMEOUT_CODE) {
+        setErrorMsg('Camera scanner timed out. You can try again or enter the barcode manually.')
+      } else if (!cancelled) {
         setErrorMsg('Could not start the camera scanner. You can still enter the barcode manually.')
       }
     } finally {
+      releaseNativeBackSuppression(keepSuppressionAfterScan ? 1500 : 0)
       setNativeScanOpening(false)
     }
   }
@@ -185,9 +239,14 @@ export default function BarcodeScanner({ onSave, onBack }) {
   const startNativePhoneScanLatest = useEffectEvent(() => { startNativePhoneScan() })
 
   useEffect(() => {
+    if (phase === 'confirm') onReviewReady?.()
+  }, [onReviewReady, phase])
+
+  useEffect(() => {
     if (USE_NATIVE_PHONE_SCANNER) {
       startNativePhoneScanLatest()
       return () => {
+        releaseNativeBackSuppression()
         NativeBarcodeScanner.removeAllListeners().catch(() => {})
         NativeBarcodeScanner.stopScan().catch(() => {})
       }
@@ -303,16 +362,14 @@ export default function BarcodeScanner({ onSave, onBack }) {
           scannedRef.current = true
           runningRef.current = false
           await scanner.stop()
-          document.querySelectorAll('video').forEach(v => {
-            v.srcObject?.getTracks().forEach(t => t.stop())
-            v.srcObject = null
-          })
+          stopTrackedVideo()
           lookup(getScannedValue(barcode))
         },
         () => {}
       ).then(() => {
         runningRef.current = true
         const video = document.querySelector('#barcode-reader video')
+        videoRef.current = video ?? null
         if (video?.srcObject) {
           const track = video.srcObject.getVideoTracks()[0]
           if (track) {
@@ -339,10 +396,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
       if (scannerRef.current) {
         scannerRef.current.stop().catch(() => {})
       }
-      document.querySelectorAll('video').forEach(v => {
-        v.srcObject?.getTracks().forEach(t => t.stop())
-        v.srcObject = null
-      })
+      stopTrackedVideo()
     }
   }, [])
 
@@ -387,6 +441,15 @@ export default function BarcodeScanner({ onSave, onBack }) {
 
   async function lookup(barcode) {
     setPhase('loading')
+
+    const cacheKey = `barcode:${barcode}`
+    const cached = getCached(cacheKey)
+    if (cached) {
+      setForm(cached)
+      setPhase('confirm')
+      return
+    }
+
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10000)
 
@@ -396,7 +459,9 @@ export default function BarcodeScanner({ onSave, onBack }) {
         const food = await lookupUsdaBarcode(barcode, { signal: controller.signal })
         if (food) {
           clearTimeout(timeout)
-          setForm(foodToFormValues(food))
+          const formValues = foodToFormValues(food)
+          setCached(cacheKey, formValues, 24 * 60 * 60 * 1000)
+          setForm(formValues)
           setPhase('confirm')
           return
         }
@@ -414,7 +479,9 @@ export default function BarcodeScanner({ onSave, onBack }) {
         setPhase('confirm')
         return
       }
-      setForm(parseOFF(json.product))
+      const formValues = parseOFF(json.product)
+      setCached(cacheKey, formValues, 24 * 60 * 60 * 1000)
+      setForm(formValues)
       setPhase('confirm')
     } catch (e) {
       clearTimeout(timeout)
@@ -446,7 +513,7 @@ export default function BarcodeScanner({ onSave, onBack }) {
         .single()
       if (error) throw error
       invalidateCache(`user_foods:${userId}`)
-      onSave(data)
+      await onSave(data)
     } catch (error) {
       setErrorMsg(error?.message || 'Could not save this food. Check your connection and try again.')
     } finally {
@@ -519,7 +586,10 @@ export default function BarcodeScanner({ onSave, onBack }) {
     return (
       <div className="bs-screen bs-center">
         <div className="bs-error-msg">{errorMsg}</div>
-        <button className="nut-add-to-log-btn" onClick={onBack}>Go Back</button>
+        {onRetry && (
+          <button className="nut-add-to-log-btn" onClick={onRetry}>Try Again</button>
+        )}
+        <button className="nut-add-to-log-btn" style={{ marginTop: 8, background: 'transparent', border: '1px solid var(--border)', color: 'var(--muted)' }} onClick={onBack}>Go Back</button>
       </div>
     )
   }
@@ -538,6 +608,16 @@ export default function BarcodeScanner({ onSave, onBack }) {
       <div className="bs-verify-note">
         Scanned nutrition data may not be fully accurate. Please verify the food details before adding it to your log.
       </div>
+      {onRetry && (
+        <button className="bs-retry-scan-btn" onClick={onRetry} disabled={saving}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9V5a2 2 0 0 1 2-2h4"/><path d="M15 3h4a2 2 0 0 1 2 2v4"/>
+            <path d="M21 15v4a2 2 0 0 1-2 2h-4"/><path d="M9 21H5a2 2 0 0 1-2-2v-4"/>
+            <path d="M8 12h8"/>
+          </svg>
+          Retry Scan
+        </button>
+      )}
       <div className="bs-manual">
         <div className="bs-manual-label">Or enter barcode manually</div>
         <div className="bs-manual-row">

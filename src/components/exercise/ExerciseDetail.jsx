@@ -21,6 +21,7 @@ import {
   inferRatioFromScore,
   resolveTierFromScore,
 } from '../../lib/rollingRanks'
+import { getSetTrainingVolumeKg } from '../../lib/liftMath'
 import './ExerciseDetail.css'
 
 const EXERCISE_DAILY_ORM_POINTS_RPC = 'get_exercise_daily_orm_points'
@@ -110,6 +111,16 @@ function buildDiagramEntries(primaryMuscles = [], secondaryMuscles = []) {
 function lbsToKg(v) { return v * 0.453592 }
 function kgToLbs(v) { return v * 2.20462 }
 
+function getHistorySetType(set) {
+  if (set?.is_warmup || set?.setType === 'warmup' || set?.set_type === 'warmup') return 'warmup'
+  return set?.set_type ?? set?.setType ?? 'normal'
+}
+
+function isHistoryWorkingSet(set) {
+  const setType = getHistorySetType(set)
+  return setType !== 'warmup' && setType !== 'dropset'
+}
+
 function isMissingExerciseHistoryRpc(error, functionName) {
   const code = error?.code || ''
   const message = error?.message?.toLowerCase?.() || ''
@@ -162,18 +173,24 @@ function deriveExerciseHistoryFromSets(sets = []) {
 
   sets.forEach(set => {
     const ormKg = set.unit === 'lbs' ? lbsToKg(set.estimated_1rm) : set.estimated_1rm
-    const weightKg = set.unit === 'lbs' ? lbsToKg(set.weight) : set.weight
     const date = String(set.created_at || '').split('T')[0]
+    const isWorkingSet = isHistoryWorkingSet(set)
 
-    totalVolumeKg += weightKg * set.reps
+    totalVolumeKg += getSetTrainingVolumeKg({
+      weight: set.weight,
+      reps: set.reps,
+      unit: set.unit,
+      set_type: set.set_type,
+      is_warmup: set.is_warmup,
+    })
 
-    if (ormKg > bestOrmKg) {
+    if (isWorkingSet && ormKg > bestOrmKg) {
       bestOrmKg = ormKg
       bestSet = { weight: set.weight, reps: set.reps, unit: set.unit }
     }
 
     const existingPoint = chartPointsByDate.get(date)
-    if (!existingPoint || ormKg > existingPoint.orm) {
+    if (isWorkingSet && (!existingPoint || ormKg > existingPoint.orm)) {
       chartPointsByDate.set(date, { date, orm: ormKg })
     }
   })
@@ -184,7 +201,7 @@ function deriveExerciseHistoryFromSets(sets = []) {
       bestOrmKg,
       bestSet,
       totalVolumeKg,
-      totalSets: sets.length,
+      totalSets: sets.filter(isHistoryWorkingSet).length,
     },
   }
 }
@@ -268,6 +285,61 @@ function TierSwiper({ thresholds, isBW, bodyweightKg, currentTierIdx, fmt, useLb
   )
 }
 
+function ExerciseDetailSkeleton() {
+  return (
+    <div className="ex-skeleton-root" aria-hidden="true">
+      <div className="ex-stats-grid">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="ex-stat">
+            <div className="ex-skeleton-block ex-skeleton-stat-value" />
+            <div className="ex-skeleton-block ex-skeleton-stat-label" />
+          </div>
+        ))}
+      </div>
+
+      <div className="ex-section">
+        <div className="ex-skeleton-block ex-skeleton-section-title" />
+        <div className="ex-skeleton-block ex-skeleton-best-set" />
+      </div>
+
+      <div className="ex-section">
+        <div className="ex-skeleton-block ex-skeleton-section-title" />
+        <div className="ex-rank-card">
+          <div className="ex-rank-top">
+            <div className="ex-skeleton-block ex-skeleton-rank-badge" />
+            <div className="ex-skeleton-block ex-skeleton-rank-ratio" />
+          </div>
+          <div className="ex-skeleton-block ex-skeleton-progress" />
+          <div className="ex-progress-row">
+            <div className="ex-skeleton-block ex-skeleton-pct" />
+          </div>
+        </div>
+      </div>
+
+      <div className="ex-section">
+        <div className="ex-section-header">
+          <div className="ex-skeleton-block ex-skeleton-section-title" />
+          <div className="ex-skeleton-block ex-skeleton-period-toggle" />
+        </div>
+        <div className="ex-skeleton-block ex-skeleton-chart" />
+      </div>
+
+      <div className="ex-section">
+        <div className="ex-skeleton-block ex-skeleton-section-title" />
+        <div className="ex-prev-sets">
+          {[0, 1, 2].map(i => (
+            <div key={i} className="ex-prev-set-row">
+              <div className="ex-skeleton-block ex-skeleton-date" />
+              <div className="ex-skeleton-block ex-skeleton-lift" />
+              <div className="ex-skeleton-block ex-skeleton-orm" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME_RANK_MODE }) {
   const userId = useCurrentUserId()
   const [exercise, setExercise]   = useState(null)
@@ -310,7 +382,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
         fetchExerciseHistorySummary(userId, exerciseId),
         supabase
           .from('workout_sets')
-          .select('id, weight, reps, unit, estimated_1rm, created_at')
+          .select('id, weight, reps, unit, estimated_1rm, created_at, is_warmup, set_type')
           .eq('user_id', userId)
           .eq('exercise_id', exerciseId)
           .not('reps', 'is', null)
@@ -336,7 +408,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
       if (useLegacyHistory) {
         const { data: sets, error: setsError } = await supabase
           .from('workout_sets')
-          .select('estimated_1rm, weight, reps, unit, created_at')
+          .select('estimated_1rm, weight, reps, unit, created_at, is_warmup, set_type')
           .eq('user_id', userId)
           .eq('exercise_id', exerciseId)
           .not('estimated_1rm', 'is', null)
@@ -388,7 +460,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
     try {
       const { data, error } = await supabase
         .from('workout_sets')
-        .select('id, weight, reps, unit, estimated_1rm, created_at')
+        .select('id, weight, reps, unit, estimated_1rm, created_at, is_warmup, set_type')
         .eq('user_id', userId)
         .eq('exercise_id', exerciseId)
         .not('reps', 'is', null)
@@ -413,6 +485,11 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
   }, [exerciseId, userId])
+
+  useEffect(() => {
+    const content = document.querySelector('.content')
+    if (content) content.scrollTop = 0
+  }, [])
 
   const useLbs = profile?.unit_preference === 'lbs'
   const fmt    = (kg) => useLbs ? `${kgToLbs(kg).toFixed(1)} lbs` : `${kg.toFixed(1)} kg`
@@ -513,9 +590,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
       </div>
 
       {loading ? (
-        <div className="ex-loading">
-          <LoadingSpinner size="md" />
-        </div>
+        <ExerciseDetailSkeleton />
       ) : loadError ? (
         <div className="ex-no-data">
           {loadError}
@@ -544,11 +619,11 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
               </div>
               <div className="ex-stat">
                 <div className="ex-stat-value">{displayVolume}</div>
-                <div className="ex-stat-label">Volume</div>
+                <div className="ex-stat-label">Effective Volume</div>
               </div>
               <div className="ex-stat">
                 <div className="ex-stat-value">{stats.totalSets}</div>
-                <div className="ex-stat-label">Sets Done</div>
+                <div className="ex-stat-label">Working Sets</div>
               </div>
             </div>
           ) : (
@@ -742,7 +817,7 @@ export default function ExerciseDetail({ exerciseId, onBack, rankMode = ALL_TIME
                 onClick={handleLoadMore}
                 disabled={!prevSetsHasMore || prevSetsLoading}
               >
-                {prevSetsLoading ? 'Loading…' : 'Load More'}
+                {prevSetsLoading ? <LoadingSpinner size="xs" color="currentColor" /> : 'Load More'}
               </button>
               {prevSetsError && <div className="ex-no-data">{prevSetsError}</div>}
             </div>

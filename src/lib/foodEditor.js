@@ -19,6 +19,12 @@ export const FOOD_FORM_FIELDS = [
   { key: 'vitamin_c', label: 'Vitamin C', unit: 'mg', type: 'number', rules: NUTRITION_FIELD_LIMITS.vitamin_c },
   { key: 'calcium', label: 'Calcium', unit: 'mg', type: 'number', rules: NUTRITION_FIELD_LIMITS.calcium },
   { key: 'iron', label: 'Iron', unit: 'mg', type: 'number', rules: NUTRITION_FIELD_LIMITS.iron },
+  { key: 'vitamin_d', label: 'Vitamin D', unit: 'mcg', type: 'number', rules: NUTRITION_FIELD_LIMITS.vitamin_d },
+  { key: 'magnesium', label: 'Magnesium', unit: 'mg', type: 'number', rules: NUTRITION_FIELD_LIMITS.magnesium },
+  { key: 'zinc', label: 'Zinc', unit: 'mg', type: 'number', rules: NUTRITION_FIELD_LIMITS.zinc },
+  { key: 'folate', label: 'Folate', unit: 'mcg', type: 'number', rules: NUTRITION_FIELD_LIMITS.folate },
+  { key: 'vitamin_b12', label: 'Vitamin B12', unit: 'mcg', type: 'number', rules: NUTRITION_FIELD_LIMITS.vitamin_b12 },
+  { key: 'vitamin_b6', label: 'Vitamin B6', unit: 'mg', type: 'number', rules: NUTRITION_FIELD_LIMITS.vitamin_b6 },
 ]
 
 export const EMPTY_FOOD_FORM = {
@@ -40,6 +46,12 @@ export const EMPTY_FOOD_FORM = {
   vitamin_c: '',
   calcium: '',
   iron: '',
+  vitamin_d: '',
+  magnesium: '',
+  zinc: '',
+  folate: '',
+  vitamin_b12: '',
+  vitamin_b6: '',
 }
 
 function numberOrZero(value) {
@@ -68,6 +80,12 @@ export function foodToFormValues(food = {}) {
     vitamin_c: String(+((Number(food?.vitamin_c) || 0).toFixed(1))),
     calcium: String(Math.round(Number(food?.calcium) || 0)),
     iron: String(+((Number(food?.iron) || 0).toFixed(2))),
+    vitamin_d: String(+((Number(food?.vitamin_d) || 0).toFixed(1))),
+    magnesium: String(Math.round(Number(food?.magnesium) || 0)),
+    zinc: String(+((Number(food?.zinc) || 0).toFixed(1))),
+    folate: String(Math.round(Number(food?.folate) || 0)),
+    vitamin_b12: String(+((Number(food?.vitamin_b12) || 0).toFixed(2))),
+    vitamin_b6: String(+((Number(food?.vitamin_b6) || 0).toFixed(2))),
   }
 }
 
@@ -100,6 +118,12 @@ export function buildFoodPayload(form, userId) {
     vitamin_c: numberOrZero(form?.vitamin_c),
     calcium: numberOrZero(form?.calcium),
     iron: numberOrZero(form?.iron),
+    vitamin_d: numberOrZero(form?.vitamin_d),
+    magnesium: numberOrZero(form?.magnesium),
+    zinc: numberOrZero(form?.zinc),
+    folate: numberOrZero(form?.folate),
+    vitamin_b12: numberOrZero(form?.vitamin_b12),
+    vitamin_b6: numberOrZero(form?.vitamin_b6),
   }
 }
 
@@ -124,6 +148,12 @@ export function foodFromFormValues(form, baseFood = {}, { persistAsNew = false }
     vitamin_c: numberOrZero(form?.vitamin_c),
     calcium: numberOrZero(form?.calcium),
     iron: numberOrZero(form?.iron),
+    vitamin_d: numberOrZero(form?.vitamin_d),
+    magnesium: numberOrZero(form?.magnesium),
+    zinc: numberOrZero(form?.zinc),
+    folate: numberOrZero(form?.folate),
+    vitamin_b12: numberOrZero(form?.vitamin_b12),
+    vitamin_b6: numberOrZero(form?.vitamin_b6),
   }
 
   if (persistAsNew) {

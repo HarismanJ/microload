@@ -2,6 +2,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  --spinner-color: var(--blue);
+  --spinner-shadow: color-mix(in srgb, var(--blue) 38%, transparent);
 }
 
 .spinner-page {
@@ -13,8 +15,6 @@
 }
 
 .spinner-logo-shell {
-  --spinner-color: var(--blue);
-  --spinner-shadow: color-mix(in srgb, var(--blue) 38%, transparent);
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -27,8 +27,8 @@
   inset: 6% 4%;
   border-radius: 30px;
   background:
-    radial-gradient(circle at center, color-mix(in srgb, var(--blue) 30%, transparent) 0%, transparent 68%),
-    linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--blue) 18%, transparent) 50%, transparent 100%);
+    radial-gradient(circle at center, color-mix(in srgb, var(--spinner-color) 30%, transparent) 0%, transparent 68%),
+    linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--spinner-color) 18%, transparent) 50%, transparent 100%);
   filter: blur(18px);
   opacity: 0.9;
   animation: spinner-logo-glow 1.8s ease-in-out infinite;
@@ -38,7 +38,7 @@
   position: relative;
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  align-items: end;
+  align-items: center;
   gap: var(--spinner-gap);
   width: var(--spinner-width);
   height: var(--spinner-height);
@@ -53,15 +53,26 @@
   box-shadow:
     0 0 0 1px color-mix(in srgb, white 8%, transparent),
     0 0 18px color-mix(in srgb, var(--spinner-color) 26%, transparent);
-  transform-origin: center bottom;
+  transform-origin: center center;
   animation: spinner-wave 1.2s ease-in-out infinite;
 }
 
-.spinner-logo-bar-1 { --bar-height: 58%; animation-delay: 0s; }
-.spinner-logo-bar-2 { --bar-height: 80%; animation-delay: 0.12s; }
+.spinner-logo-bar-1 { --bar-height: 43%; animation-delay: 0s; }
+.spinner-logo-bar-2 { --bar-height: 76%; animation-delay: 0.12s; }
 .spinner-logo-bar-3 { --bar-height: 100%; animation-delay: 0.24s; }
-.spinner-logo-bar-4 { --bar-height: 80%; animation-delay: 0.36s; }
-.spinner-logo-bar-5 { --bar-height: 58%; animation-delay: 0.48s; }
+.spinner-logo-bar-4 { --bar-height: 76%; animation-delay: 0.36s; }
+.spinner-logo-bar-5 { --bar-height: 43%; animation-delay: 0.48s; }
+
+.spinner-xs .spinner-logo-shell {
+  --spinner-width: 22px;
+  --spinner-height: 18px;
+  --spinner-gap: 2px;
+  padding: 0;
+}
+
+.spinner-xs .spinner-logo-glow {
+  display: none;
+}
 
 .spinner-sm .spinner-logo-shell {
   --spinner-width: 34px;

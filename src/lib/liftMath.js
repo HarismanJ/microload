@@ -1,8 +1,8 @@
-export const KG_TO_LBS = 2.20462
-export const LBS_TO_KG = 0.453592
+const KG_TO_LBS = 2.20462
+const LBS_TO_KG = 0.453592
 export const MAX_REPS = 9999
 export const MAX_WEIGHT = 9999
-export const MAX_BODYWEIGHT_EXTERNAL_KG = 999
+const MAX_BODYWEIGHT_EXTERNAL_KG = 999
 export const DEFAULT_BODYWEIGHT_KG = 170 * LBS_TO_KG
 
 export function fmtCompact(n) {
@@ -93,4 +93,20 @@ export function getSetVolumeKg({
 
 export function getSetVolumeInUnit(set, targetUnit = 'kg') {
   return fromKg(getSetVolumeKg(set), targetUnit)
+}
+
+export function getSetTrainingVolumeFactor(set = {}) {
+  if (set?.is_warmup || set?.setType === 'warmup' || set?.set_type === 'warmup') return 0
+  const setType = set?.setType ?? set?.set_type ?? 'normal'
+  if (setType === 'warmup') return 0
+  if (setType === 'dropset') return 0.5
+  return 1
+}
+
+export function getSetTrainingVolumeKg(set) {
+  return getSetVolumeKg(set) * getSetTrainingVolumeFactor(set)
+}
+
+export function getSetTrainingVolumeInUnit(set, targetUnit = 'kg') {
+  return fromKg(getSetTrainingVolumeKg(set), targetUnit)
 }

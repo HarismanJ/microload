@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useEffectEvent } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useEffectEvent } from 'react'
+import { push as pushBack, remove as removeBack } from '../lib/backStack'
 import { supabase } from '../lib/supabase'
 import { getCached, setCached, invalidateCache } from '../lib/cache'
 import { useCurrentUserId } from '../context/UserContext'
@@ -22,6 +23,7 @@ const DEFAULT_GOALS = {
   sodium: 2300, potassium: 3500, cholesterol: 300,
   calcium: 1000, iron: 18, magnesium: 400, zinc: 11,
   vitamin_a: 900, vitamin_c: 90, vitamin_d: 15,
+  folate: 400, vitamin_b12: 2.4, vitamin_b6: 1.7,
 }
 
 const NUTRITION_LOG_SELECT = [
@@ -46,6 +48,9 @@ const NUTRITION_LOG_SELECT = [
   'vitamin_a',
   'vitamin_c',
   'vitamin_d',
+  'folate',
+  'vitamin_b12',
+  'vitamin_b6',
 ].join(', ')
 
 const GOAL_FIELD_RULES = {
@@ -66,6 +71,9 @@ const GOAL_FIELD_RULES = {
   vitamin_a_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_a, label: 'Vitamin A goal' },
   vitamin_c_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_c, label: 'Vitamin C goal' },
   vitamin_d_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_d, label: 'Vitamin D goal' },
+  folate_goal: { ...NUTRITION_FIELD_LIMITS.folate, label: 'Folate goal' },
+  vitamin_b12_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_b12, label: 'Vitamin B12 goal' },
+  vitamin_b6_goal: { ...NUTRITION_FIELD_LIMITS.vitamin_b6, label: 'Vitamin B6 goal' },
 }
 
 function goalInputProps(key) {
@@ -142,6 +150,9 @@ const DETAIL_RENDER_SECTIONS = [
       { label: 'Vitamin A', key: 'vitamin_a', unit: 'mcg' },
       { label: 'Vitamin C', key: 'vitamin_c', unit: 'mg' },
       { label: 'Vitamin D', key: 'vitamin_d', unit: 'mcg' },
+      { label: 'Vitamin B6', key: 'vitamin_b6', unit: 'mg' },
+      { label: 'Vitamin B12', key: 'vitamin_b12', unit: 'mcg' },
+      { label: 'Folate', key: 'folate', unit: 'mcg' },
     ],
   },
 ].map(section => ({
@@ -149,6 +160,105 @@ const DETAIL_RENDER_SECTIONS = [
   animationIndex: _animIdx++,
   items: section.items.map(item => ({ ...item, animationIndex: _animIdx++ })),
 }))
+
+function NutritionFeedSkeleton() {
+  return (
+    <div className="nut-feed-list" role="status" aria-label="Loading food log">
+      {[0, 1, 2].map(i => (
+        <div key={i} className="nut-feed-item" style={{ '--feed-index': i }} aria-hidden="true">
+          <div className="nut-feed-rail">
+            <span className="nut-skeleton-dot" />
+            {i < 2 && <span className="nut-skeleton-line" />}
+          </div>
+          <div className="nut-feed-card">
+            <div className="nut-feed-card-top">
+              <div className="nut-feed-copy">
+                <div className="nut-skeleton-block nut-skeleton-food-name" />
+                <div className="nut-skeleton-block nut-skeleton-meta" />
+              </div>
+              <div className="nut-skeleton-block nut-skeleton-kcal" />
+            </div>
+            <div className="nut-feed-footer">
+              <div className="nut-feed-pills">
+                <div className="nut-skeleton-block nut-skeleton-pill" />
+                <div className="nut-skeleton-block nut-skeleton-pill" />
+                <div className="nut-skeleton-block nut-skeleton-pill" />
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const DEMO_FOODS = [
+  { name: 'Grilled Chicken Breast', meta: '1 serving · 12:30 PM', kcal: 165, p: 31, c: 0,  f: 4  },
+  { name: 'Greek Yogurt, Full Fat',  meta: '1 serving · 8:15 AM',  kcal: 190, p: 17, c: 9,  f: 10 },
+  { name: 'Brown Rice, Cooked',      meta: '1 serving · 7:00 PM',  kcal: 215, p: 5,  c: 45, f: 2  },
+  { name: 'Scrambled Eggs (2)',      meta: '1 serving · 7:45 AM',  kcal: 182, p: 12, c: 2,  f: 14 },
+  { name: 'Salmon Fillet, Baked',    meta: '1 serving · 6:45 PM',  kcal: 208, p: 28, c: 0,  f: 10 },
+  { name: 'Banana',                  meta: '1 serving · 3:00 PM',  kcal: 89,  p: 1,  c: 23, f: 0  },
+  { name: 'Oat Porridge with Milk',  meta: '1 serving · 8:00 AM',  kcal: 166, p: 6,  c: 28, f: 4  },
+  { name: 'Avocado Toast',           meta: '1 serving · 9:30 AM',  kcal: 310, p: 8,  c: 32, f: 18 },
+]
+
+function NutritionDemoCard() {
+  const [idx, setIdx] = useState(0)
+  const [displayed, setDisplayed] = useState('')
+  const timerRef = useRef(null)
+
+  useEffect(() => {
+    const fullName = DEMO_FOODS[idx].name
+    setDisplayed('')
+    let charIdx = 0
+
+    function typeNext() {
+      charIdx++
+      setDisplayed(fullName.slice(0, charIdx))
+      if (charIdx < fullName.length) {
+        timerRef.current = setTimeout(typeNext, 48)
+      } else {
+        timerRef.current = setTimeout(deleteNext, 1800)
+      }
+    }
+
+    function deleteNext() {
+      charIdx--
+      setDisplayed(fullName.slice(0, charIdx))
+      if (charIdx > 0) {
+        timerRef.current = setTimeout(deleteNext, 30)
+      } else {
+        timerRef.current = setTimeout(() => {
+          setIdx(i => (i + 1) % DEMO_FOODS.length)
+        }, 300)
+      }
+    }
+
+    timerRef.current = setTimeout(typeNext, 48)
+    return () => clearTimeout(timerRef.current)
+  }, [idx])
+
+  const food = DEMO_FOODS[idx]
+  return (
+    <div className="nut-empty-demo-card">
+      <div className="nut-feed-card-top">
+        <div className="nut-feed-copy">
+          <div className="nut-feed-food">{displayed}<span className="nut-empty-cursor">|</span></div>
+          <div className="nut-feed-meta">{food.meta}</div>
+        </div>
+        <div className="nut-feed-kcal">{food.kcal} kcal</div>
+      </div>
+      <div className="nut-feed-footer">
+        <div className="nut-feed-pills">
+          <span className="nut-feed-pill nut-feed-pill-protein">P {food.p}g</span>
+          <span className="nut-feed-pill nut-feed-pill-carbs">C {food.c}g</span>
+          <span className="nut-feed-pill nut-feed-pill-fat">F {food.f}g</span>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function Nutrition({ openAddFoodTick = 0 }) {
   const userId = useCurrentUserId()
@@ -168,11 +278,36 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [viewingLog, setViewingLog] = useState(null)
   const [logError, setLogError] = useState('')
+  const [skeletonFading, setSkeletonFading] = useState(false)
+  const [skeletonVisible, setSkeletonVisible] = useState(true)
 
   useEffect(() => {
     if (openAddFoodTick === 0) return
     setAddingFood(true)
   }, [openAddFoodTick])
+
+  useEffect(() => {
+    if (!addingFood) return
+    const id = pushBack(() => setAddingFood(false))
+    return () => removeBack(id)
+  }, [addingFood])
+
+  useEffect(() => {
+    if (!viewingLog) return
+    const id = pushBack(() => setViewingLog(null))
+    return () => removeBack(id)
+  }, [viewingLog])
+
+  useLayoutEffect(() => {
+    if (loading) {
+      setSkeletonFading(false)
+      setSkeletonVisible(true)
+      return
+    }
+    setSkeletonFading(true)
+    const timer = setTimeout(() => setSkeletonVisible(false), 680)
+    return () => clearTimeout(timer)
+  }, [loading])
 
   async function load() {
     if (!userId) return
@@ -197,7 +332,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
           .eq('user_id', userId)
           .eq('log_date', date)
           .order('created_at'),
-        supabase.from('profiles').select('calories_goal,protein_goal,carbs_goal,fat_goal,fiber_goal,sugar_goal,saturated_fat_goal,sodium_goal,potassium_goal,cholesterol_goal,calcium_goal,iron_goal,magnesium_goal,zinc_goal,vitamin_a_goal,vitamin_c_goal,vitamin_d_goal').eq('id', userId).single(),
+        supabase.from('profiles').select('calories_goal,protein_goal,carbs_goal,fat_goal,fiber_goal,sugar_goal,saturated_fat_goal,sodium_goal,potassium_goal,cholesterol_goal,calcium_goal,iron_goal,magnesium_goal,zinc_goal,vitamin_a_goal,vitamin_c_goal,vitamin_d_goal,folate_goal,vitamin_b12_goal,vitamin_b6_goal').eq('id', userId).single(),
         supabase.from('workout_sessions').select('calories_burned').eq('user_id', userId).not('finished_at', 'is', null).gte('finished_at', dayStart).lte('finished_at', dayEnd),
       ])
       const loadError = logsError || profileError || sessionsError
@@ -221,6 +356,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
         vitamin_a:     prof.vitamin_a_goal     || DEFAULT_GOALS.vitamin_a,
         vitamin_c:     prof.vitamin_c_goal     || DEFAULT_GOALS.vitamin_c,
         vitamin_d:     prof.vitamin_d_goal     || DEFAULT_GOALS.vitamin_d,
+        folate:        prof.folate_goal        || DEFAULT_GOALS.folate,
+        vitamin_b12:   prof.vitamin_b12_goal   || DEFAULT_GOALS.vitamin_b12,
+        vitamin_b6:    prof.vitamin_b6_goal    || DEFAULT_GOALS.vitamin_b6,
       } : DEFAULT_GOALS
 
       const burnedKcal = (sessionRows || []).reduce((sum, s) => sum + (s.calories_burned || 0), 0)
@@ -260,6 +398,9 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       iron: n('iron'), magnesium: Math.round((food.magnesium || 0) * m),
       zinc: n('zinc'), vitamin_a: Math.round((food.vitamin_a || 0) * m),
       vitamin_c: n('vitamin_c'), vitamin_d: n('vitamin_d'),
+      folate: Math.round((food.folate || 0) * m),
+      vitamin_b12: n('vitamin_b12'),
+      vitamin_b6: n('vitamin_b6'),
     }
     const { data, error } = await supabase
       .from('nutrition_logs')
@@ -288,6 +429,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     sodium: sum('sodium'), potassium: sum('potassium'), cholesterol: sum('cholesterol'),
     calcium: sum('calcium'), iron: sum('iron'), magnesium: sum('magnesium'), zinc: sum('zinc'),
     vitamin_a: sum('vitamin_a'), vitamin_c: sum('vitamin_c'), vitamin_d: sum('vitamin_d'),
+    folate: sum('folate'), vitamin_b12: sum('vitamin_b12'), vitamin_b6: sum('vitamin_b6'),
   }
 
   function openGoalsEdit() {
@@ -301,6 +443,8 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       magnesium_goal: goals.magnesium, zinc_goal: goals.zinc,
       vitamin_a_goal: goals.vitamin_a, vitamin_c_goal: goals.vitamin_c,
       vitamin_d_goal: goals.vitamin_d,
+      folate_goal: goals.folate, vitamin_b12_goal: goals.vitamin_b12,
+      vitamin_b6_goal: goals.vitamin_b6,
     })
     setEditingGoals(true)
   }
@@ -328,6 +472,8 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       magnesium_goal: n('magnesium_goal'), zinc_goal: n('zinc_goal'),
       vitamin_a_goal: n('vitamin_a_goal'), vitamin_c_goal: n('vitamin_c_goal'),
       vitamin_d_goal: n('vitamin_d_goal'),
+      folate_goal: n('folate_goal'), vitamin_b12_goal: n('vitamin_b12_goal'),
+      vitamin_b6_goal: n('vitamin_b6_goal'),
     }
     try {
       const { error } = await supabase.from('profiles').update(updates).eq('id', userId)
@@ -342,6 +488,8 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
         magnesium: updates.magnesium_goal, zinc: updates.zinc_goal,
         vitamin_a: updates.vitamin_a_goal, vitamin_c: updates.vitamin_c_goal,
         vitamin_d: updates.vitamin_d_goal,
+        folate: updates.folate_goal, vitamin_b12: updates.vitamin_b12_goal,
+        vitamin_b6: updates.vitamin_b6_goal,
       })
       invalidateCache('profile', 'home', `nut_${date}`)
       setEditingGoals(false)
@@ -352,7 +500,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     }
   }
 
-  const remaining = goals.calories - Math.round(totals.calories) + exerciseCalories
+  const remaining = goals.calories - Math.round(totals.calories)
   const R = 52, C = 2 * Math.PI * R
   const dash = (Math.min(1, totals.calories / goals.calories)) * C
   const feedLogs = useMemo(() => {
@@ -393,12 +541,15 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       { label: 'Vitamin A',     val: Math.round(log.vitamin_a || 0),       unit: 'mcg' },
       { label: 'Vitamin C',     val: +(log.vitamin_c || 0).toFixed(1),     unit: 'mg'  },
       { label: 'Vitamin D',     val: +(log.vitamin_d || 0).toFixed(1),     unit: 'mcg' },
+      { label: 'Vitamin B6',    val: +(log.vitamin_b6 || 0).toFixed(2),    unit: 'mg'  },
+      { label: 'Vitamin B12',   val: +(log.vitamin_b12 || 0).toFixed(2),   unit: 'mcg' },
+      { label: 'Folate',        val: Math.round(log.folate || 0),          unit: 'mcg' },
     ].filter(m => m.val > 0)
 
     return (
       <div className="nut-picker-screen">
         <div className="nut-picker-header">
-          <button className="back-btn" onClick={() => setViewingLog(null)}>
+          <button className="back-btn" onClick={() => window.history.back()}>
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
           </button>
           <div>
@@ -443,7 +594,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     return (
       <NutritionFoodPicker
         onAdd={addLog}
-        onClose={() => setAddingFood(false)}
+        onClose={() => window.history.back()}
         heading="Add Food"
         submitLabel="Add to Log"
       />
@@ -540,9 +691,12 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
           <div className="nut-goals-section-title">Vitamins</div>
           <div className="nut-goals-grid">
             {[
-              { key: 'vitamin_a_goal', label: 'Vitamin A', unit: 'mcg' },
-              { key: 'vitamin_c_goal', label: 'Vitamin C', unit: 'mg'  },
-              { key: 'vitamin_d_goal', label: 'Vitamin D', unit: 'mcg' },
+              { key: 'vitamin_a_goal',   label: 'Vitamin A',   unit: 'mcg' },
+              { key: 'vitamin_c_goal',   label: 'Vitamin C',   unit: 'mg'  },
+              { key: 'vitamin_d_goal',   label: 'Vitamin D',   unit: 'mcg' },
+              { key: 'vitamin_b6_goal',  label: 'Vitamin B6',  unit: 'mg'  },
+              { key: 'vitamin_b12_goal', label: 'Vitamin B12', unit: 'mcg' },
+              { key: 'folate_goal',      label: 'Folate',      unit: 'mcg' },
             ].map(({ key, label, unit }) => (
               <div key={key} className="nut-goals-field">
                 <label className="nut-goals-label">{label}</label>
@@ -560,14 +714,14 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
             {goalsError && <div className="cf-error">{goalsError}</div>}
             <button className="nut-goals-cancel" onClick={() => setEditingGoals(false)}>Cancel</button>
             <button className="nut-goals-save" onClick={saveGoals} disabled={savingGoals}>
-              {savingGoals ? 'Saving...' : 'Save Goals'}
+              {savingGoals ? <LoadingSpinner size="xs" color="currentColor" /> : 'Save Goals'}
             </button>
           </div>
         </div>
       )}
 
       {/* Summary — tap to expand full breakdown */}
-      <div className="nut-summary" onClick={() => setShowDetail(s => !s)} style={{ cursor: 'pointer' }}>
+      <div className={`nut-summary${loading ? ' nut-summary--loading' : ''}`} onClick={() => setShowDetail(s => !s)} style={{ cursor: 'pointer' }}>
         <div className="nut-ring-wrap">
           <svg width="120" height="120" viewBox="0 0 120 120">
             <circle cx="60" cy="60" r={R} fill="none" stroke="rgba(255,255,255,0.16)" strokeWidth="9"/>
@@ -704,58 +858,61 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
           </div>
         </div>
 
-        {loading ? (
-          <LoadingSpinner fullPage />
-        ) : logs.length > 0 ? (
-          <div key={feedListKey} className="nut-feed-list nut-feed-list-animated">
-            {feedLogs.map((log, index) => (
-              <div key={log.id} className="nut-feed-item" style={{ '--feed-index': index }}>
-                <div className="nut-feed-rail" aria-hidden="true">
-                  <span className="nut-feed-dot" />
-                  {index < feedLogs.length - 1 && <span className="nut-feed-line" />}
-                </div>
-                <div className="nut-feed-card" onClick={() => { setDeleteTargetId(null); setViewingLog(log) }} style={{ cursor: 'pointer' }}>
-                  <div className="nut-feed-card-top">
-                    <div className="nut-feed-copy">
-                      <div className="nut-feed-food">{log.food_name}</div>
-                      <div className="nut-feed-meta">
-                        {log.servings !== 1 ? `${log.servings}× servings` : '1 serving'} · {formatFoodLogTime(log.created_at)}
-                      </div>
-                    </div>
-                    <div className="nut-feed-kcal">{Math.round(log.calories)} kcal</div>
+        <div className="nut-feed-shell">
+          {skeletonVisible && (
+            <div className={'nut-skeleton-overlay' + (skeletonFading ? ' nut-skeleton-overlay--exit' : '')}>
+              <NutritionFeedSkeleton />
+            </div>
+          )}
+          {!loading && (logs.length > 0 ? (
+            <div key={feedListKey} className="nut-feed-list nut-feed-list-animated">
+              {feedLogs.map((log, index) => (
+                <div key={log.id} className="nut-feed-item" style={{ '--feed-index': index }}>
+                  <div className="nut-feed-rail" aria-hidden="true">
+                    <span className="nut-feed-dot" />
+                    {index < feedLogs.length - 1 && <span className="nut-feed-line" />}
                   </div>
+                  <div className="nut-feed-card" onClick={() => { setDeleteTargetId(null); setViewingLog(log) }} style={{ cursor: 'pointer' }}>
+                    <div className="nut-feed-card-top">
+                      <div className="nut-feed-copy">
+                        <div className="nut-feed-food">{log.food_name}</div>
+                        <div className="nut-feed-meta">
+                          {log.servings !== 1 ? `${log.servings}× servings` : '1 serving'} · {formatFoodLogTime(log.created_at)}
+                        </div>
+                      </div>
+                      <div className="nut-feed-kcal">{Math.round(log.calories)} kcal</div>
+                    </div>
 
-                  <div className="nut-feed-footer">
-                    <div className="nut-feed-pills">
-                      <span className="nut-feed-pill nut-feed-pill-protein">P {Math.round(log.protein || 0)}g</span>
-                      <span className="nut-feed-pill nut-feed-pill-carbs">C {Math.round(log.carbs || 0)}g</span>
-                      <span className="nut-feed-pill nut-feed-pill-fat">F {Math.round(log.fat || 0)}g</span>
-                    </div>
-                    {deleteTargetId === log.id ? (
-                      <div className="nut-feed-delete-confirm" onClick={e => e.stopPropagation()}>
-                        <span className="nut-feed-delete-confirm-text">Remove this entry?</span>
-                        <button className="nut-feed-delete-cancel-btn" onClick={() => setDeleteTargetId(null)}>Cancel</button>
-                        <button className="nut-feed-remove-btn nut-feed-remove-btn-confirm" onClick={() => { removeLog(log.id); setDeleteTargetId(null) }}>Delete</button>
+                    <div className="nut-feed-footer">
+                      <div className="nut-feed-pills">
+                        <span className="nut-feed-pill nut-feed-pill-protein">P {Math.round(log.protein || 0)}g</span>
+                        <span className="nut-feed-pill nut-feed-pill-carbs">C {Math.round(log.carbs || 0)}g</span>
+                        <span className="nut-feed-pill nut-feed-pill-fat">F {Math.round(log.fat || 0)}g</span>
                       </div>
-                    ) : (
-                      <button className="nut-feed-remove-btn" onClick={e => { e.stopPropagation(); setDeleteTargetId(log.id) }}>
-                        Delete
-                      </button>
-                    )}
+                      {deleteTargetId === log.id ? (
+                        <div className="nut-feed-delete-confirm" onClick={e => e.stopPropagation()}>
+                          <span className="nut-feed-delete-confirm-text">Remove this entry?</span>
+                          <button className="nut-feed-delete-cancel-btn" onClick={() => setDeleteTargetId(null)}>Cancel</button>
+                          <button className="nut-feed-remove-btn nut-feed-remove-btn-confirm" onClick={() => { removeLog(log.id); setDeleteTargetId(null) }}>Delete</button>
+                        </div>
+                      ) : (
+                        <button className="nut-feed-remove-btn" onClick={e => { e.stopPropagation(); setDeleteTargetId(log.id) }}>
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="nut-feed-empty">
-            <div className="nut-feed-empty-title">No food tracked yet</div>
-            <button className="nut-feed-add-btn nut-feed-add-btn-inline" onClick={() => setAddingFood(true)}>
-              <span>+</span>
-              <span>Add your first food</span>
-            </button>
-          </div>
-        )}
+              ))}
+            </div>
+          ) : (
+            <div className="nut-feed-empty">
+              <NutritionDemoCard />
+              <div className="nut-feed-empty-title">No food tracked yet</div>
+              <div className="nut-feed-empty-text">Tap + Add Food to start logging your meals</div>
+            </div>
+          ))}
+        </div>
       </div>
 
     </div>

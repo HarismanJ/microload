@@ -1,6 +1,7 @@
 import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
+import { recalculateStreakAfterDeletion } from '../../lib/streakUtils'
 import { getLocalTrainingWeekRange } from '../../lib/muscleWorkload'
 import { useCurrentUserId } from '../../context/UserContext'
 import { calculateSetEstimatedOrm } from '../../lib/orm'
@@ -10,8 +11,8 @@ import {
   convertWeight,
   fmtCompact,
   getProfileBodyweightKg,
-  getSetVolumeKg,
-  getSetVolumeInUnit,
+  getSetTrainingVolumeKg,
+  getSetTrainingVolumeInUnit,
   getWeightInputMax,
   getWeightInputMin,
   isRepsWithinInputRange,
@@ -25,6 +26,17 @@ function formatDuration(start, end) {
   const mins = Math.round((new Date(end) - new Date(start)) / 60000)
   if (mins < 60) return `${mins}m`
   return `${Math.floor(mins / 60)}h ${mins % 60}m`
+}
+
+function getDaySetType(set) {
+  if (set?.is_warmup || set?.setType === 'warmup' || set?.set_type === 'warmup') return 'warmup'
+  return set?.set_type ?? set?.setType ?? 'normal'
+}
+
+function isDayWorkingSet(group, set) {
+  if (group?.category === 'Cardio' || set?.duration_seconds > 0) return true
+  const setType = getDaySetType(set)
+  return setType !== 'warmup' && setType !== 'dropset'
 }
 
 function priorWeekMuscleKey() {
@@ -106,7 +118,7 @@ function buildUpdatedNutritionLog(log, foodName, servings) {
   return updated
 }
 
-export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], dateStr, onBack, onDeleteWorkout, onRefresh }) {
+export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], dateStr, onBack, onDeleteWorkout, onRefresh, onBodyweightChanged }) {
   const userId = useCurrentUserId()
   const mountedRef = useRef(true)
   useEffect(() => () => { mountedRef.current = false }, [])
@@ -190,7 +202,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
             .order('started_at'),
           supabase
             .from('workout_sets')
-            .select('id, session_id, exercise_id, set_number, reps, weight, unit, estimated_1rm, duration_seconds, exercises(name, category, equipment)')
+            .select('id, session_id, exercise_id, set_number, reps, weight, unit, estimated_1rm, duration_seconds, is_warmup, set_type, set_group_index, exercises(name, category, equipment)')
             .eq('user_id', userId)
             .in('session_id', activeSessionIds)
             .order('session_id')
@@ -284,12 +296,38 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
         equipment: group?.equipment,
         bodyweightKg,
       })
-      const { error } = await supabase
-        .from('workout_sets')
-        .update({ weight, reps, estimated_1rm: estimatedOrm })
-        .eq('id', set.id)
+      const volumeBodyweightKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
+      const previousVolumeKg = getSetTrainingVolumeKg({
+        weight: set.weight,
+        reps: set.reps,
+        unit: set.unit,
+        equipment: group?.equipment,
+        bodyweightKg: volumeBodyweightKg,
+        set_type: set.set_type,
+        is_warmup: set.is_warmup,
+      })
+      const nextVolumeKg = getSetTrainingVolumeKg({
+        weight,
+        reps,
+        unit: set.unit,
+        equipment: group?.equipment,
+        bodyweightKg: volumeBodyweightKg,
+        set_type: set.set_type,
+        is_warmup: set.is_warmup,
+      })
+      const { data: profileVol, error: profileFetchError } = await supabase.from('profiles').select('lifetime_volume_kg').eq('id', userId).single()
+      if (profileFetchError) throw profileFetchError
+      const nextLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - previousVolumeKg + nextVolumeKg)
 
-      if (error) throw error
+      const [{ error }, { error: profileUpdateError }] = await Promise.all([
+        supabase
+          .from('workout_sets')
+          .update({ weight, reps, estimated_1rm: estimatedOrm })
+          .eq('id', set.id),
+        supabase.from('profiles').update({ lifetime_volume_kg: nextLifetimeVolumeKg }).eq('id', userId),
+      ])
+
+      if (error || profileUpdateError) throw (error || profileUpdateError)
 
       invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`, priorWeekMuscleKey())
       setWorkoutSessions(prev => prev.map(sess => ({
@@ -322,12 +360,14 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setDeleteSetError('')
 
     const bwKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
-    const setVolumeKg = getSetVolumeKg({
+    const setVolumeKg = getSetTrainingVolumeKg({
       weight: set.weight,
       reps: set.reps,
       unit: set.unit,
       equipment: group?.equipment,
       bodyweightKg: bwKg,
+      set_type: set.set_type,
+      is_warmup: set.is_warmup,
     })
 
     try {
@@ -467,12 +507,14 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     const targetSession = workoutSessions.find(sess => sess.id === targetSessionId)
     const sessionVolumeKg = (targetSession?.groups || []).reduce((sum, group) => (
       sum + group.sets.reduce((s2, set) => (
-        s2 + getSetVolumeKg({
+        s2 + getSetTrainingVolumeKg({
           weight: set.weight,
           reps: set.reps,
           unit: set.unit,
           equipment: group.equipment,
           bodyweightKg: bwKg,
+          set_type: set.set_type,
+          is_warmup: set.is_warmup,
         })
       ), 0)
     ), 0)
@@ -527,6 +569,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       }
 
       const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)
+      await recalculateStreakAfterDeletion(supabase, userId)
       invalidateCache('home', 'profile', 'ranks', 'achievements', calKey, priorWeekMuscleKey())
       setWorkoutSessions(remainingSessions)
       setDeleteTargetId(null)
@@ -597,6 +640,7 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
       setWeightLogs(prev => prev.filter(log => log.id !== logId))
       setWeightDeleteTargetId(null)
       onRefresh?.()
+      onBodyweightChanged?.()
     } catch (error) {
       setWeightDeleteError(error?.message || 'Could not delete this weight log.')
     } finally {
@@ -608,17 +652,29 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
   const duration = singleSession ? formatDuration(singleSession.started_at, singleSession.finished_at) : null
   const totalSessions = workoutSessions.length
   const totalExercises = workoutSessions.reduce((sum, sess) => sum + sess.groups.length, 0)
-  const totalSets = workoutSessions.reduce((sum, sess) => sum + sess.groups.reduce((groupSum, group) => groupSum + group.sets.length, 0), 0)
+  const hasStrengthWorkout = workoutSessions.some(sess => sess.groups.some(group => group.category !== 'Cardio'))
+  const totalSets = workoutSessions.reduce((sum, sess) => (
+    sum + sess.groups.reduce((groupSum, group) => (
+      groupSum + group.sets.filter(set => isDayWorkingSet(group, set)).length
+    ), 0)
+  ), 0)
+  const totalDropSets = workoutSessions.reduce((sum, sess) => (
+    sum + sess.groups.reduce((groupSum, group) => (
+      groupSum + group.sets.filter(set => group.category !== 'Cardio' && getDaySetType(set) === 'dropset').length
+    ), 0)
+  ), 0)
   const profileBodyweightKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
   const totalVolume = workoutSessions.reduce((sum, sess) => (
     sum + sess.groups.reduce((groupSum, group) => (
       groupSum + group.sets.reduce((setSum, set) => (
-        setSum + getSetVolumeInUnit({
+        setSum + getSetTrainingVolumeInUnit({
           weight: set.weight,
           reps: set.reps,
           unit: set.unit,
           equipment: group.equipment,
           bodyweightKg: profileBodyweightKg,
+          set_type: set.set_type,
+          is_warmup: set.is_warmup,
         }, profileMeta?.unit_preference || 'kg')
       ), 0)
     ), 0)
@@ -684,14 +740,14 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                   <div className="day-summary-label">{totalSessions > 1 ? 'Workouts' : 'Exercises'}</div>
                 </div>
                 <div className="day-summary-stat">
-                  <div className="day-summary-value">{totalSets}</div>
-                  <div className="day-summary-label">Sets</div>
+                  <div className="day-summary-value">{totalDropSets ? `${totalSets} + ${totalDropSets}` : totalSets}</div>
+                  <div className="day-summary-label">{totalDropSets ? 'Work + Drops' : (hasStrengthWorkout ? 'Working Sets' : 'Entries')}</div>
                 </div>
                 <div className="day-summary-stat">
                   <div className="day-summary-value">
                     {totalVolume >= 1000 ? `${(totalVolume / 1000).toFixed(1)}k` : totalVolume.toFixed(0)}
                   </div>
-                  <div className="day-summary-label">Volume</div>
+                  <div className="day-summary-label">Effective Vol</div>
                 </div>
                 {totalCaloriesBurned > 0 && (
                   <div className="day-summary-stat">

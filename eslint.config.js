@@ -2,6 +2,8 @@ import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
+import reactPlugin from 'eslint-plugin-react'
+import importPlugin from 'eslint-plugin-import'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
@@ -9,6 +11,8 @@ export default defineConfig([
     'dist',
     'dist-debug',
     'coverage',
+    'playwright-report',
+    'test-results',
     'android/app/build',
     'android/app/src/main/assets',
     'ios/App/App/public',
@@ -25,11 +29,31 @@ export default defineConfig([
       globals: {
         ...globals.browser,
         ...globals.node,
+        afterAll: 'readonly',
         afterEach: 'readonly',
+        beforeAll: 'readonly',
         beforeEach: 'readonly',
         describe: 'readonly',
         expect: 'readonly',
         it: 'readonly',
+        vi: 'readonly',
+      },
+    },
+  },
+  {
+    files: ['e2e/**/*.{js,jsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        afterAll: 'readonly',
+        afterEach: 'readonly',
+        beforeAll: 'readonly',
+        beforeEach: 'readonly',
+        describe: 'readonly',
+        expect: 'readonly',
+        it: 'readonly',
+        test: 'readonly',
         vi: 'readonly',
       },
     },
@@ -42,6 +66,10 @@ export default defineConfig([
   },
   {
     files: ['**/*.{js,jsx}'],
+    plugins: {
+      react: reactPlugin,
+      import: importPlugin,
+    },
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -63,6 +91,9 @@ export default defineConfig([
       'no-fallthrough': 'error',
       'no-empty': ['error', { allowEmptyCatch: false }],
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'react/jsx-key': ['error', { checkFragmentShorthand: true }],
+      'react/no-array-index-key': 'warn',
+      'import/no-cycle': 'error',
     },
   },
   {

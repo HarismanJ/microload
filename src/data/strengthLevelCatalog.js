@@ -704,6 +704,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Bench Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Chest",
@@ -725,6 +726,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Bulgarian Split Squat",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -746,6 +748,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -764,6 +767,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Fly",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Chest"
@@ -782,6 +786,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Lateral Raise",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Lateral Delts"
@@ -800,6 +805,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Row",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -822,6 +828,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Shoulder Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Front Delts",
@@ -842,6 +849,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Shrug",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Traps"
@@ -921,6 +929,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Goblet Squat",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -1001,6 +1010,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Hammer Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps",
@@ -1203,6 +1213,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Incline Dumbbell Bench Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Upper Chest",
@@ -1326,6 +1337,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Lat Pulldown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lats",
@@ -2009,6 +2021,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Seated Cable Row",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -2031,6 +2044,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Seated Dumbbell Shoulder Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Front Delts",
@@ -2569,6 +2583,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Tricep Pushdown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -2649,6 +2664,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Wall Ball",
     "equipment": "Dumbbell",
+    "bilateral": false,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -2794,6 +2810,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Bicep Curl",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -2812,6 +2829,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Crunch",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Core",
     "primaryMuscles": [
       "Core"
@@ -2830,6 +2848,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable External Rotation",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts"
@@ -2848,6 +2867,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Fly",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Push",
     "primaryMuscles": [
       "Chest"
@@ -2866,6 +2886,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Hammer Curl",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps",
@@ -2883,6 +2904,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Kickback",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -2901,6 +2923,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Lateral Raise",
     "equipment": "Cable",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Lateral Delts"
@@ -2919,6 +2942,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Leg Extension",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Legs",
     "primaryMuscles": [
       "Quads"
@@ -2937,6 +2961,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Overhead Tricep Extension",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -2955,6 +2980,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Pull Through",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Legs",
     "primaryMuscles": [
       "Glutes",
@@ -2975,6 +3001,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Reverse Fly",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts",
@@ -2995,6 +3022,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Shrug",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Traps"
@@ -3014,6 +3042,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Upright Row",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lateral Delts",
@@ -3034,6 +3063,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Cable Woodchopper",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Core",
     "primaryMuscles": [
       "Obliques",
@@ -3053,6 +3083,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Close Grip Lat Pulldown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lats",
@@ -3074,6 +3105,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Face Pull",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts",
@@ -3094,6 +3126,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "High Pulley Crunch",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Core",
     "primaryMuscles": [
       "Core"
@@ -3112,6 +3145,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Incline Cable Curl",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -3130,6 +3164,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Lying Cable Curl",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Legs",
     "primaryMuscles": [
       "Hamstrings"
@@ -3148,6 +3183,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "One Arm Cable Bicep Curl",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -3166,6 +3202,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "One Arm Lat Pulldown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lats",
@@ -3187,6 +3224,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "One Arm Pulldown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lats"
@@ -3206,6 +3244,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "One Arm Seated Cable Row",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -3228,6 +3267,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Overhead Cable Curl",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -3246,6 +3286,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Reverse Grip Lat Pulldown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lats",
@@ -3267,6 +3308,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Reverse Grip Tricep Pushdown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -3285,6 +3327,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Standing Cable Crunch",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Core",
     "primaryMuscles": [
       "Core"
@@ -3303,6 +3346,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Straight Arm Pulldown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Pull",
     "primaryMuscles": [
       "Lats"
@@ -3322,6 +3366,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Tricep Rope Pushdown",
     "equipment": "Cable",
+    "bilateral": false,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -3340,6 +3385,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Arnold Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Front Delts",
@@ -3360,6 +3406,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Bent Over Dumbbell Row",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -3382,6 +3429,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Chest Supported Dumbbell Row",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -3404,6 +3452,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Close Grip Dumbbell Bench Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Triceps",
@@ -3424,6 +3473,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Decline Dumbbell Bench Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Lower Chest",
@@ -3444,6 +3494,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Decline Dumbbell Fly",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Lower Chest",
@@ -3463,6 +3514,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Bench Pull",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -3485,6 +3537,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Calf Raise",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Calves"
@@ -3501,6 +3554,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Clean and Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -3524,6 +3578,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Concentration Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -3542,6 +3597,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Deadlift",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Glutes",
@@ -3565,6 +3621,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell External Rotation",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts"
@@ -3583,6 +3640,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Face Pull",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts",
@@ -3603,6 +3661,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Floor Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Chest",
@@ -3624,6 +3683,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Front Raise",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Front Delts"
@@ -3642,6 +3702,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Front Squat",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -3663,6 +3724,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Hang Clean",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -3685,6 +3747,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell High Pull",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Traps",
@@ -3707,6 +3770,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Incline Y Raise",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts",
@@ -3727,6 +3791,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Lunge",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -3748,6 +3813,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Pullover",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Lats",
@@ -3767,6 +3833,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Push Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Front Delts",
@@ -3789,6 +3856,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Reverse Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Forearms",
@@ -3806,6 +3874,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Reverse Fly",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Rear Delts",
@@ -3826,6 +3895,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Reverse Wrist Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Forearms"
@@ -3842,6 +3912,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Romanian Deadlift",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Hamstrings",
@@ -3862,6 +3933,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Side Bend",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Core",
     "primaryMuscles": [
       "Obliques"
@@ -3880,6 +3952,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Snatch",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Glutes",
@@ -3902,6 +3975,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Split Squat",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -3923,6 +3997,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Squat",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Quads",
@@ -3944,6 +4019,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Thruster",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Quads",
@@ -3966,6 +4042,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Tricep Extension",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -3984,6 +4061,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Tricep Kickback",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -4002,6 +4080,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Upright Row",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Lateral Delts",
@@ -4022,6 +4101,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Walking Calf Raise",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Calves"
@@ -4038,6 +4118,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Wrist Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Forearms"
@@ -4054,6 +4135,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Dumbbell Z Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Front Delts",
@@ -4075,6 +4157,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Incline Dumbbell Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -4093,6 +4176,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Incline Dumbbell Fly",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Upper Chest",
@@ -4112,6 +4196,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Incline Hammer Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps",
@@ -4129,6 +4214,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Lying Dumbbell Tricep Extension",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -4147,6 +4233,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "One Arm Dumbbell Preacher Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -4165,6 +4252,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Renegade Row",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Upper Back",
@@ -4187,6 +4275,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Seated Dumbbell Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Biceps"
@@ -4205,6 +4294,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Seated Dumbbell Tricep Extension",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -4223,6 +4313,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Single Leg Dumbbell Deadlift",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Legs",
     "primaryMuscles": [
       "Glutes",
@@ -4244,6 +4335,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Tate Press",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Push",
     "primaryMuscles": [
       "Triceps"
@@ -4263,6 +4355,7 @@ export const STRENGTHLEVEL_EXERCISES = [
   {
     "name": "Zottman Curl",
     "equipment": "Dumbbell",
+    "bilateral": true,
     "category": "Pull",
     "primaryMuscles": [
       "Forearms",

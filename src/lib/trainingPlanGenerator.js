@@ -121,6 +121,123 @@ const FOCUS_SLOT_NAMES = {
   cardio: ['Running', 'Cycling', 'Rowing Machine', 'Elliptical', 'Stationary Bike', 'Walking'],
 }
 
+const STAPLE_EXERCISE_NAMES = new Set([
+  'bench press',
+  'incline bench press',
+  'decline bench press',
+  'dumbbell bench press',
+  'incline dumbbell bench press',
+  'decline dumbbell bench press',
+  'chest press',
+  'smith machine bench press',
+  'close grip bench press',
+  'dips',
+  'arnold press',
+  'military press',
+  'dumbbell shoulder press',
+  'seated dumbbell shoulder press',
+  'shoulder press',
+  'seated shoulder press',
+  'machine shoulder press',
+  'push ups',
+  'cable fly',
+  'machine chest fly',
+  'dumbbell fly',
+  'incline dumbbell fly',
+  'pull ups',
+  'chin ups',
+  'lat pulldown',
+  'close grip lat pulldown',
+  'reverse grip lat pulldown',
+  'straight arm pulldown',
+  'bent over row',
+  'dumbbell row',
+  'bent over dumbbell row',
+  'chest supported dumbbell row',
+  'machine row',
+  'seated cable row',
+  't bar row',
+  'pendlay row',
+  'face pull',
+  'barbell shrug',
+  'dumbbell shrug',
+  'squat',
+  'front squat',
+  'goblet squat',
+  'hack squat',
+  'smith machine squat',
+  'bulgarian split squat',
+  'dumbbell bulgarian split squat',
+  'split squat',
+  'dumbbell split squat',
+  'deadlift',
+  'romanian deadlift',
+  'dumbbell romanian deadlift',
+  'dumbbell deadlift',
+  'hex bar deadlift',
+  'sumo deadlift',
+  'good morning',
+  'horizontal leg press',
+  'sled leg press',
+  'vertical leg press',
+  'walking lunge',
+  'barbell lunge',
+  'dumbbell lunge',
+  'hip thrust',
+  'barbell glute bridge',
+  'cable pull through',
+  'hip abduction',
+  'hip adduction',
+  'lying leg curl',
+  'seated leg curl',
+  'standing leg curl',
+  'leg extension',
+  'cable leg extension',
+  'barbell calf raise',
+  'machine calf raise',
+  'seated calf raise',
+  'dumbbell calf raise',
+  'dumbbell lateral raise',
+  'cable lateral raise',
+  'machine lateral raise',
+  'cable reverse fly',
+  'machine reverse fly',
+  'barbell curl',
+  'preacher curl',
+  'machine bicep curl',
+  'cable bicep curl',
+  'cable hammer curl',
+  'dumbbell curl',
+  'hammer curl',
+  'seated dumbbell curl',
+  'incline dumbbell curl',
+  'ez bar curl',
+  'tricep pushdown',
+  'tricep rope pushdown',
+  'tricep extension',
+  'machine tricep extension',
+  'cable overhead tricep extension',
+  'lying tricep extension',
+  'dumbbell tricep extension',
+  'seated dumbbell tricep extension',
+  'lying dumbbell tricep extension',
+  'cable crunch',
+  'standing cable crunch',
+  'machine seated crunch',
+  'machine back extension',
+])
+
+const NICHE_EXERCISE_NAME_PATTERNS = [
+  /\bbehind (the )?(back|neck)\b/,
+  /\bjefferson\b/,
+  /\bzercher\b/,
+  /\bsnatch\b/,
+  /\bdeficit\b/,
+  /\bpause(d)?\b/,
+  /\bsingle[- ]leg\b/,
+  /\bsissy\b/,
+]
+
 const FOCUS_LABELS = {
   push: 'Push',
   pull: 'Pull',
@@ -132,6 +249,8 @@ const FOCUS_LABELS = {
   full_body_c: 'Full Body C',
   cardio: 'Cardio',
 }
+
+const FOCUS_KEYS_BY_LABEL = Object.fromEntries(Object.entries(FOCUS_LABELS).map(([k, v]) => [v, k]))
 
 const SPLIT_DESCRIPTIONS = {
   auto: 'Auto-selected from your availability, goal, and experience.',
@@ -198,6 +317,18 @@ const LEGACY_WORKLOAD_BUCKET_GROUPS = {
 }
 const NICHE_WORKLOAD_GROUPS = new Set(['adductor', 'abductors', 'neck'])
 const MAJOR_WORKLOAD_GROUPS = new Set(['chest', 'upper-back', 'quadriceps', 'hamstring', 'gluteal'])
+// Structural muscles are tracked for flag detection but excluded from the volume score —
+// they're secondary-only in most exercises and are already diagnosed via missing_core flag
+const STRUCTURAL_MUSCLE_GROUPS = new Set(['abs', 'obliques', 'lower-back', 'forearm'])
+const LOWER_WORKLOAD_GROUPS = new Set(['quadriceps', 'hamstring', 'gluteal', 'calves', 'adductor', 'abductors', 'lower-back'])
+const PUSH_WORKLOAD_GROUPS = new Set(['chest', 'front-deltoids', 'triceps'])
+const PULL_WORKLOAD_GROUPS = new Set(['upper-back', 'trapezius', 'biceps', 'forearm'])
+const CORE_WORKLOAD_GROUPS = new Set(['abs', 'obliques'])
+const LOWER_PATTERNS = new Set(['squat', 'hinge', 'lunge', 'knee_flexion', 'knee_extension', 'hip_extension', 'calf'])
+const PUSH_PATTERNS = new Set(['horizontal_push', 'vertical_push', 'elbow_extension'])
+const PULL_PATTERNS = new Set(['horizontal_pull', 'vertical_pull', 'elbow_flexion'])
+const STRICT_UPPER_FOCUS_KEYS = new Set(['push', 'pull', 'upper'])
+const LOWER_FOCUS_KEYS = new Set(['legs', 'lower'])
 
 const MOVEMENT_PATTERNS = [
   'horizontal_push',
@@ -208,6 +339,7 @@ const MOVEMENT_PATTERNS = [
   'hinge',
   'lunge',
   'knee_flexion',
+  'knee_extension',
   'hip_extension',
   'elbow_flexion',
   'elbow_extension',
@@ -231,9 +363,9 @@ const COMPOUND_PATTERNS = new Set([
 const FOCUS_PATTERNS = {
   push: ['horizontal_push', 'vertical_push', 'elbow_extension', 'horizontal_push', 'vertical_push', 'elbow_extension'],
   pull: ['vertical_pull', 'horizontal_pull', 'horizontal_pull', 'elbow_flexion', 'vertical_pull', 'elbow_flexion'],
-  legs: ['squat', 'hinge', 'lunge', 'knee_flexion', 'hip_extension', 'calf'],
+  legs: ['squat', 'hinge', 'lunge', 'knee_flexion', 'knee_extension', 'hip_extension', 'calf'],
   upper: ['horizontal_push', 'horizontal_pull', 'vertical_push', 'vertical_pull', 'elbow_flexion', 'elbow_extension'],
-  lower: ['squat', 'hinge', 'lunge', 'knee_flexion', 'hip_extension', 'calf'],
+  lower: ['squat', 'hinge', 'lunge', 'knee_flexion', 'knee_extension', 'hip_extension', 'calf'],
   full_body_a: ['squat', 'horizontal_push', 'horizontal_pull', 'hinge', 'core'],
   full_body_b: ['squat', 'vertical_push', 'vertical_pull', 'hip_extension', 'elbow_flexion'],
   full_body_c: ['lunge', 'horizontal_push', 'horizontal_pull', 'hinge', 'core'],
@@ -244,7 +376,7 @@ const SPLIT_CANDIDATES = {
   full_body: ['full_body_a', 'full_body_b', 'full_body_c', 'full_body_a', 'full_body_b', 'full_body_c', 'cardio'],
   upper_lower: ['upper', 'lower', 'upper', 'lower', 'upper', 'lower', 'cardio'],
   push_pull_legs: ['push', 'pull', 'legs', 'push', 'pull', 'legs', 'upper'],
-  strength_accessories: ['upper', 'lower', 'push', 'pull', 'legs', 'upper', 'full_body_a'],
+  strength_accessories: ['push', 'pull', 'lower', 'upper', 'legs', 'upper', 'full_body_a'],
   hybrid: ['upper', 'lower', 'cardio', 'full_body_a', 'full_body_b', 'cardio', 'legs'],
   cardio: ['cardio', 'cardio', 'full_body_a', 'cardio', 'full_body_b', 'cardio', 'full_body_c'],
 }
@@ -380,6 +512,63 @@ function getExerciseMuscleBuckets(exercise) {
   return { primary, secondary }
 }
 
+function getPrimaryMuscleRegions(exercise) {
+  const primary = getExerciseMuscleBuckets(exercise).primary
+  return {
+    lower: primary.some(groupKey => LOWER_WORKLOAD_GROUPS.has(groupKey)),
+    push: primary.some(groupKey => PUSH_WORKLOAD_GROUPS.has(groupKey)),
+    pull: primary.some(groupKey => PULL_WORKLOAD_GROUPS.has(groupKey)),
+    core: primary.some(groupKey => CORE_WORKLOAD_GROUPS.has(groupKey)),
+  }
+}
+
+function isFullBodyFocus(focusKey) {
+  return String(focusKey || '').startsWith('full_body')
+}
+
+function isLowerPrimaryExercise(exercise) {
+  return getPrimaryMuscleRegions(exercise).lower
+}
+
+function isExerciseAllowedForFocus(exercise, focusKey) {
+  if (!exercise) return false
+  if (focusKey === 'cardio') return isCardioExercise(exercise)
+  if (isCardioExercise(exercise)) return false
+  if (isFullBodyFocus(focusKey) || !focusKey) return true
+
+  const movementPattern = classifyMovementPattern(exercise)
+  const regions = getPrimaryMuscleRegions(exercise)
+  const hasStrictUpperLeak = regions.push || regions.pull
+
+  if (LOWER_FOCUS_KEYS.has(focusKey)) {
+    if (regions.lower) return true
+    if (LOWER_PATTERNS.has(movementPattern) && !hasStrictUpperLeak) return true
+    return !hasStrictUpperLeak && regions.core
+  }
+
+  if (STRICT_UPPER_FOCUS_KEYS.has(focusKey) && regions.lower) return false
+
+  if (focusKey === 'push') {
+    if (regions.pull && !regions.push) return false
+    return regions.push || regions.core || PUSH_PATTERNS.has(movementPattern)
+  }
+
+  if (focusKey === 'pull') {
+    if (regions.push && !regions.pull) return false
+    return regions.pull || regions.core || PULL_PATTERNS.has(movementPattern)
+  }
+
+  if (focusKey === 'upper') {
+    return regions.push || regions.pull || regions.core || PUSH_PATTERNS.has(movementPattern) || PULL_PATTERNS.has(movementPattern)
+  }
+
+  return true
+}
+
+function getFocusCompatibleLibrary(library, focusKey) {
+  return (library || []).filter(exercise => isExerciseAllowedForFocus(exercise, focusKey))
+}
+
 function getStimulusScore(exercise, sets = null) {
   const multiplier = Number.isFinite(Number(sets)) ? Math.max(1, Number(sets)) : 1
   const { primary, secondary } = getExerciseMuscleBuckets(exercise)
@@ -436,15 +625,17 @@ function classifyMovementPattern(exercise) {
     ...(exercise?.secondary_muscles || []),
   ].join(' '))
 
+  if (/(squat|leg press|hack squat|thruster)/.test(name)) return 'squat'
+  if (/(leg extension|knee extension)/.test(name)) return 'knee_extension'
+  if (/(leg curl|hamstring curl|nordic)/.test(name)) return 'knee_flexion'
+  if (/curl/.test(name) && isLowerPrimaryExercise(exercise)) return 'knee_flexion'
+  if (/(deadlift|romanian|good morning|back extension|swing)/.test(name)) return 'hinge'
+  if (/(lunge|split squat|step up|step-up)/.test(name)) return 'lunge'
+  if (/(hip thrust|glute bridge|glute kickback|abduction)/.test(name)) return 'hip_extension'
   if (/(bench|chest press|push up|push-up|dip|fly|pec)/.test(name)) return 'horizontal_push'
   if (/(overhead|military|shoulder press|arnold|pike push)/.test(name)) return 'vertical_push'
   if (/(row|face pull|rear delt)/.test(name)) return 'horizontal_pull'
   if (/(pull up|pull-up|chin up|chin-up|pulldown|lat pull)/.test(name)) return 'vertical_pull'
-  if (/(squat|leg press|hack squat|leg extension)/.test(name)) return 'squat'
-  if (/(deadlift|romanian|good morning|back extension|swing)/.test(name)) return 'hinge'
-  if (/(lunge|split squat|step up|step-up)/.test(name)) return 'lunge'
-  if (/(leg curl|hamstring curl|nordic)/.test(name)) return 'knee_flexion'
-  if (/(hip thrust|glute bridge|kickback|abduction)/.test(name)) return 'hip_extension'
   if (/(curl|preacher)/.test(name)) return 'elbow_flexion'
   if (/(tricep|skullcrusher|pushdown|extension)/.test(name)) return 'elbow_extension'
   if (/calf/.test(name)) return 'calf'
@@ -509,13 +700,37 @@ function computeVolumeTargets(form) {
       const floor = focused ? 4 : NICHE_WORKLOAD_GROUPS.has(groupKey) ? 0 : 1
       targets[groupKey] = Math.max(floor, Math.round(targets[groupKey] * scale))
     })
+    let scaledTotal = Object.values(targets).reduce((sum, v) => sum + v, 0)
+    const trimmable = Object.keys(targets)
+      .filter(k => !isFocusGroup(form, k) && targets[k] > (NICHE_WORKLOAD_GROUPS.has(k) ? 0 : 1))
+      .sort((a, b) => targets[a] - targets[b])
+    let i = 0
+    while (scaledTotal > weeklyBudget && i < trimmable.length) {
+      targets[trimmable[i]] -= 1
+      scaledTotal -= 1
+      i++
+    }
   }
 
   return targets
 }
 
-function computePatternTargets(form) {
-  const strengthDays = form.goal === 'cardio' ? Math.max(1, Math.floor(form.daysPerWeek / 2)) : form.daysPerWeek
+function computePatternTargets(form, selectedSplit = null) {
+  const actualStrengthDays = selectedSplit ? selectedSplit.filter(f => f !== 'cardio').length : null
+  const strengthDays = actualStrengthDays !== null
+    ? actualStrengthDays
+    : (form.goal === 'cardio' ? Math.max(1, Math.floor(form.daysPerWeek / 2)) : form.daysPerWeek)
+
+  if (strengthDays === 0) {
+    const targets = Object.fromEntries(MOVEMENT_PATTERNS.map(p => [p, 0]))
+    targets.cardio = form.daysPerWeek
+    if (form.focusAreas.includes('Arms')) { targets.elbow_flexion += 1; targets.elbow_extension += 1 }
+    if (form.focusAreas.includes('Calves')) targets.calf += 1
+    if (form.focusAreas.includes('Glutes')) targets.hip_extension += 1
+    if (form.focusAreas.includes('Core')) targets.core += 1
+    return targets
+  }
+
   const targets = Object.fromEntries(MOVEMENT_PATTERNS.map(pattern => [pattern, 0]))
   targets.horizontal_push = Math.max(1, Math.ceil(strengthDays * 0.7))
   targets.horizontal_pull = Math.max(1, Math.ceil(strengthDays * 0.8))
@@ -525,6 +740,14 @@ function computePatternTargets(form) {
   targets.hinge = Math.max(1, Math.ceil(strengthDays * 0.45))
   targets.core = form.goal === 'strength' ? 1 : Math.max(1, Math.floor(form.daysPerWeek * 0.35))
   targets.cardio = form.goal === 'cardio' ? form.daysPerWeek : form.goal === 'hybrid' ? Math.max(1, Math.floor(form.daysPerWeek / 3)) : 0
+  if (strengthDays >= 3 && ['hypertrophy', 'general_fitness'].includes(form.goal)) {
+    targets.lunge = 1
+    targets.knee_flexion = 1
+  }
+  if (strengthDays >= 3 && form.goal === 'hypertrophy') {
+    targets.elbow_flexion = 1
+    targets.elbow_extension = 1
+  }
   if (form.focusAreas.includes('Arms')) {
     targets.elbow_flexion += 1
     targets.elbow_extension += 1
@@ -554,6 +777,15 @@ function getFocusPatternPlan(focus, form) {
   const patterns = FOCUS_PATTERNS[focus] || FOCUS_PATTERNS.full_body_a
   if (form.goal === 'hybrid' && focus !== 'cardio') return [...patterns, 'cardio']
   return patterns
+}
+
+function isStapleExercise(exercise) {
+  return STAPLE_EXERCISE_NAMES.has(normalizeSearchValue(exercise?.name || ''))
+}
+
+function isNicheExercise(exercise) {
+  const name = normalizeSearchValue(exercise?.name || '')
+  return NICHE_EXERCISE_NAME_PATTERNS.some(pattern => pattern.test(name))
 }
 
 function getCoverageFromDays(days = []) {
@@ -586,6 +818,8 @@ function scoreCandidateExercise(exercise, {
   const dayPatterns = new Set(dayExercises.map(ex => ex.movementPattern || classifyMovementPattern(ex)))
   const dayNames = new Set(dayExercises.map(ex => normalizeSearchValue(ex.name)))
   const isCompound = COMPOUND_PATTERNS.has(movementPattern)
+  const isStaple = isStapleExercise(exercise)
+  const isNiche = isNicheExercise(exercise)
   let score = 0
 
   if (movementPattern === desiredPattern) score += 36
@@ -603,6 +837,12 @@ function scoreCandidateExercise(exercise, {
   if (role === 'main' && !isCompound && movementPattern !== 'cardio') score -= 14
   if (role === 'secondary' && isCompound) score += 8
   if (role === 'accessory' && !isCompound) score += 8
+  if (role === 'main' && isStaple) score += 22
+  if (role === 'secondary' && isStaple) score += 14
+  if (role === 'accessory' && isStaple) score += 4
+  if (role === 'main' && isNiche) score -= 48
+  if (role === 'secondary' && isNiche) score -= 34
+  if (role === 'accessory' && isNiche) score -= 14
   if (role === 'accessory' && dayPatterns.has(movementPattern)) score -= 6
   if (dayNames.has(nameKey)) score -= 100
   if (weekUsedNames.has(exercise.name)) score -= 18
@@ -639,6 +879,11 @@ function getPreferredSplit(daysPerWeek, experience, preference, goal) {
       : [...candidate.split, ...auto].slice(0, daysPerWeek),
   }))
 
+  if (preference !== 'auto') {
+    const preferred = candidates.find(c => c.id === preference)
+    if (preferred) return preferred.split
+  }
+
   return candidates
     .map(candidate => {
       const counts = candidate.split.reduce((map, focus) => {
@@ -648,7 +893,7 @@ function getPreferredSplit(daysPerWeek, experience, preference, goal) {
       let score = 0
       if (candidate.id === preference) score += 35
       if (preference === 'auto' && candidate.id === 'auto') score += 15
-      if (daysPerWeek <= 3 && candidate.split.every(focus => focus.startsWith('full_body'))) score += 24
+      if (daysPerWeek <= 3 && experience === 'beginner' && candidate.split.every(focus => focus.startsWith('full_body'))) score += 24
       if (experience === 'beginner' && candidate.split.some(focus => focus.startsWith('full_body'))) score += 14
       if (goal === 'strength' && (candidate.id === 'strength_accessories' || candidate.id === 'upper_lower')) score += 20
       if (goal === 'hypertrophy' && (candidate.id === 'push_pull_legs' || candidate.id === 'upper_lower')) score += daysPerWeek >= 4 ? 18 : 4
@@ -688,6 +933,18 @@ function getExerciseTargetCount(goal, experience, sessionMinutes, focus) {
   return getDayExerciseBudget({ goal, experience, sessionMinutes }, focus)
 }
 
+function getCardioFocusDurationSeconds(form, dayTarget) {
+  const targetCount = Math.max(1, Number(dayTarget) || 1)
+  const availableCardioMinutes = Math.max(1, Math.floor((form.sessionMinutes - 6 - targetCount * 3) / targetCount))
+  return clamp(availableCardioMinutes * 60, 60, VALIDATION_LIMITS.cardioDurationMaxSeconds)
+}
+
+function getMinimumDayExerciseCount(form, focus) {
+  if (focus === 'cardio') return 1
+  if (form.goal === 'cardio') return 2
+  return 3
+}
+
 function getExerciseRole(index, focus) {
   if (focus === 'cardio') return 'cardio'
   if (index === 0) return 'main'
@@ -697,6 +954,12 @@ function getExerciseRole(index, focus) {
 
 const PERIODIZATION_INTENSITY_TAGS = ['standard', 'heavy', 'volume', 'light', 'maintenance']
 const PERIODIZATION_PROGRESSION_BIASES = ['reps_first', 'load_first', 'maintenance', 'deload_aware']
+const FOCUS_UNDULATING_OFFSET = {
+  push: 0, pull: 1, legs: 2,
+  upper: 0, lower: 1,
+  full_body_a: 0, full_body_b: 1, full_body_c: 2,
+  cardio: 0,
+}
 
 function normalizePeriodizationStyle(style) {
   return hasOption(TRAINING_PLAN_PERIODIZATION, style) ? style : 'double_progression'
@@ -710,8 +973,9 @@ function normalizeProgressionBias(bias) {
   return PERIODIZATION_PROGRESSION_BIASES.includes(bias) ? bias : null
 }
 
-function getUndulatingIntensityTag(dayIndex = 0) {
-  return ['heavy', 'volume', 'light'][Math.max(0, Number(dayIndex) || 0) % 3]
+function getUndulatingIntensityTag(occurrenceIndex = 0, focus = '') {
+  const offset = FOCUS_UNDULATING_OFFSET[focus] ?? 0
+  return ['heavy', 'volume', 'light'][(Math.max(0, Number(occurrenceIndex) || 0) + offset) % 3]
 }
 
 function getProgressionBiasForStyle(style, intensityTag) {
@@ -721,10 +985,10 @@ function getProgressionBiasForStyle(style, intensityTag) {
   return 'reps_first'
 }
 
-function getExercisePeriodization(form, role, dayIndex = 0, exercise = {}) {
+function getExercisePeriodization(form, role, dayIndex = 0, exercise = {}, focusOccurrenceIndex, focusKey) {
   const style = normalizePeriodizationStyle(exercise.periodizationStyle || exercise.progression?.style || form.periodizationStyle)
   const intensityTag = normalizeIntensityTag(exercise.intensityTag)
-    || (style === 'undulating' && role !== 'cardio' ? getUndulatingIntensityTag(dayIndex) : null)
+    || (style === 'undulating' && role !== 'cardio' ? getUndulatingIntensityTag(focusOccurrenceIndex ?? dayIndex, focusKey ?? '') : null)
     || (style === 'maintenance' && role !== 'cardio' ? 'maintenance' : 'standard')
   return {
     style,
@@ -851,13 +1115,18 @@ function getExerciseRationale(exercise, role, form, focus) {
 }
 
 function getPlanExercise(exercise, form, index, focus, context = {}) {
-  const rules = GOAL_SET_RULES[form.goal] || GOAL_SET_RULES.hypertrophy
   const role = getExerciseRole(index, focus)
+  const primaryRules = GOAL_SET_RULES[form.goal] || GOAL_SET_RULES.hypertrophy
+  const secondaryRules = (form.secondaryGoal && GOAL_SET_RULES[form.secondaryGoal]) || primaryRules
+  const rules = role === 'accessory' ? secondaryRules : primaryRules
   const movementPattern = classifyMovementPattern(exercise)
-  const periodization = getExercisePeriodization(form, isCardioExercise(exercise) ? 'cardio' : role, context.dayIndex ?? 0)
+  const periodization = getExercisePeriodization(form, isCardioExercise(exercise) ? 'cardio' : role, context.dayIndex ?? 0, {}, context.focusOccurrenceIndex, focus)
   if (isCardioExercise(exercise)) {
     const longCardio = form.goal === 'cardio' || focus === 'cardio'
-    const durationSeconds = clamp((longCardio ? Math.min(30, Math.max(16, Math.floor(form.sessionMinutes / 2))) : 10) * 60, 60, VALIDATION_LIMITS.cardioDurationMaxSeconds)
+    const contextDuration = Number(context.durationSeconds)
+    const durationSeconds = Number.isFinite(contextDuration) && contextDuration > 0
+      ? clamp(Math.round(contextDuration), 60, VALIDATION_LIMITS.cardioDurationMaxSeconds)
+      : clamp((longCardio ? Math.min(30, Math.max(16, Math.floor(form.sessionMinutes / 2))) : 10) * 60, 60, VALIDATION_LIMITS.cardioDurationMaxSeconds)
     return {
       exerciseId: exercise.id || null,
       name: exercise.name,
@@ -907,6 +1176,23 @@ function getPlanExercise(exercise, form, index, focus, context = {}) {
   }
 }
 
+function getSessionOrderTier(exercise, focusKey) {
+  const movementPattern = exercise.movementPattern || classifyMovementPattern(exercise)
+  if (isCardioExercise(exercise)) return focusKey === 'cardio' ? 0 : 3
+  if (COMPOUND_PATTERNS.has(movementPattern)) return 0
+  return 1
+}
+
+function orderPlanExercisesForSession(exercises = [], focusKey = null) {
+  return [...exercises]
+    .map((exercise, index) => ({ exercise, index }))
+    .sort((a, b) => (
+      getSessionOrderTier(a.exercise, focusKey) - getSessionOrderTier(b.exercise, focusKey)
+      || a.index - b.index
+    ))
+    .map(({ exercise }) => exercise)
+}
+
 function estimatePlanDayMinutes(exercises) {
   return exercises.reduce((total, exercise) => {
     if (exercise.category === 'Cardio') return total + Math.ceil((exercise.durationSeconds || 0) / 60) + 3
@@ -916,9 +1202,9 @@ function estimatePlanDayMinutes(exercises) {
   }, 6)
 }
 
-function trimToSessionLength(exercises, sessionMinutes) {
+function trimToSessionLength(exercises, sessionMinutes, minExercises = 3) {
   const next = [...exercises]
-  while (next.length > 3 && estimatePlanDayMinutes(next) > sessionMinutes) {
+  while (next.length > minExercises && estimatePlanDayMinutes(next) > sessionMinutes) {
     let accessoryIndex = -1
     for (let index = next.length - 1; index >= 0; index -= 1) {
       if (index > 1 && next[index].category !== 'Cardio') {
@@ -932,7 +1218,7 @@ function trimToSessionLength(exercises, sessionMinutes) {
   return next
 }
 
-function scorePlanDayQuality(exercises, sessionMinutes) {
+function scorePlanDayQuality(exercises, sessionMinutes, focusKey) {
   const estimatedMinutes = estimatePlanDayMinutes(exercises)
   const patterns = exercises.reduce((map, exercise) => {
     const pattern = exercise.movementPattern || classifyMovementPattern(exercise)
@@ -941,7 +1227,8 @@ function scorePlanDayQuality(exercises, sessionMinutes) {
   }, {})
   const flags = []
   if (estimatedMinutes > sessionMinutes * 1.15) flags.push('over_time')
-  if (!exercises.some(ex => ex.category === 'Cardio') && exercises.length > 2 && !patterns.core) flags.push('no_core')
+  const isFullBodyDay = !focusKey || focusKey.startsWith('full_body')
+  if (isFullBodyDay && !exercises.some(ex => ex.category === 'Cardio') && exercises.length > 2 && !patterns.core) flags.push('no_core')
   const duplicatePatternCount = Object.values(patterns).filter(count => count >= 3).length
   if (duplicatePatternCount > 0) flags.push('duplicate_stimulus')
   return {
@@ -952,27 +1239,35 @@ function scorePlanDayQuality(exercises, sessionMinutes) {
   }
 }
 
-export function scoreWeeklyMuscleCoverage(days, targets) {
+function scoreWeeklyMuscleCoverage(days, targets) {
   const coverage = getCoverageFromDays(days).muscles
   const deficits = {}
   const excess = {}
   PLAN_WORKLOAD_GROUPS.forEach(group => {
     const actual = Math.round((coverage[group.key] || 0) * 10) / 10
     const target = targets[group.key] || 0
-    if (target > 0 && actual < target * 0.75) deficits[group.key] = Math.round((target - actual) * 10) / 10
-    if (target > 0 && actual > target * 1.65) excess[group.key] = Math.round((actual - target) * 10) / 10
+    // Only penalize below the acceptable floor, not the full gap from target
+    const acceptableMin = target * 0.75
+    const acceptableMax = target * 1.65
+    if (target > 0 && actual < acceptableMin) deficits[group.key] = Math.round((acceptableMin - actual) * 10) / 10
+    if (target > 0 && actual > acceptableMax) excess[group.key] = Math.round((actual - acceptableMax) * 10) / 10
   })
-  const deficitPenalty = Object.values(deficits).reduce((sum, value) => sum + value, 0)
-  const excessPenalty = Object.values(excess).reduce((sum, value) => sum + value * 0.6, 0)
+  // Niche and structural muscles are excluded from the score — they're diagnostic only.
+  // Excess is tracked for flag detection but not scored — high volume is intentional on
+  // higher-frequency plans, and imbalances are already caught by the serious flags.
+  const isScoredGroup = key => !NICHE_WORKLOAD_GROUPS.has(key) && !STRUCTURAL_MUSCLE_GROUPS.has(key)
+  const deficitPenalty = Object.entries(deficits).filter(([k]) => isScoredGroup(k)).reduce((sum, [, v]) => sum + v, 0)
   return {
     coverage,
     deficits,
     excess,
-    score: clamp(Math.round(100 - deficitPenalty * 4 - excessPenalty * 2), 0, 100),
+    score: clamp(Math.round(100 - deficitPenalty * 2.5), 0, 100),
   }
 }
 
-function scorePatternCoverage(days, patternTargets) {
+// daysPerWeek is used to scale the per-miss penalty — shorter plans structurally
+// can't cover all patterns each week, so a flat ×9 would unfairly punish them
+function scorePatternCoverage(days, patternTargets, daysPerWeek = 5) {
   const coverage = getCoverageFromDays(days).patterns
   const missing = {}
   Object.entries(patternTargets).forEach(([pattern, target]) => {
@@ -981,10 +1276,12 @@ function scorePatternCoverage(days, patternTargets) {
     if (actual < target) missing[pattern] = target - actual
   })
   const penalty = Object.values(missing).reduce((sum, value) => sum + value, 0)
+  const penaltyPerMiss = daysPerWeek <= 3 ? 4 : daysPerWeek === 4 ? 6 : 9
+  const floor = daysPerWeek <= 3 ? 70 : daysPerWeek === 4 ? 62 : 50
   return {
     coverage,
     missing,
-    score: clamp(100 - penalty * 9, 0, 100),
+    score: Math.max(clamp(100 - penalty * penaltyPerMiss, 0, 100), floor),
   }
 }
 
@@ -1002,7 +1299,7 @@ function buildQualityFlags(days, form, volumeScore, patternScore) {
   if (pull > push + 3) flags.push('pulling_dominates_pressing')
   const quads = volumeScore.coverage.quadriceps || 0
   const posterior = (volumeScore.coverage.hamstring || 0) + (volumeScore.coverage.gluteal || 0) * 0.6
-  if (quads > posterior * 1.8 && quads >= 5) flags.push('quad_hamstring_imbalance')
+  if (quads > posterior * 1.8 && quads >= 5 && !volumeScore.excess.quadriceps) flags.push('quad_hamstring_imbalance')
   if ((volumeScore.coverage.abs || 0) < Math.max(1, (volumeScore.coverage.chest || 0) * 0.15)) flags.push('missing_core')
   const shoulderArm = (volumeScore.coverage['front-deltoids'] || 0)
     + (volumeScore.coverage.biceps || 0)
@@ -1016,9 +1313,19 @@ function buildQualityFlags(days, form, volumeScore, patternScore) {
   return uniq(flags).slice(0, 8)
 }
 
+// Structural imbalances not already captured by volumeScore/patternScore/timeScore sub-scores.
+// Diagnostic flags (missing_core, undertrained_*, over_time_*) are shown in the UI
+// but do not subtract from the score — they're already reflected in the sub-scores.
+const SERIOUS_FLAGS = new Set([
+  'quad_hamstring_imbalance',
+  'excessive_pressing_vs_pulling',
+  'pulling_dominates_pressing',
+  'excessive_direct_shoulder_arm_overlap',
+])
+
 function scorePlanQuality(days, form, volumeTargets, patternTargets) {
   const volumeScore = scoreWeeklyMuscleCoverage(days, volumeTargets)
-  const patternScore = scorePatternCoverage(days, patternTargets)
+  const patternScore = scorePatternCoverage(days, patternTargets, form.daysPerWeek)
   const timeScores = days.map(day => {
     const estimated = Number(day.estimatedMinutes) || estimatePlanDayMinutes(day.exercises || [])
     if (estimated > form.sessionMinutes * 1.15) return 70
@@ -1027,8 +1334,9 @@ function scorePlanQuality(days, form, volumeTargets, patternTargets) {
   })
   const timeScore = Math.round(timeScores.reduce((sum, score) => sum + score, 0) / Math.max(1, timeScores.length))
   const flags = buildQualityFlags(days, form, volumeScore, patternScore)
+  const flagPenalty = Math.min(flags.filter(f => SERIOUS_FLAGS.has(f)).length, 8) * 2
   return {
-    qualityScore: clamp(Math.round(volumeScore.score * 0.45 + patternScore.score * 0.35 + timeScore * 0.2 - flags.length * 2), 0, 100),
+    qualityScore: clamp(Math.round(volumeScore.score * 0.45 + patternScore.score * 0.35 + timeScore * 0.2 - flagPenalty), 0, 100),
     qualityFlags: flags,
     muscleCoverage: volumeScore.coverage,
     patternCoverage: patternScore.coverage,
@@ -1038,8 +1346,8 @@ function scorePlanQuality(days, form, volumeTargets, patternTargets) {
   }
 }
 
-function findExerciseForPattern(library, pattern, dayExercises, weekUsedNames, form, volumeTargets, muscleCoverage, patternCoverage, patternTargets) {
-  const pool = pattern === 'cardio' ? library.filter(isCardioExercise) : library.filter(ex => !isCardioExercise(ex))
+function findExerciseForPattern(library, pattern, focusKey, dayExercises, weekUsedNames, form, volumeTargets, muscleCoverage, patternCoverage, patternTargets) {
+  const pool = getFocusCompatibleLibrary(library, focusKey)
   return pickRankedExercise(pool, {
     role: ['horizontal_push', 'vertical_push', 'horizontal_pull', 'vertical_pull', 'squat', 'hinge'].includes(pattern) ? 'secondary' : 'accessory',
     desiredPattern: pattern,
@@ -1064,38 +1372,46 @@ function repairPlan(days, form, library, volumeTargets, patternTargets) {
 
   for (let pass = 0; pass < 3; pass += 1) {
     const coverage = getCoverageFromDays(nextDays)
-    const quality = scorePlanQuality(nextDays, form, volumeTargets, patternTargets)
     const missingPatterns = Object.entries(scorePatternCoverage(nextDays, patternTargets).missing)
       .filter(([, count]) => count > 0)
       .map(([pattern]) => pattern)
 
     let changed = false
     for (const pattern of missingPatterns) {
-      const candidateDay = [...nextDays]
-        .sort((a, b) => estimatePlanDayMinutes(a.exercises) - estimatePlanDayMinutes(b.exercises))[0]
+      const sortedDays = [...nextDays]
+        .sort((a, b) => estimatePlanDayMinutes(a.exercises) - estimatePlanDayMinutes(b.exercises))
+      const candidateDay = sortedDays.find(day =>
+        (FOCUS_PATTERNS[day.focusKey] || []).includes(pattern)
+      ) || sortedDays[0]
       if (!candidateDay || estimatePlanDayMinutes(candidateDay.exercises) > form.sessionMinutes * 0.95) continue
       const exercise = findExerciseForPattern(
-        library, pattern, candidateDay.exercises, new Set(nextDays.flatMap(day => day.exercises.map(ex => ex.name))),
+        library, pattern, candidateDay.focusKey, candidateDay.exercises, new Set(nextDays.flatMap(day => day.exercises.map(ex => ex.name))),
         form, volumeTargets, coverage.muscles, coverage.patterns, patternTargets
       )
       if (!exercise) continue
+      const candidateDayOriginalIndex = nextDays.indexOf(candidateDay)
+      const repairFocusOccurrenceIndex = nextDays
+        .slice(0, candidateDayOriginalIndex)
+        .filter(d => d.focusKey === candidateDay.focusKey).length
       const planned = getPlanExercise(
         exercise,
         form,
         candidateDay.exercises.length,
-        candidateDay.focus === 'Cardio' ? 'cardio' : 'upper',
-        { dayIndex: getPlanDayIndex(candidateDay) }
+        candidateDay.focusKey,
+        { dayIndex: getPlanDayIndex(candidateDay), focusOccurrenceIndex: repairFocusOccurrenceIndex }
       )
-      if (estimatePlanDayMinutes([...candidateDay.exercises, planned]) > form.sessionMinutes * 1.12 && candidateDay.exercises.length >= 3) continue
-      candidateDay.exercises.push(planned)
+      const candidateMinFloor = getMinimumDayExerciseCount(form, candidateDay.focusKey)
+      if (estimatePlanDayMinutes([...candidateDay.exercises, planned]) > form.sessionMinutes * 1.12 && candidateDay.exercises.length >= candidateMinFloor) continue
+      candidateDay.exercises = orderPlanExercisesForSession([...candidateDay.exercises, planned], candidateDay.focusKey)
       candidateDay.estimatedMinutes = estimatePlanDayMinutes(candidateDay.exercises)
-      candidateDay.quality = scorePlanDayQuality(candidateDay.exercises, form.sessionMinutes)
+      candidateDay.quality = scorePlanDayQuality(candidateDay.exercises, form.sessionMinutes, candidateDay.focusKey)
       changed = true
     }
 
     nextDays = nextDays.map(day => {
-      let exercises = [...day.exercises]
-      while (exercises.length > 3 && estimatePlanDayMinutes(exercises) > form.sessionMinutes * 1.12) {
+      let exercises = orderPlanExercisesForSession(day.exercises, day.focusKey)
+      const dayMinFloor = getMinimumDayExerciseCount(form, day.focusKey)
+      while (exercises.length > dayMinFloor && estimatePlanDayMinutes(exercises) > form.sessionMinutes * 1.12) {
         const trimIndex = exercises.findLastIndex(ex => ex.role === 'accessory' && ex.category !== 'Cardio')
         exercises.splice(trimIndex === -1 ? exercises.length - 1 : trimIndex, 1)
         changed = true
@@ -1104,11 +1420,13 @@ function repairPlan(days, form, library, volumeTargets, patternTargets) {
         ...day,
         exercises,
         estimatedMinutes: estimatePlanDayMinutes(exercises),
-        quality: scorePlanDayQuality(exercises, form.sessionMinutes),
+        quality: scorePlanDayQuality(exercises, form.sessionMinutes, day.focusKey),
       }
     })
 
-    if (!changed || quality.qualityScore >= 88) break
+    // Adaptive target — shorter plans have lower ceiling scores by design
+    const repairTarget = form.daysPerWeek <= 3 ? 77 : form.daysPerWeek === 4 ? 81 : form.daysPerWeek === 5 ? 85 : 88
+    if (!changed || scorePlanQuality(nextDays, form, volumeTargets, patternTargets).qualityScore >= repairTarget) break
   }
 
   return nextDays
@@ -1121,10 +1439,12 @@ function buildDay(focus, dayIndex, form, library, planContext, scheduledDays = [
   const selected = []
   const selectedPlanExercises = []
   let estimatedMinutes = 6
+  const focusOccurrenceIndex = planContext.focusOccurrenceCounts[focus] || 0
+  planContext.focusOccurrenceCounts[focus] = focusOccurrenceIndex + 1
+  const cardioFocusDurationSeconds = focus === 'cardio' ? getCardioFocusDurationSeconds(form, dayTarget) : null
+  const minExerciseCount = getMinimumDayExerciseCount(form, focus)
 
-  const dayLibrary = focus === 'cardio'
-    ? library.filter(isCardioExercise)
-    : library.filter(ex => !isCardioExercise(ex))
+  const dayLibrary = getFocusCompatibleLibrary(library, focus)
   const patternPlan = getFocusPatternPlan(focus, form)
 
   for (let slot = 0; slot < dayTarget; slot += 1) {
@@ -1145,28 +1465,28 @@ function buildDay(focus, dayIndex, form, library, planContext, scheduledDays = [
     const exercise = ranked || pickExercise(dayLibrary, seedNames, usedNames, focus.replaceAll('_', ' '))
     if (!exercise || usedNames.has(exercise.name)) continue
 
-    const planned = getPlanExercise(exercise, form, slot, focus, { dayIndex })
+    const planned = getPlanExercise(exercise, form, slot, focus, {
+      dayIndex,
+      focusOccurrenceIndex,
+      durationSeconds: cardioFocusDurationSeconds,
+    })
     const nextMinutes = estimatedMinutes + estimateExerciseMinutes(planned)
-    if (selected.length >= 3 && nextMinutes > form.sessionMinutes * 1.08) break
+    if (selected.length >= minExerciseCount && nextMinutes > form.sessionMinutes * 1.08) break
     estimatedMinutes = nextMinutes
     selectedPlanExercises.push(planned)
     selected.push(exercise)
     usedNames.add(exercise.name)
-    planContext.weekUsedNames.add(exercise.name)
-    addCounts(planContext.muscleCoverage, planned.stimulusScore)
-    planContext.patternCoverage[planned.movementPattern] = (planContext.patternCoverage[planned.movementPattern] || 0) + 1
   }
 
   if ((form.goal === 'hybrid' || form.goal === 'cardio') && focus !== 'cardio') {
     const cardio = pickExercise(library.filter(isCardioExercise), FOCUS_SLOT_NAMES.cardio, usedNames, 'cardio')
     if (cardio) {
-      const planned = getPlanExercise(cardio, form, selectedPlanExercises.length, focus, { dayIndex })
+      const planned = getPlanExercise(cardio, form, selectedPlanExercises.length, focus, { dayIndex, focusOccurrenceIndex })
       if (estimatedMinutes + estimateExerciseMinutes(planned) <= form.sessionMinutes * 1.12 || selectedPlanExercises.length < 3) {
+        estimatedMinutes += estimateExerciseMinutes(planned)
         selectedPlanExercises.push(planned)
         selected.push(cardio)
         usedNames.add(cardio.name)
-        planContext.weekUsedNames.add(cardio.name)
-        planContext.patternCoverage.cardio = (planContext.patternCoverage.cardio || 0) + 1
       }
     }
   }
@@ -1175,24 +1495,39 @@ function buildDay(focus, dayIndex, form, library, planContext, scheduledDays = [
     if (selectedPlanExercises.length >= dayTarget || focus === 'cardio') break
     const exercise = pickExercise(dayLibrary, FOCUS_AREA_QUERIES[area] || [area], usedNames, area)
     if (!exercise) continue
-    const planned = getPlanExercise(exercise, form, selectedPlanExercises.length, focus, { dayIndex })
+    const planned = getPlanExercise(exercise, form, selectedPlanExercises.length, focus, { dayIndex, focusOccurrenceIndex })
     if (estimatedMinutes + estimateExerciseMinutes(planned) > form.sessionMinutes * 1.12 && selectedPlanExercises.length >= 3) continue
+    estimatedMinutes += estimateExerciseMinutes(planned)
     selectedPlanExercises.push(planned)
     selected.push(exercise)
     usedNames.add(exercise.name)
-    planContext.weekUsedNames.add(exercise.name)
-    addCounts(planContext.muscleCoverage, planned.stimulusScore)
-    planContext.patternCoverage[planned.movementPattern] = (planContext.patternCoverage[planned.movementPattern] || 0) + 1
   }
 
   if (!selectedPlanExercises.length) {
-    const fallbackExercise = library.find(ex => !usedNames.has(ex.name))
-    if (fallbackExercise) selectedPlanExercises.push(getPlanExercise(fallbackExercise, form, 0, focus, { dayIndex }))
+    const fallbackExercise = dayLibrary.find(ex => !usedNames.has(ex.name))
+    if (fallbackExercise) {
+      selectedPlanExercises.push(getPlanExercise(fallbackExercise, form, 0, focus, {
+        dayIndex,
+        focusOccurrenceIndex,
+        durationSeconds: cardioFocusDurationSeconds,
+      }))
+      usedNames.add(fallbackExercise.name)
+    }
   }
 
-  const exercises = trimToSessionLength(selectedPlanExercises, form.sessionMinutes)
+  const exercises = trimToSessionLength(orderPlanExercisesForSession(selectedPlanExercises, focus), form.sessionMinutes, minExerciseCount)
     .slice(0, VALIDATION_LIMITS.trainingPlanMaxExercisesPerDay)
-  const dayQuality = scorePlanDayQuality(exercises, form.sessionMinutes)
+  // Reconcile planContext from the final trimmed exercise list only.
+  // Replaces the eager per-loop mutations removed above — exercises removed by
+  // trimToSessionLength no longer inflate weekly coverage for subsequent days.
+  for (const ex of exercises) {
+    planContext.weekUsedNames.add(ex.name)
+    if (ex.stimulusScore) addCounts(planContext.muscleCoverage, ex.stimulusScore)
+    if (ex.movementPattern) {
+      planContext.patternCoverage[ex.movementPattern] = (planContext.patternCoverage[ex.movementPattern] || 0) + 1
+    }
+  }
+  const dayQuality = scorePlanDayQuality(exercises, form.sessionMinutes, focus)
 
   return {
     id: `day-${dayIndex + 1}`,
@@ -1200,6 +1535,7 @@ function buildDay(focus, dayIndex, form, library, planContext, scheduledDays = [
     scheduledDay: scheduledDays[dayIndex] || null,
     name: `Day ${dayIndex + 1}: ${FOCUS_LABELS[focus] || 'Training'}`,
     focus: FOCUS_LABELS[focus] || focus,
+    focusKey: focus,
     estimatedMinutes: estimatePlanDayMinutes(exercises),
     quality: dayQuality,
     exercises,
@@ -1211,13 +1547,21 @@ function getDefaultName(form) {
   return `${goal} Plan`
 }
 
+function getEmptyGeneratedDayError(days) {
+  const emptyDay = (days || []).find(day => !(day.exercises || []).length)
+  if (!emptyDay) return ''
+  const label = FOCUS_LABELS[emptyDay.focusKey] || emptyDay.focus || 'Training'
+  return `No compatible exercises found for ${label} day with this equipment setup.`
+}
+
 function getSplitLabel(split, preference) {
   const joined = split.join('|')
+  if (preference !== 'auto') return TRAINING_PLAN_SPLITS.find(item => item.id === preference)?.label || 'Auto'
+  if (split.every(f => f === 'cardio')) return 'Cardio'
+  if (/cardio/.test(joined) && split.some(f => f !== 'cardio')) return 'Hybrid'
   if (split.every(focus => focus.startsWith('full_body'))) return 'Full Body'
   if (/upper/.test(joined) && /lower/.test(joined)) return 'Upper / Lower'
   if (/push/.test(joined) && /pull/.test(joined) && /legs/.test(joined)) return 'Push / Pull / Legs'
-  if (/cardio/.test(joined) && split.some(focus => focus !== 'cardio')) return 'Hybrid'
-  if (preference !== 'auto') return TRAINING_PLAN_SPLITS.find(item => item.id === preference)?.label || 'Auto'
   return 'Auto'
 }
 
@@ -1284,20 +1628,25 @@ export function generateTrainingPlan(rawForm, exerciseLibrary = []) {
 
   const library = getAllowedLibrary(exerciseLibrary, form)
   if (!library.length) throw new Error('No matching exercises found for this equipment setup.')
+  if (form.goal !== 'cardio' && form.goal !== 'hybrid' && !library.some(ex => !isCardioExercise(ex)))
+    throw new Error('No strength exercises found for this equipment setup.')
 
   const split = getPreferredSplit(form.daysPerWeek, form.experience, form.splitPreference, form.goal)
   const scheduledDays = getScheduledDays(form)
   const volumeTargets = computeVolumeTargets(form)
-  const patternTargets = computePatternTargets(form)
+  const patternTargets = computePatternTargets(form, split)
   const planContext = {
     weekUsedNames: new Set(),
     muscleCoverage: {},
     patternCoverage: {},
+    focusOccurrenceCounts: {},
     volumeTargets,
     patternTargets,
   }
   const initialDays = split.map((focus, index) => buildDay(focus, index, form, library, planContext, scheduledDays))
   const days = repairPlan(initialDays, form, library, volumeTargets, patternTargets)
+  const emptyDayError = getEmptyGeneratedDayError(days)
+  if (emptyDayError) throw new Error(emptyDayError)
   const quality = scorePlanQuality(days, form, volumeTargets, patternTargets)
   const deloadInterval = getDeloadInterval(form.deloadPolicy)
   const splitLabel = getSplitLabel(split, form.splitPreference)
@@ -1395,8 +1744,17 @@ export function normalizeTrainingPlan(plan) {
     adaptiveCoach: adaptiveCoach.enabled === true,
   })
   const planPeriodizationStyle = form.periodizationStyle
-  const selectedSplit = Array.isArray(schedule.selectedSplit) ? schedule.selectedSplit.slice(0, 7).map(item => String(item).slice(0, 40)) : []
+  const savedSelectedSplit = Array.isArray(schedule.selectedSplit) ? schedule.selectedSplit.slice(0, 7).map(item => String(item).slice(0, 40)) : []
   const normalizedDays = days.slice(0, 7).map((day, index) => {
+    // Recover focusKey early so exercise periodization can use it (issue 32).
+    // Counting prior days with the same focusKey gives the per-focus occurrence index,
+    // matching the logic in buildDay — legacy undulating plans with missing intensityTag
+    // are re-derived using per-focus rotation instead of raw day index.
+    const dayFocusKey = day?.focusKey || FOCUS_KEYS_BY_LABEL[day?.focus] || null
+    const focusOccurrenceIndex = days.slice(0, index).filter(d => {
+      const k = d?.focusKey || FOCUS_KEYS_BY_LABEL[d?.focus] || null
+      return k !== null && k === dayFocusKey
+    }).length
     const normalizedExercises = (Array.isArray(day?.exercises) ? day.exercises : [])
       .slice(0, VALIDATION_LIMITS.trainingPlanMaxExercisesPerDay)
       .map((exercise, exerciseIndex) => {
@@ -1404,7 +1762,7 @@ export function normalizeTrainingPlan(plan) {
         const movementPattern = MOVEMENT_PATTERNS.includes(exercise.movementPattern)
           ? exercise.movementPattern
           : classifyMovementPattern(exercise)
-        const periodizationMeta = getExercisePeriodization(form, role, index, exercise)
+        const periodizationMeta = getExercisePeriodization(form, role, index, exercise, focusOccurrenceIndex, dayFocusKey)
         const progression = exercise.progression && typeof exercise.progression === 'object'
           ? exercise.progression
           : getProgressionForExercise(form, role, periodizationMeta)
@@ -1433,17 +1791,21 @@ export function normalizeTrainingPlan(plan) {
       scheduledDay: normalizeTrainingDays([day?.scheduledDay], 1)[0] || null,
       name: String(day?.name || `Day ${index + 1}`).slice(0, 80),
       focus: String(day?.focus || 'Training').slice(0, 60),
+      focusKey: dayFocusKey,
       estimatedMinutes: clamp(readPlanNumber(day?.estimatedMinutes, estimatePlanDayMinutes(normalizedExercises) || sessionMinutes), 1, 240),
       exercises: normalizedExercises,
-      quality: scorePlanDayQuality(normalizedExercises, sessionMinutes),
+      quality: scorePlanDayQuality(normalizedExercises, sessionMinutes, dayFocusKey),
     }
   })
+  const inferredSplit = normalizedDays.map(day => day.focusKey).filter(Boolean)
+  const effectiveSplit = savedSelectedSplit.length ? savedSelectedSplit : inferredSplit
   const volumeTargets = computeVolumeTargets(form)
-  const patternTargets = computePatternTargets(form)
+  const patternTargets = computePatternTargets(form, effectiveSplit.length ? effectiveSplit : null)
   const quality = scorePlanQuality(normalizedDays, form, volumeTargets, patternTargets)
 
   return {
     ...plan,
+    preferencesFetched: plan.preferences !== undefined && plan.preferences !== null,
     name: String(plan.name || 'Custom Plan').slice(0, VALIDATION_LIMITS.trainingPlanNameMaxLength),
     goal,
     experience,
@@ -1461,10 +1823,10 @@ export function normalizeTrainingPlan(plan) {
         trainingDays: form.trainingDays,
         daysPerWeek: form.daysPerWeek,
         splitPreference: form.splitPreference,
-        selectedSplit,
-        splitLabel: schedule.splitLabel || (selectedSplit.length
-          ? getSplitLabel(selectedSplit, form.splitPreference)
-          : getOptionLabel(TRAINING_PLAN_SPLITS, form.splitPreference, 'Auto')),
+        selectedSplit: effectiveSplit,
+        splitLabel: effectiveSplit.length
+          ? getSplitLabel(effectiveSplit, form.splitPreference)
+          : getOptionLabel(TRAINING_PLAN_SPLITS, form.splitPreference, 'Auto'),
       },
       periodization: {
         style: planPeriodizationStyle,

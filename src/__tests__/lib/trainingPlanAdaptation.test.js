@@ -174,6 +174,41 @@ describe('buildPlanAdaptation', () => {
     })
   })
 
+  it('ignores drop sets and warmups when counting planned strength completion', () => {
+    const adaptation = buildPlanAdaptation({
+      plan: makePlan(),
+      day: makeDay({
+        estimatedMinutes: 40,
+        exercises: [{ id: 'bench', sets: 3 }],
+      }),
+      exercises: [
+        makeCompletedExercise({
+          sets: [
+            { done: true, reps: 10 },
+            { done: true, reps: 4, setType: 'dropset' },
+            { done: true, reps: 10, setType: 'warmup' },
+            { done: true, reps: 5, set_type: 'dropset' },
+            { done: true, reps: 10, is_warmup: true },
+            { done: true, reps: 10 },
+          ],
+        }),
+      ],
+      durationSeconds: 52 * 60,
+    })
+
+    expect(adaptation.summary).toBe('Trim the next pass')
+    expect(adaptation.adjustments.map(item => item.type)).toContain('reduce_volume')
+    expect(adaptation.adjustments.map(item => item.type)).not.toContain('trim_duration')
+    expect(adaptation.metrics).toMatchObject({
+      plannedSets: 3,
+      completedSets: 2,
+      completionRate: 0.67,
+      targetableSets: 2,
+      hitTopRangeSets: 2,
+      missedLowRangeSets: 0,
+    })
+  })
+
   it('recommends increasing targets when most strength sets hit the top range', () => {
     const adaptation = buildPlanAdaptation({
       plan: makePlan(),
@@ -188,6 +223,35 @@ describe('buildPlanAdaptation', () => {
     expect(adaptation.adjustments.map(item => item.type)).toContain('increase_target')
     expect(adaptation.metrics).toMatchObject({
       targetableSets: 4,
+      hitTopRangeSets: 3,
+      missedLowRangeSets: 0,
+    })
+  })
+
+  it('counts superset rows as planned strength working sets', () => {
+    const adaptation = buildPlanAdaptation({
+      plan: makePlan(),
+      day: makeDay({ exercises: [{ id: 'bench', sets: 3 }] }),
+      exercises: [
+        makeCompletedExercise({
+          sets: [
+            { done: true, reps: 10 },
+            { done: true, reps: 10, setType: 'superset' },
+            { done: true, reps: 10, set_type: 'superset' },
+            { done: true, reps: 5, setType: 'dropset' },
+            { done: true, reps: 10, setType: 'warmup' },
+          ],
+        }),
+      ],
+      durationSeconds: 45 * 60,
+    })
+
+    expect(adaptation.adjustments.map(item => item.type)).toContain('increase_target')
+    expect(adaptation.metrics).toMatchObject({
+      plannedSets: 3,
+      completedSets: 3,
+      completionRate: 1,
+      targetableSets: 3,
       hitTopRangeSets: 3,
       missedLowRangeSets: 0,
     })
@@ -371,5 +435,58 @@ describe('applyPlanAdaptation', () => {
     expect(nextPlan.days[0].exercises[1]).toMatchObject({ reps: 11, repRange: '9-11', sets: 2 })
     expect(nextPlan.days[0].exercises[2]).toMatchObject({ reps: 12, repRange: '10-12', sets: 2 })
     expect(nextPlan.days[1]).toBe(plan.days[1])
+  })
+})
+
+describe('buildPlanAdaptation parseRepRange object and numeric inputs', () => {
+  it('counts sets when planRepRange is an object with low/high keys', () => {
+    const adaptation = buildPlanAdaptation({
+      plan: makePlan(),
+      day: makeDay({ exercises: [{ id: 'bench', sets: 3 }] }),
+      exercises: [makeCompletedExercise({ planRepRange: { low: 8, high: 10 }, setReps: [10, 10, 10] })],
+      durationSeconds: 45 * 60,
+    })
+    expect(adaptation.metrics).toMatchObject({ targetableSets: 3, hitTopRangeSets: 3 })
+    expect(adaptation.adjustments.map(a => a.type)).toContain('increase_target')
+  })
+
+  it('counts sets when planRepRange uses lower/upper aliases', () => {
+    const adaptation = buildPlanAdaptation({
+      plan: makePlan(),
+      day: makeDay({ exercises: [{ id: 'bench', sets: 3 }] }),
+      exercises: [makeCompletedExercise({ planRepRange: { lower: 8, upper: 10 }, setReps: [10, 10, 10] })],
+      durationSeconds: 45 * 60,
+    })
+    expect(adaptation.metrics).toMatchObject({ targetableSets: 3, hitTopRangeSets: 3 })
+  })
+
+  it('ignores sets when planRepRange object has an invalid low value', () => {
+    const adaptation = buildPlanAdaptation({
+      plan: makePlan(),
+      day: makeDay({ exercises: [{ id: 'bench', sets: 3 }] }),
+      exercises: [makeCompletedExercise({
+        planRepRange: { low: 0, high: 10 },
+        planTargetReps: null,
+        setReps: [10, 10, 10],
+      })],
+      durationSeconds: 45 * 60,
+    })
+    // low > 0 fails → falls through → Number({...}) = NaN → returns null → exercise skipped
+    expect(adaptation.metrics).toMatchObject({ targetableSets: 0 })
+  })
+
+  it('counts sets when planRepRange is a bare number', () => {
+    const adaptation = buildPlanAdaptation({
+      plan: makePlan(),
+      day: makeDay({ exercises: [{ id: 'bench', sets: 3 }] }),
+      exercises: [makeCompletedExercise({
+        planRepRange: 10,
+        planTargetReps: null,
+        setReps: [10, 10, 10],
+      })],
+      durationSeconds: 45 * 60,
+    })
+    // String('10') → no regex → Number(10) = 10 > 0 → { low: 10, high: 10 } → all hit top
+    expect(adaptation.metrics).toMatchObject({ targetableSets: 3, hitTopRangeSets: 3 })
   })
 })

@@ -1,14 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import LoadingSpinner from '../LoadingSpinner'
 import { supabase } from '../../lib/supabase'
 import { getCached, invalidateCache, setCached } from '../../lib/cache'
 import { useCurrentUserId } from '../../context/UserContext'
 import { searchUsdaFoods } from '../../lib/usdaFoods'
+import { searchOffFoods } from '../../lib/offFoods'
 import { buildFoodSearchKey, mergeFoodSearchResults, normalizeSearchValue } from '../../lib/foodSearch'
 import { NUTRITION_FIELD_LIMITS, VALIDATION_LIMITS, validateLength, validateNumber, validateNutritionForm } from '../../lib/inputValidation'
+import { buildFoodPayload } from '../../lib/foodEditor'
 
 const UNITS = ['g', 'ml', 'oz', 'cup', 'tbsp', 'tsp', 'piece', 'slice', 'scoop', 'bar', 'serving']
 const USDA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
 const USER_FOODS_CACHE_TTL_MS = 5 * 60 * 1000
+const OFF_FALLBACK_THRESHOLD = 8
+const OFF_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
 
 const initialForm = {
   name: '',
@@ -29,6 +34,12 @@ const initialForm = {
   vitamin_c: '',
   calcium: '',
   iron: '',
+  vitamin_d: '',
+  magnesium: '',
+  zinc: '',
+  folate: '',
+  vitamin_b12: '',
+  vitamin_b6: '',
 }
 
 const initialRecipeForm = {
@@ -51,6 +62,12 @@ const RECIPE_NUMERIC_FIELDS = [
   'vitamin_c',
   'calcium',
   'iron',
+  'vitamin_d',
+  'magnesium',
+  'zinc',
+  'folate',
+  'vitamin_b12',
+  'vitamin_b6',
 ]
 
 const RECIPE_MICRO_ITEMS = [
@@ -64,6 +81,12 @@ const RECIPE_MICRO_ITEMS = [
   { key: 'vitamin_c', label: 'Vitamin C', unit: 'mg' },
   { key: 'calcium', label: 'Calcium', unit: 'mg' },
   { key: 'iron', label: 'Iron', unit: 'mg' },
+  { key: 'vitamin_d', label: 'Vitamin D', unit: 'mcg' },
+  { key: 'magnesium', label: 'Magnesium', unit: 'mg' },
+  { key: 'zinc', label: 'Zinc', unit: 'mg' },
+  { key: 'folate', label: 'Folate', unit: 'mcg' },
+  { key: 'vitamin_b12', label: 'Vitamin B12', unit: 'mcg' },
+  { key: 'vitamin_b6', label: 'Vitamin B6', unit: 'mg' },
 ]
 
 function Field({ label, value, onChange, placeholder = '0', type = 'number', unit, required, maxLength, rules }) {
@@ -159,6 +182,12 @@ function buildScaledNutrients(food, multiplier) {
     vitamin_c: roundNumber(numberOrZero(food?.vitamin_c) * multiplier, 1),
     calcium: Math.round(numberOrZero(food?.calcium) * multiplier),
     iron: roundNumber(numberOrZero(food?.iron) * multiplier, 2),
+    vitamin_d: roundNumber(numberOrZero(food?.vitamin_d) * multiplier, 1),
+    magnesium: Math.round(numberOrZero(food?.magnesium) * multiplier),
+    zinc: roundNumber(numberOrZero(food?.zinc) * multiplier, 1),
+    folate: Math.round(numberOrZero(food?.folate) * multiplier),
+    vitamin_b12: roundNumber(numberOrZero(food?.vitamin_b12) * multiplier, 2),
+    vitamin_b6: roundNumber(numberOrZero(food?.vitamin_b6) * multiplier, 2),
   }
 }
 
@@ -192,6 +221,12 @@ function buildRecipePayload(userId, recipeForm, totalsPerServing) {
     vitamin_c: numberOrZero(totalsPerServing.vitamin_c),
     calcium: numberOrZero(totalsPerServing.calcium),
     iron: numberOrZero(totalsPerServing.iron),
+    vitamin_d: numberOrZero(totalsPerServing.vitamin_d),
+    magnesium: numberOrZero(totalsPerServing.magnesium),
+    zinc: numberOrZero(totalsPerServing.zinc),
+    folate: numberOrZero(totalsPerServing.folate),
+    vitamin_b12: numberOrZero(totalsPerServing.vitamin_b12),
+    vitamin_b6: numberOrZero(totalsPerServing.vitamin_b6),
   }
 }
 
@@ -242,9 +277,9 @@ export default function CreateFood({ onSave, onBack }) {
   const recipePerServing = useMemo(() => {
     return RECIPE_NUMERIC_FIELDS.reduce((totals, key) => {
       const value = recipeTotals[key] / recipeYield
-      if (['calories', 'sodium', 'potassium', 'cholesterol', 'vitamin_a', 'calcium'].includes(key)) {
+      if (['calories', 'sodium', 'potassium', 'cholesterol', 'vitamin_a', 'calcium', 'magnesium', 'folate'].includes(key)) {
         totals[key] = Math.round(value)
-      } else if (key === 'iron') {
+      } else if (key === 'iron' || key === 'vitamin_b12' || key === 'vitamin_b6') {
         totals[key] = roundNumber(value, 2)
       } else {
         totals[key] = roundNumber(value, 1)
@@ -342,27 +377,66 @@ export default function CreateFood({ onSave, onBack }) {
       return () => controller.abort()
     }
 
+    // Win #1 — instant cache display.
+    // Three sub-cases matching NutritionFoodPicker:
+    //   a) USDA full (≥ threshold): show and return early.
+    //   b) USDA sparse + OFF cached: merge, show and return early.
+    //   c) USDA sparse + OFF not cached: show USDA now, silently fetch OFI in background.
+    const normalized = normalizeSearchValue(ingredientSearch)
+    const usdaCacheKey = `usda_food_search:${normalized}`
+    const cachedUsda = getCached(usdaCacheKey)
+    if (cachedUsda) {
+      const offCacheKey = `off_food_search:${normalized}`
+      const cachedOff = cachedUsda.length < OFF_FALLBACK_THRESHOLD
+        ? getCached(offCacheKey)
+        : null
+      const remote = cachedOff ? [...cachedUsda, ...cachedOff] : cachedUsda
+      setIngredientResults(mergeFoodSearchResults(localFoods, remote, ingredientSearch).slice(0, 30))
+      setSearchingIngredients(false)
+
+      // Cases a & b — fully cached, nothing left to fetch
+      if (cachedUsda.length >= OFF_FALLBACK_THRESHOLD || cachedOff) return () => controller.abort()
+
+      // Case c — USDA sparse, OFF not cached: silently fetch OFI and update results
+      ingredientSearchTimer.current = setTimeout(async () => {
+        if (cancelled) return
+        const offFoods = await searchOffFoods(ingredientSearch, { signal: controller.signal, pageSize: 20 }).catch(() => [])
+        if (!cancelled && offFoods.length > 0) {
+          setCached(offCacheKey, offFoods, OFF_SEARCH_CACHE_TTL_MS, { bucket: 'search' })
+          setIngredientResults(mergeFoodSearchResults(localFoods, [...cachedUsda, ...offFoods], ingredientSearch).slice(0, 30))
+        }
+      }, 300)
+      return () => { cancelled = true; clearTimeout(ingredientSearchTimer.current); controller.abort() }
+    }
+
     setSearchingIngredients(true)
 
     ingredientSearchTimer.current = setTimeout(async () => {
-      const normalized = normalizeSearchValue(ingredientSearch)
-      const usdaCacheKey = `usda_food_search:${normalized}`
-
       try {
-        const remoteFoods = await (() => {
-          const cachedUsda = getCached(usdaCacheKey)
-          if (cachedUsda) return Promise.resolve(cachedUsda)
-
-          return searchUsdaFoods(ingredientSearch, { signal: controller.signal, pageSize: 30 })
-            .then(foods => {
-              setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS, { bucket: 'search' })
-              return foods
-            })
-        })()
+        // Fetch USDA
+        const usdaFoods = await searchUsdaFoods(ingredientSearch, { signal: controller.signal, pageSize: 30 })
+          .then(foods => {
+            if (foods.length > 0) setCached(usdaCacheKey, foods, USDA_SEARCH_CACHE_TTL_MS, { bucket: 'search' })
+            return foods
+          })
 
         if (cancelled) return
 
-        setIngredientResults(mergeFoodSearchResults(localFoods, remoteFoods, ingredientSearch).slice(0, 30))
+        // OFI fallback — only fires when USDA is sparse
+        let offFoods = []
+        if (usdaFoods.length < OFF_FALLBACK_THRESHOLD) {
+          const offCacheKey = `off_food_search:${normalized}`
+          const cachedOff = getCached(offCacheKey)
+          if (cachedOff) {
+            offFoods = cachedOff
+          } else {
+            offFoods = await searchOffFoods(ingredientSearch, { signal: controller.signal, pageSize: 20 }).catch(() => [])
+            if (offFoods.length > 0) setCached(offCacheKey, offFoods, OFF_SEARCH_CACHE_TTL_MS, { bucket: 'search' })
+          }
+        }
+
+        if (cancelled) return
+        setIngredientResults(mergeFoodSearchResults(localFoods, [...usdaFoods, ...offFoods], ingredientSearch).slice(0, 30))
       } catch (searchError) {
         if (!cancelled && searchError?.name !== 'AbortError') {
           console.error('Recipe ingredient search failed:', searchError)
@@ -459,27 +533,7 @@ export default function CreateFood({ onSave, onBack }) {
     try {
       const payload = mode === 'recipe'
         ? buildRecipePayload(userId, recipeForm, recipePerServing)
-        : {
-          user_id: userId,
-          name: form.name.trim(),
-          brand: form.brand.trim() || null,
-          serving_size: numberOrZero(form.serving_size) || 100,
-          serving_unit: form.serving_unit,
-          calories: numberOrZero(form.calories),
-          protein: numberOrZero(form.protein),
-          carbs: numberOrZero(form.carbs),
-          fat: numberOrZero(form.fat),
-          fiber: numberOrZero(form.fiber),
-          sugar: numberOrZero(form.sugar),
-          saturated_fat: numberOrZero(form.saturated_fat),
-          sodium: numberOrZero(form.sodium),
-          potassium: numberOrZero(form.potassium),
-          cholesterol: numberOrZero(form.cholesterol),
-          vitamin_a: numberOrZero(form.vitamin_a),
-          vitamin_c: numberOrZero(form.vitamin_c),
-          calcium: numberOrZero(form.calcium),
-          iron: numberOrZero(form.iron),
-        }
+        : buildFoodPayload(form, userId)
 
       const { data, error: saveError } = await supabase
         .from('foods')
@@ -844,6 +898,18 @@ export default function CreateFood({ onSave, onBack }) {
                 <Field label="Calcium" value={form.calcium} onChange={value => set('calcium', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.calcium} />
                 <Field label="Iron" value={form.iron} onChange={value => set('iron', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.iron} />
               </div>
+              <div className="cf-row">
+                <Field label="Vitamin D" value={form.vitamin_d} onChange={value => set('vitamin_d', value)} unit="mcg" rules={NUTRITION_FIELD_LIMITS.vitamin_d} />
+                <Field label="Magnesium" value={form.magnesium} onChange={value => set('magnesium', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.magnesium} />
+              </div>
+              <div className="cf-row">
+                <Field label="Zinc" value={form.zinc} onChange={value => set('zinc', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.zinc} />
+                <Field label="Folate" value={form.folate} onChange={value => set('folate', value)} unit="mcg" rules={NUTRITION_FIELD_LIMITS.folate} />
+              </div>
+              <div className="cf-row">
+                <Field label="Vitamin B12" value={form.vitamin_b12} onChange={value => set('vitamin_b12', value)} unit="mcg" rules={NUTRITION_FIELD_LIMITS.vitamin_b12} />
+                <Field label="Vitamin B6" value={form.vitamin_b6} onChange={value => set('vitamin_b6', value)} unit="mg" rules={NUTRITION_FIELD_LIMITS.vitamin_b6} />
+              </div>
             </div>
           )}
         </>
@@ -852,7 +918,7 @@ export default function CreateFood({ onSave, onBack }) {
       {error && <div className="cf-error">{error}</div>}
 
       <button className="nut-add-to-log-btn" onClick={save} disabled={saving || !valid}>
-        {saving ? 'Saving...' : mode === 'recipe' ? 'Save Recipe' : 'Save Food'}
+        {saving ? <LoadingSpinner size="xs" color="currentColor" /> : mode === 'recipe' ? 'Save Recipe' : 'Save Food'}
       </button>
     </div>
   )

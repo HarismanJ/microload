@@ -1,9 +1,13 @@
 import { useState, useEffect, useRef, useEffectEvent } from 'react'
+import { createPortal } from 'react-dom'
+import LoadingSpinner from './LoadingSpinner'
+import { push as pushBack, remove as removeBack } from '../lib/backStack'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import RestWheelPicker from './RestWheelPicker'
 import { supabase } from '../lib/supabase'
 import { clearAccountDeletionLocalData, clearCache, getCached, setCached, invalidateCache } from '../lib/cache'
 import { cancelRestNotification } from '../lib/restNotification'
+import { markIntentionalLogout } from '../lib/purchases'
 import WorkoutDayDetail from './profile/WorkoutDayDetail'
 import WeightChart from './profile/WeightChart'
 import FriendsSection from './profile/FriendsSection'
@@ -14,6 +18,9 @@ import { useCurrentUser } from '../context/UserContext'
 import { convertWeight } from '../lib/liftMath'
 import { VALIDATION_LIMITS, normalizeUsername, validateLength, validateNumber, validateUsername } from '../lib/inputValidation'
 import { saveThemeForUser } from '../lib/theme'
+import { Capacitor } from '@capacitor/core'
+import { isPremiumSync, refreshPremiumStatus } from '../lib/purchases'
+import Paywall from './Paywall'
 import '../styles/Profile.css'
 
 function normalizePersistableUsername(username) {
@@ -23,7 +30,7 @@ function normalizePersistableUsername(username) {
   return error ? null : normalized
 }
 
-export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive = false }) {
+export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightChanged, workoutActive = false }) {
   const currentUser = useCurrentUser()
   const { themeId, switchTheme, previewTheme, themes } = useTheme()
   const profileIdRef = useRef(null)
@@ -66,21 +73,63 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({})
   const [saving, setSaving] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [viewingSession, setViewingSession] = useState(null) // { sessionIds, dateStr }
   const [viewingAchievements, setViewingAchievements] = useState(false)
   const [viewingFriendProfile, setViewingFriendProfile] = useState(null)
+  const [showPaywall, setShowPaywall] = useState(false)
+  const [isPremium, setIsPremium] = useState(isPremiumSync())
   const [showBugReport, setShowBugReport] = useState(false)
+  const [bugReportClosing, setBugReportClosing] = useState(false)
+  const bugReportCloseTimerRef = useRef(null)
+  const deleteConfirmCloseTimerRef = useRef(null)
   const [bugMessage, setBugMessage] = useState('')
   const [bugSubmitting, setBugSubmitting] = useState(false)
   const [bugSubmitted, setBugSubmitted] = useState(false)
   const [bugError, setBugError] = useState('')
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteConfirmClosing, setDeleteConfirmClosing] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
-  useFocusTrap(bugReportRef, { active: showBugReport, onEscape: () => setShowBugReport(false) })
-  useFocusTrap(deleteConfirmRef, { active: showDeleteConfirm, onEscape: () => !deleting && setShowDeleteConfirm(false) })
+  useFocusTrap(bugReportRef, { active: showBugReport, onEscape: closeBugReport })
+
+  function closeBugReport() {
+    if (bugReportClosing) return
+    setBugReportClosing(true)
+    clearTimeout(bugReportCloseTimerRef.current)
+    bugReportCloseTimerRef.current = setTimeout(() => {
+      setShowBugReport(false)
+      setBugReportClosing(false)
+    }, 340)
+  }
+
+  function closeDeleteConfirm() {
+    if (deleting || deleteConfirmClosing) return
+    setDeleteConfirmClosing(true)
+    clearTimeout(deleteConfirmCloseTimerRef.current)
+    deleteConfirmCloseTimerRef.current = setTimeout(() => {
+      setShowDeleteConfirm(false)
+      setDeleteConfirmClosing(false)
+    }, 340)
+  }
+
+  useEffect(() => {
+    refreshPremiumStatus().then(setIsPremium)
+  }, [])
+  useFocusTrap(deleteConfirmRef, { active: showDeleteConfirm, onEscape: closeDeleteConfirm })
+
+  const hasSubView = Boolean(viewingAchievements) || Boolean(viewingSession) || Boolean(viewingFriendProfile)
+  useEffect(() => {
+    if (!hasSubView) return
+    const id = pushBack(() => {
+      setViewingAchievements(false)
+      setViewingSession(null)
+      setViewingFriendProfile(null)
+    })
+    return () => removeBack(id)
+  }, [hasSubView])
 
   async function load() {
     const cached = getCached('profile')
@@ -168,11 +217,9 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         full_name: form.full_name.trim(),
         age: form.age ? parseInt(form.age) : null,
         default_rest_seconds: Number(form.default_rest_seconds),
-        bodyweight: form.bodyweight !== undefined
-          ? (form.bodyweight ? parseFloat(form.bodyweight) : null)
-          : (profile?.bodyweight ?? null),
       }
 
+      let bodyweightRewritten = false
       if (isUnitPreferenceChanging) {
         const { data: latestWeightLog, error: latestWeightError } = await supabase
           .from('body_weight_logs')
@@ -189,6 +236,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
 
         if (sourceWeight !== null && sourceWeight !== undefined) {
           updates.bodyweight = Math.round(convertWeight(sourceWeight, sourceUnit, form.unit_preference) * 10) / 10
+          bodyweightRewritten = true
         }
       }
 
@@ -202,6 +250,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
       if (error) throw error
       setProfile(data)
       invalidateCache('profile', 'home', 'ranks')
+      if (bodyweightRewritten) onBodyweightChanged?.()
       setEditing(false)
     } catch (error) {
       if (error?.code === '23505' || error?.message?.toLowerCase().includes('username')) {
@@ -215,8 +264,15 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
   }
 
   async function signOut() {
-    clearCache()
-    await supabase.auth.signOut()
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      clearCache()
+      markIntentionalLogout()
+      await supabase.auth.signOut()
+    } finally {
+      setSigningOut(false)
+    }
   }
 
   async function deleteAccount() {
@@ -236,6 +292,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
       if (data?.error) throw new Error(data.error)
       await cancelRestNotification('all')
       clearAccountDeletionLocalData(currentUser.id)
+      markIntentionalLogout()
       await supabase.auth.signOut()
     } catch (err) {
       setDeleteError(err?.message || 'Failed to delete account. Please try again or contact support.')
@@ -254,7 +311,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
     : email?.[0]?.toUpperCase() || '?'
 
   if (viewingAchievements) {
-    return <Achievements onBack={() => setViewingAchievements(false)} />
+    return <Achievements onBack={() => window.history.back()} />
   }
 
   if (viewingSession) {
@@ -264,7 +321,8 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         dateStr={viewingSession.dateStr}
         onDeleteWorkout={handleDeletedWorkout}
         onRefresh={load}
-        onBack={() => setViewingSession(null)}
+        onBodyweightChanged={onBodyweightChanged}
+        onBack={() => window.history.back()}
       />
     )
   }
@@ -274,7 +332,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
       <FriendProfileDetail
         friendId={viewingFriendProfile.id}
         fallbackProfile={viewingFriendProfile}
-        onBack={() => setViewingFriendProfile(null)}
+        onBack={() => window.history.back()}
       />
     )
   }
@@ -288,6 +346,84 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
           <div className="profile-email">{email}</div>
         </div>
       </div>
+
+      {isPremium ? (
+        <div className="premium-manage-card">
+          <div className="premium-manage-left">
+            <div className="premium-manage-logo-wrap">
+              <svg className="premium-manage-sparkle premium-manage-sparkle-1" width="9" height="9" viewBox="-4.5 -4.5 9 9" aria-hidden="true"><path d="M0-3.8L0.9-0.9L3.8 0L0.9 0.9L0 3.8L-0.9 0.9L-3.8 0L-0.9-0.9Z" fill="#fde68a"/></svg>
+              <svg className="premium-manage-sparkle premium-manage-sparkle-2" width="7" height="7" viewBox="-3.5 -3.5 7 7" aria-hidden="true"><path d="M0-3L0.7-0.7L3 0L0.7 0.7L0 3L-0.7 0.7L-3 0L-0.7-0.7Z" fill="#f0c040"/></svg>
+              <svg className="premium-manage-sparkle premium-manage-sparkle-3" width="8" height="8" viewBox="-4 -4 8 8" aria-hidden="true"><path d="M0-3.5L0.8-0.8L3.5 0L0.8 0.8L0 3.5L-0.8 0.8L-3.5 0L-0.8-0.8Z" fill="#fde68a"/></svg>
+              <svg className="premium-manage-sparkle premium-manage-sparkle-4" width="6" height="6" viewBox="-3 -3 6 6" aria-hidden="true"><path d="M0-2.5L0.6-0.6L2.5 0L0.6 0.6L0 2.5L-0.6 0.6L-2.5 0L-0.6-0.6Z" fill="#f0c040"/></svg>
+              <svg className="premium-manage-sparkle premium-manage-sparkle-5" width="7" height="7" viewBox="-3.5 -3.5 7 7" aria-hidden="true"><path d="M0-3L0.7-0.7L3 0L0.7 0.7L0 3L-0.7 0.7L-3 0L-0.7-0.7Z" fill="#fde68a"/></svg>
+              <svg className="premium-manage-logo" viewBox="252 200 520 624" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <defs>
+                  <linearGradient id="pmGold" x1="0.5" y1="0" x2="0.5" y2="1">
+                    <stop offset="0%" stopColor="#fde68a"/>
+                    <stop offset="40%" stopColor="#f0c040"/>
+                    <stop offset="100%" stopColor="#b8720a"/>
+                  </linearGradient>
+                  <clipPath id="pmBarsClip">
+                    <rect x="272" y="386" width="72" height="252" rx="28"/>
+                    <rect x="374" y="290" width="72" height="444" rx="28"/>
+                    <rect x="476" y="220" width="72" height="584" rx="28"/>
+                    <rect x="578" y="290" width="72" height="444" rx="28"/>
+                    <rect x="680" y="386" width="72" height="252" rx="28"/>
+                  </clipPath>
+                  <linearGradient id="pmShimmer" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%"   stopColor="rgba(255,255,255,0)"/>
+                    <stop offset="35%"  stopColor="rgba(255,255,255,0)"/>
+                    <stop offset="50%"  stopColor="rgba(255,255,255,0.5)"/>
+                    <stop offset="65%"  stopColor="rgba(255,255,255,0)"/>
+                    <stop offset="100%" stopColor="rgba(255,255,255,0)"/>
+                  </linearGradient>
+                </defs>
+                <rect x="272" y="386" width="72" height="252" rx="28" fill="url(#pmGold)"/>
+                <rect x="374" y="290" width="72" height="444" rx="28" fill="url(#pmGold)"/>
+                <rect x="476" y="220" width="72" height="584" rx="28" fill="url(#pmGold)"/>
+                <rect x="578" y="290" width="72" height="444" rx="28" fill="url(#pmGold)"/>
+                <rect x="680" y="386" width="72" height="252" rx="28" fill="url(#pmGold)"/>
+                <rect x="-520" y="200" width="1040" height="624" fill="url(#pmShimmer)" clipPath="url(#pmBarsClip)">
+                  <animateTransform attributeName="transform" type="translate" from="-520 0" to="1040 0" dur="3.5s" repeatCount="indefinite"/>
+                </rect>
+              </svg>
+            </div>
+            <div>
+              <div className="premium-manage-title">microload Pro</div>
+              <div className="premium-manage-sub">Active subscription</div>
+            </div>
+          </div>
+          <button
+            className="premium-manage-link"
+            onClick={() => {
+              const url = Capacitor.getPlatform() === 'android'
+                ? 'https://play.google.com/store/account/subscriptions'
+                : 'itms-apps://apps.apple.com/account/subscriptions'
+              window.open(url, '_system')
+            }}
+          >
+            Manage
+          </button>
+        </div>
+      ) : (
+        <button className="premium-upsell-btn" onClick={() => setShowPaywall(true)}>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-1" width="12" height="12" viewBox="-6 -6 12 12" aria-hidden="true"><path d="M0-5L1.2-1.2L5 0L1.2 1.2L0 5L-1.2 1.2L-5 0L-1.2-1.2Z" fill="#fde68a"/></svg>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-2" width="8"  height="8"  viewBox="-4 -4 8 8"   aria-hidden="true"><path d="M0-3.5L0.8-0.8L3.5 0L0.8 0.8L0 3.5L-0.8 0.8L-3.5 0L-0.8-0.8Z" fill="#f0c040"/></svg>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-3" width="10" height="10" viewBox="-5 -5 10 10" aria-hidden="true"><path d="M0-4L1-1L4 0L1 1L0 4L-1 1L-4 0L-1-1Z" fill="#fde68a"/></svg>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-4" width="7"  height="7"  viewBox="-3.5 -3.5 7 7" aria-hidden="true"><path d="M0-3L0.7-0.7L3 0L0.7 0.7L0 3L-0.7 0.7L-3 0L-0.7-0.7Z" fill="#f0c040"/></svg>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-5" width="9"  height="9"  viewBox="-4.5 -4.5 9 9" aria-hidden="true"><path d="M0-3.8L0.9-0.9L3.8 0L0.9 0.9L0 3.8L-0.9 0.9L-3.8 0L-0.9-0.9Z" fill="#fde68a"/></svg>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-6" width="8"  height="8"  viewBox="-4 -4 8 8"   aria-hidden="true"><path d="M0-3.5L0.8-0.8L3.5 0L0.8 0.8L0 3.5L-0.8 0.8L-3.5 0L-0.8-0.8Z" fill="#fde68a"/></svg>
+          <svg className="premium-btn-sparkle premium-btn-sparkle-7" width="7"  height="7"  viewBox="-3.5 -3.5 7 7" aria-hidden="true"><path d="M0-3L0.7-0.7L3 0L0.7 0.7L0 3L-0.7 0.7L-3 0L-0.7-0.7Z" fill="#f0c040"/></svg>
+          <svg className="premium-upsell-logo" viewBox="252 200 520 624" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <rect x="272" y="386" width="72" height="252" rx="28" fill="#5c2d00"/>
+            <rect x="374" y="290" width="72" height="444" rx="28" fill="#5c2d00"/>
+            <rect x="476" y="220" width="72" height="584" rx="28" fill="#5c2d00"/>
+            <rect x="578" y="290" width="72" height="444" rx="28" fill="#5c2d00"/>
+            <rect x="680" y="386" width="72" height="252" rx="28" fill="#5c2d00"/>
+          </svg>
+          Go Premium
+        </button>
+      )}
 
       <button className="achievements-btn" onClick={() => setViewingAchievements(true)}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
@@ -361,7 +497,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
           {saveError && <div className="profile-save-error">{saveError}</div>}
           <div className="form-actions">
             <button className="btn-cancel" onClick={() => { setSaveError(''); setEditing(false) }}>Cancel</button>
-            <button className="btn-save" onClick={saveProfile} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</button>
+            <button className="btn-save" onClick={saveProfile} disabled={saving}>{saving ? <LoadingSpinner size="xs" color="currentColor" /> : 'Save Changes'}</button>
           </div>
         </div>
       ) : (
@@ -380,7 +516,9 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         <button className="report-bug-btn" onClick={() => { setShowBugReport(true); setBugMessage(''); setBugError(''); setBugSubmitted(false) }}>
           Report a Bug
         </button>
-        <button className="signout-btn" onClick={signOut}>Sign Out</button>
+        <button className="signout-btn" onClick={signOut} disabled={signingOut}>
+          {signingOut ? <LoadingSpinner size="xs" color="currentColor" /> : 'Sign Out'}
+        </button>
       </div>
 
       <div className="account-danger-zone">
@@ -398,14 +536,21 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
         </button>
       </div>
 
-      {showBugReport && (
-        <div className="bug-report-overlay" onClick={() => setShowBugReport(false)}>
+      {showPaywall && (
+        <Paywall
+          onClose={() => setShowPaywall(false)}
+          onPurchaseSuccess={() => setIsPremium(true)}
+        />
+      )}
+
+      {showBugReport && createPortal(
+        <div className={`bug-report-overlay${bugReportClosing ? ' bug-report-overlay--closing' : ''}`} onClick={closeBugReport}>
           <div className="bug-report-modal" onClick={e => e.stopPropagation()} ref={bugReportRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="bug-report-title">
             {bugSubmitted ? (
               <>
                 <div className="bug-report-title">Thanks!</div>
                 <div className="bug-report-sent">Your report was submitted.</div>
-                <button className="theme-toast-ok" onClick={() => setShowBugReport(false)}>Done</button>
+                <button className="theme-toast-ok" onClick={closeBugReport}>Done</button>
               </>
             ) : (
               <>
@@ -420,7 +565,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
                 />
                 {bugError ? <div className="bug-report-error">{bugError}</div> : null}
                 <div className="bug-report-actions">
-                  <button className="bug-report-cancel" onClick={() => setShowBugReport(false)}>Cancel</button>
+                  <button className="bug-report-cancel" onClick={closeBugReport}>Cancel</button>
                   <button
                     className="bug-report-submit"
                     disabled={bugSubmitting || !bugMessage.trim()}
@@ -470,10 +615,11 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {showDeleteConfirm && (
-        <div className="bug-report-overlay" onClick={() => !deleting && setShowDeleteConfirm(false)}>
+        <div className={`bug-report-overlay${deleteConfirmClosing ? ' bug-report-overlay--closing' : ''}`} onClick={closeDeleteConfirm}>
           <div className="bug-report-modal" onClick={e => e.stopPropagation()} ref={deleteConfirmRef} tabIndex={-1} role="alertdialog" aria-modal="true" aria-labelledby="delete-confirm-title">
             <div id="delete-confirm-title" className="bug-report-title" style={{ color: '#ef4444' }}>Delete Account</div>
             <p style={{ color: 'var(--muted)', fontSize: 13, margin: '8px 0 16px', lineHeight: 1.5 }}>
@@ -495,7 +641,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, workoutActive =
             />
             {deleteError && <div className="bug-report-error">{deleteError}</div>}
             <div className="bug-report-actions">
-              <button className="bug-report-cancel" onClick={() => setShowDeleteConfirm(false)} disabled={deleting}>Cancel</button>
+              <button className="bug-report-cancel" onClick={closeDeleteConfirm} disabled={deleting}>Cancel</button>
               <button
                 disabled={deleteConfirmText !== 'DELETE' || deleting}
                 onClick={deleteAccount}

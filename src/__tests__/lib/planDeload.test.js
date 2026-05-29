@@ -111,4 +111,25 @@ describe('planned exercise deload transforms', () => {
     const suggestion = { action: 'maintain', suggestedWeightKg: 100 }
     expect(applyScheduledDeloadToSuggestion(suggestion, {})).toBe(suggestion)
   })
+
+  it('snaps deload weight through the provided snapper', () => {
+    const snapTo5kg = (w) => Math.round(w / 5) * 5
+    const result = applyScheduledDeloadToSuggestion(
+      { action: 'maintain', suggestedWeightKg: 50, suggestedReps: 8 },
+      { planDeloadWeek: true, planWeek: 4, planRepRange: '6-10' },
+      snapTo5kg
+    )
+    // 50 * 0.875 = 43.75 → snapped to nearest 5 = 45
+    expect(result.suggestedWeightKg).toBe(45)
+    expect(result.action).toBe('deload')
+  })
+
+  it('falls back to one-decimal rounding when snapWeight is null', () => {
+    const result = applyScheduledDeloadToSuggestion(
+      { action: 'maintain', suggestedWeightKg: 100, suggestedReps: 8 },
+      { planDeloadWeek: true, planWeek: 4, planRepRange: '6-10' },
+      null
+    )
+    expect(result.suggestedWeightKg).toBe(87.5)
+  })
 })

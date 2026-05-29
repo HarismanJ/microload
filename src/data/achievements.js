@@ -35,13 +35,13 @@ export const ACHIEVEMENTS = [
   { id: 'nut100', cat: 'Nutrition', tier: 'platinum', title: 'Macro Master',    desc: 'Log food for 100 days',        nutDays: 100 },
 
   // ── Volume ───────────────────────────────────────────────────────────────
-  { id: 'vol_corgi',    cat: 'Volume', tier: 'bronze',   emoji: '🐕', title: 'Corgi Crew',      desc: 'Reach 10,000 kg of total lifted volume — about 700 corgis.',              totalVolumeKg: 10000    },
-  { id: 'vol_panda',    cat: 'Volume', tier: 'bronze',   emoji: '🐼', title: 'Panda Power',     desc: 'Reach 50,000 kg of total lifted volume — about 330 giant pandas.',        totalVolumeKg: 50000    },
-  { id: 'vol_bear',     cat: 'Volume', tier: 'silver',   emoji: '🐻', title: 'Bear Mode',       desc: 'Reach 150,000 kg of total lifted volume — about 300 grizzly bears.',      totalVolumeKg: 150000   },
-  { id: 'vol_rhino',    cat: 'Volume', tier: 'silver',   emoji: '🦏', title: 'Rhino Strong',    desc: 'Reach 500,000 kg of total lifted volume — about 215 white rhinos.',        totalVolumeKg: 500000   },
-  { id: 'vol_elephant', cat: 'Volume', tier: 'gold',     emoji: '🐘', title: 'Elephant Class',  desc: 'Reach 1,500,000 kg of total lifted volume — about 250 African elephants.', totalVolumeKg: 1500000  },
-  { id: 'vol_orca',     cat: 'Volume', tier: 'platinum', emoji: '🐬', title: 'Orca Level',      desc: 'Reach 5,000,000 kg of total lifted volume — about 910 orcas.',             totalVolumeKg: 5000000  },
-  { id: 'vol_whale',    cat: 'Volume', tier: 'diamond',  emoji: '🐋', title: 'Blue Whale Club', desc: 'Reach 15,000,000 kg of total lifted volume — about 100 blue whales.',      totalVolumeKg: 15000000 },
+  { id: 'vol_corgi',    cat: 'Volume', tier: 'bronze',   emoji: '🐕', title: 'Corgi Crew',      desc: 'Reach 10,000 kg of effective training volume.',     totalVolumeKg: 10000    },
+  { id: 'vol_panda',    cat: 'Volume', tier: 'bronze',   emoji: '🐼', title: 'Panda Power',     desc: 'Reach 50,000 kg of effective training volume.',     totalVolumeKg: 50000    },
+  { id: 'vol_bear',     cat: 'Volume', tier: 'silver',   emoji: '🐻', title: 'Bear Mode',       desc: 'Reach 150,000 kg of effective training volume.',    totalVolumeKg: 150000   },
+  { id: 'vol_rhino',    cat: 'Volume', tier: 'silver',   emoji: '🦏', title: 'Rhino Strong',    desc: 'Reach 500,000 kg of effective training volume.',    totalVolumeKg: 500000   },
+  { id: 'vol_elephant', cat: 'Volume', tier: 'gold',     emoji: '🐘', title: 'Elephant Class',  desc: 'Reach 1,500,000 kg of effective training volume.',  totalVolumeKg: 1500000  },
+  { id: 'vol_orca',     cat: 'Volume', tier: 'platinum', emoji: '🐬', title: 'Orca Level',      desc: 'Reach 5,000,000 kg of effective training volume.',  totalVolumeKg: 5000000  },
+  { id: 'vol_whale',    cat: 'Volume', tier: 'diamond',  emoji: '🐋', title: 'Blue Whale Club', desc: 'Reach 15,000,000 kg of effective training volume.', totalVolumeKg: 15000000 },
 ]
 
 export const CATEGORIES = ['Strength', 'Consistency', 'Nutrition', 'Volume']

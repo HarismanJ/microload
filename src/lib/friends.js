@@ -12,9 +12,7 @@ async function fetchProfilesByIds(ids) {
   if (!ids.length) return {}
 
   const { data, error } = await supabase
-    .from('profiles')
-    .select('id, username, full_name')
-    .in('id', ids)
+    .rpc('get_public_profiles', { p_profile_ids: ids })
 
   if (error) throw error
 
@@ -56,25 +54,11 @@ export async function loadFriendships(userId) {
   }
 }
 
-export async function searchFriendProfiles(searchTerm, currentUserId) {
+export async function searchFriendProfiles(searchTerm) {
   const term = searchTerm.trim()
   if (!term) return []
 
-  const rpcResult = await supabase.rpc('search_profiles_for_friendship', { p_search: term })
-  if (!rpcResult.error) return rpcResult.data ?? []
-
-  const missingRpc = rpcResult.error?.code === '42883'
-    || rpcResult.error?.message?.toLowerCase?.().includes('search_profiles_for_friendship')
-  if (!missingRpc) throw rpcResult.error
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, username, full_name')
-    .ilike('username', `%${term}%`)
-    .neq('id', currentUserId)
-    .order('username', { ascending: true })
-    .limit(8)
-
+  const { data, error } = await supabase.rpc('search_profiles_for_friendship', { p_search: term })
   if (error) throw error
   return data ?? []
 }
