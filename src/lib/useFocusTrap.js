@@ -20,7 +20,7 @@ export function useFocusTrap(ref, { active = true, onEscape } = {}) {
 
     const prevFocused = document.activeElement
     const firstFocusable = el.querySelector(FOCUSABLE)
-    ;(firstFocusable || el).focus()
+    ;(firstFocusable || el).focus({ preventScroll: true })
 
     function handleKeyDown(e) {
       if (e.key === 'Escape') {

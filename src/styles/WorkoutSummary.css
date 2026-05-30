@@ -430,8 +430,10 @@
 }
 
 @keyframes ws-achievement-in {
-  from { opacity: 0; transform: translateX(-12px); }
-  to   { opacity: 1; transform: translateX(0); }
+  0%   { opacity: 0; transform: translateX(-14px) scale(0.9); }
+  55%  { opacity: 1; transform: translateX(3px) scale(1.06); }
+  72%  { transform: translateX(-1px) scale(0.97); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
 }
 
 @keyframes ws-achievement-shine {
@@ -453,17 +455,17 @@
   box-shadow: var(--shadow-card);
 }
 
-.ws-achievement-in {
-  animation: ws-achievement-in 0.9s ease both var(--delay);
+.ws-achievement-revealed {
+  animation: ws-achievement-in 0.9s ease both;
 }
 
-.ws-achievement-in::after {
+.ws-achievement-revealed::after {
   content: '';
   position: absolute;
   inset: 0;
   background: linear-gradient(90deg, transparent 0%, rgba(234,179,8,0.15) 50%, transparent 100%);
   background-size: 200% 100%;
-  animation: ws-achievement-shine 2.0s ease calc(var(--delay) + 0.7s) both;
+  animation: ws-achievement-shine 2.0s ease 0.7s both;
   pointer-events: none;
 }
 
@@ -508,12 +510,13 @@
 }
 
 .ws-rank-bw-warning {
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.4);
   border-radius: 12px;
   padding: 12px 14px;
   font-size: 13px;
-  color: var(--muted);
+  font-weight: 600;
+  color: #eab308;
   text-align: center;
 }
 
@@ -525,10 +528,10 @@
 }
 
 @keyframes ws-rankup-flash {
-  0%   { box-shadow: 0 0 0 0    color-mix(in srgb, var(--tier-color) 60%, transparent); }
-  40%  { box-shadow: 0 0 0 10px color-mix(in srgb, var(--tier-color) 35%, transparent),
-                    0 0 22px 2px color-mix(in srgb, var(--tier-color) 20%, transparent); }
-  100% { box-shadow: 0 0 0 18px color-mix(in srgb, var(--tier-color) 0%,  transparent); }
+  0%   { box-shadow: 0 0 0 0    color-mix(in srgb, var(--tier-color) 85%, transparent); }
+  40%  { box-shadow: 0 0 0 18px color-mix(in srgb, var(--tier-color) 60%, transparent),
+                    0 0 40px 6px color-mix(in srgb, var(--tier-color) 42%, transparent); }
+  100% { box-shadow: 0 0 0 32px color-mix(in srgb, var(--tier-color) 0%,  transparent); }
 }
 
 .ws-rankup-card {
@@ -546,7 +549,7 @@
   transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 
-.ws-rankup-in {
+.ws-rankup-revealed {
   animation:
     ws-rankup-pop   1.2s ease both var(--delay),
     ws-rankup-flash 1.5s ease both var(--delay);
@@ -556,6 +559,8 @@
   display: flex;
   align-items: center;
   gap: 9px;
+  position: relative;
+  z-index: 1;
 }
 
 .ws-rankup-arrow {
@@ -568,6 +573,7 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
 
 .ws-rankup-exercise {
@@ -585,6 +591,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  position: relative;
+  z-index: 1;
 }
 
 .ws-rankup-from-side {
@@ -613,12 +621,10 @@
   height: 100%;
   width: 100%;
   border-radius: 2px;
-  background: linear-gradient(to right,
-    color-mix(in srgb, var(--tier-color) 70%, transparent),
-    var(--tier-color)
-  );
+  background-color: var(--tier-color);
   transform: scaleX(0);
   transform-origin: left;
+  transition: background-color 0.3s ease;
 }
 
 @keyframes ws-bar-fill {
@@ -626,9 +632,14 @@
   to   { transform: scaleX(1); }
 }
 
-.ws-rankup-in .ws-rankup-bar-fill {
+.ws-rankup-revealed .ws-rankup-bar-fill {
   animation: ws-bar-fill 0.85s cubic-bezier(0.4, 0, 0.2, 1) both;
   animation-delay: calc(var(--delay) + 0.8s);
+}
+
+.ws-rankup-revealed .ws-rankup-bar-fill-step {
+  animation: ws-bar-fill 0.4s cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation-delay: 0s;
 }
 
 .ws-rankup-to-side {
@@ -647,18 +658,39 @@
 }
 
 @keyframes ws-rankup-tier-step {
-  0%   { transform: scale(0.92); filter: drop-shadow(0 0 8px var(--tier-color)); }
-  60%  { transform: scale(1.06); filter: drop-shadow(0 0 6px var(--tier-color)); }
-  100% { transform: scale(1); filter: none; }
+  0%   { opacity: 1; transform: scale(0.78); filter: drop-shadow(0 0 14px var(--tier-color)) brightness(1.3); }
+  35%  { opacity: 1; transform: scale(1.22); filter: drop-shadow(0 0 18px var(--tier-color)) brightness(1.5); }
+  70%  { opacity: 1; transform: scale(0.94); filter: drop-shadow(0 0 8px var(--tier-color)) brightness(1.1); }
+  100% { opacity: 1; transform: scale(1); filter: none; }
 }
 
-.ws-rankup-in .ws-rankup-to-side[data-initial="true"] {
+.ws-rankup-major-flash {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle at center,
+    color-mix(in srgb, var(--tier-color) 45%, transparent) 0%,
+    color-mix(in srgb, var(--tier-color) 15%, transparent) 40%,
+    transparent 75%);
+  opacity: 0;
+  animation: ws-rankup-major-flash 0.7s ease-out forwards;
+  z-index: 0;
+}
+
+@keyframes ws-rankup-major-flash {
+  0%   { opacity: 0; transform: scale(0.4); }
+  35%  { opacity: 0.95; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.35); }
+}
+
+.ws-rankup-revealed .ws-rankup-to-side[data-initial="true"] {
   animation: ws-rank-reveal 0.52s cubic-bezier(0.34, 1.2, 0.64, 1) both;
   animation-delay: calc(var(--delay) + 1.65s);
 }
 
-.ws-rankup-in .ws-rankup-to-side:not([data-initial="true"]) {
-  animation: ws-rankup-tier-step 0.32s cubic-bezier(0.34, 1.2, 0.64, 1) both;
+.ws-rankup-revealed .ws-rankup-to-side:not([data-initial="true"]) {
+  animation: ws-rankup-tier-step 0.55s cubic-bezier(0.34, 1.3, 0.5, 1) both;
 }
 
 .ws-rankup-to-name {
@@ -781,3 +813,177 @@
 }
 
 .ws-done-btn:active { opacity: 0.8; }
+
+/* ── Rank-up landing (post-walk: bar empties + refills to actual % into next tier) ─ */
+.ws-rankup-revealed .ws-rankup-bar-fill-landing {
+  animation: none;
+  transition: transform 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ws-rankup-landing-pct {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  animation: ws-landing-fade 0.5s ease 0.2s both;
+}
+
+@keyframes ws-landing-fade {
+  from { opacity: 0; transform: translateY(2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.ws-rankup-max-pill {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--tier-color);
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--tier-color) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tier-color) 50%, transparent);
+}
+
+.ws-rankup-to-side[data-postwalk="true"] {
+  opacity: 1;
+  animation: ws-rank-reveal 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* ── Progress cards (in unified Recap section) ──────────────────────────── */
+.ws-progress-card {
+  background: color-mix(in srgb, var(--tier-color) 5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--tier-color) 25%, transparent);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  opacity: 0;
+  position: relative;
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+  transition: background-color 0.5s ease, border-color 0.5s ease;
+}
+
+.ws-progress-card-revealed {
+  animation: ws-rankup-pop 1.0s ease both var(--delay);
+}
+
+/* Maintained: even calmer entrance, no shadow flare */
+.ws-progress-card-maintained.ws-progress-card-revealed {
+  animation: ws-progress-card-fade 0.55s ease both var(--delay);
+}
+
+@keyframes ws-progress-card-fade {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Down: red expanding fadeaway highlight on slam-settle */
+.ws-progress-card-down.ws-progress-card-revealed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  animation: ws-progress-down-flash 0.9s ease both;
+  animation-delay: calc(var(--delay) + 0.81s);
+}
+
+@keyframes ws-progress-down-flash {
+  0%   { box-shadow: 0 0 0 0    rgba(239, 68, 68, 0.55); background-color: rgba(239, 68, 68, 0.10); }
+  45%  { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0.25); background-color: rgba(239, 68, 68, 0.05); }
+  100% { box-shadow: 0 0 0 22px rgba(239, 68, 68, 0);    background-color: rgba(239, 68, 68, 0); }
+}
+
+/* Card-only shake (contrast with the screen-wide shake used for rank-ups) */
+.ws-progress-card-shaking {
+  animation: ws-progress-card-shake 0.38s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes ws-progress-card-shake {
+  0%, 100% { transform: translateX(0); }
+  10%      { transform: translateX(-5px); }
+  25%      { transform: translateX(4px); }
+  40%      { transform: translateX(-3px); }
+  55%      { transform: translateX(3px); }
+  70%      { transform: translateX(-2px); }
+  85%      { transform: translateX(1px); }
+}
+
+.ws-progress-card-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  position: relative;
+  z-index: 1;
+}
+
+.ws-progress-card-exercise {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-progress-card-journey {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  z-index: 1;
+}
+
+.ws-progress-card-from-side,
+.ws-progress-card-to-side {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.ws-progress-card-tier-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ws-progress-card-bar-wrap {
+  position: relative;
+  flex: 1;
+  height: 5px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ws-progress-card-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--tier-color);
+  transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.35s ease;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--tier-color) 40%, transparent);
+}
+
+.ws-progress-card-max-pill {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: var(--tier-color);
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--tier-color) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tier-color) 45%, transparent);
+}

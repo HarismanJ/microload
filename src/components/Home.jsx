@@ -106,8 +106,8 @@ let nutGlowHasPlayed = false
 let burnGlowHasPlayed = false
 let muscleRevealHasPlayed = false
 let lastHomeUserId = null
-const GHOST_CHART_DRAW_TOTAL_MS = 1920
-const GHOST_CHART_ERASE_FALLBACK_MS = 1400
+const GHOST_CHART_DRAW_TOTAL_MS = 1320
+const GHOST_CHART_ERASE_FALLBACK_MS = 1000
 const GHOST_CHART_DONE_TOTAL_MS = GHOST_CHART_DRAW_TOTAL_MS + GHOST_CHART_ERASE_FALLBACK_MS
 
 function SkeletonBlock({ className = '' }) {
@@ -202,7 +202,7 @@ function HomeSkeleton() {
   )
 }
 
-export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onStreakMetaChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, onWorkoutDeleted, onBodyweightChanged, workoutActive = false, bottomBannerVisible = false, onOvertrain, isVisible = true, appForegroundTick = 0 }) {
+export default function Home({ userId, splashDone, introMotionReady, useStartupSnapshot = false, onNavigate, onWorkoutStreakChange, onStreakMetaChange, onInitialReady, weightRefreshTick = 0, workoutRefreshTick = 0, profileRefreshTick = 0, nutritionRefreshTick = 0, onWorkoutDeleted, onBodyweightChanged, workoutActive = false, bottomBannerVisible = false, onOvertrain, isVisible = true, appForegroundTick = 0, openWeightDetailTick = 0 }) {
   const initialHomeDataRef = useRef(getWarmHomeData(userId, useStartupSnapshot))
   const hasWarmInitialHomeData = Boolean(initialHomeDataRef.current)
   const [profile, setProfile]         = useState(() => initialHomeDataRef.current?.prof ?? null)
@@ -396,6 +396,15 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       window.visualViewport?.removeEventListener('resize', onResize)
     }
   }, [])
+  useEffect(() => {
+    if (openWeightDetailTick === 0) return
+    setBwInput('')
+    setBwError('')
+    setWeightDeleteError('')
+    setWeightDeleteTargetId(null)
+    setShowWeightDetail(true)
+  }, [openWeightDetailTick])
+
   useLayoutEffect(() => {
     const contentNode = document.querySelector('.content')
     if (!(contentNode instanceof HTMLElement)) return undefined
@@ -628,6 +637,16 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     if (workoutRefreshTick === 0) return
     loadLatest()
   }, [workoutRefreshTick])
+
+  useEffect(() => {
+    if (profileRefreshTick === 0) return
+    loadLatest()
+  }, [profileRefreshTick])
+
+  useEffect(() => {
+    if (nutritionRefreshTick === 0) return
+    loadLatest()
+  }, [nutritionRefreshTick])
 
   useEffect(() => {
     if (weightPeriod !== 'all' && weightPeriod !== '1y') return

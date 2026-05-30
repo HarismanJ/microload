@@ -36,3 +36,14 @@ Deno.test('delete-account CORS allows no-origin requests without ACAO', () => {
   assertEquals(isCorsOriginAllowed(request), true)
   assertEquals(headers['Access-Control-Allow-Origin'], undefined)
 })
+
+Deno.test('delete-account CORS allows literal "null" origin', () => {
+  const request = new Request('https://example.test', {
+    method: 'OPTIONS',
+    headers: { Origin: 'null' },
+  })
+  const headers = getCorsHeaders(request)
+
+  assertEquals(isCorsOriginAllowed(request), true)
+  assertEquals(headers['Access-Control-Allow-Origin'], 'null')
+})

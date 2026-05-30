@@ -9,6 +9,7 @@ import { ESTIMATED_ORM_REP_CAP, calculateORM, calculateSetEstimatedOrm } from '.
 import { fetchExercises } from '../data/exercises'
 import { fetchExerciseRankStates, mapExerciseRankStates, upsertExerciseRankStates } from '../data/rankStates'
 import RankBadge from './RankBadge'
+import TierProgressBar from './TierProgressBar'
 import LoadingSpinner from './LoadingSpinner'
 import {
   TIERS, TIER_COLORS,
@@ -24,6 +25,7 @@ import {
   isRepsWithinInputRange,
   isWeightWithinInputRange,
 } from '../lib/liftMath'
+import { friendlyError } from '../lib/friendlyError'
 import {
   ACTIVE_RANK_MODE,
   ALL_TIME_RANK_MODE,
@@ -361,7 +363,7 @@ function RanksSkeleton() {
   )
 }
 
-export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBodyweightTick = 0 }) {
+export default function Ranks({ refreshTick = 0, profileRefreshTick = 0, onBodyweightChanged, onWorkoutDataChanged }) {
   const userId = useCurrentUserId()
   const muscleMapRef = useRef(null)
   const [profile, setProfile] = useState(null)
@@ -441,7 +443,7 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
       onBodyweightChanged?.()
       setBwInput('')
     } catch (error) {
-      setBwError(error?.message || 'Could not save your bodyweight.')
+      setBwError(friendlyError(error, 'Could not save your bodyweight.'))
     } finally {
       setBwSaving(false)
     }
@@ -553,7 +555,7 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
       setLifts(allLifts)
     } catch (err) {
       console.error('Ranks load failed:', err)
-      setLoadError(err?.message || 'Could not load ranks.')
+      setLoadError(friendlyError(err, 'Could not load ranks.'))
     } finally {
       setLoading(false)
     }
@@ -562,20 +564,7 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
   useEffect(() => {
     const timer = setTimeout(() => { load() }, 0)
     return () => clearTimeout(timer)
-  }, [refreshTick, userId]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (scrollToBodyweightTick === 0) return undefined
-    const frame = requestAnimationFrame(() => {
-      const el = document.querySelector('.ranks-bw-prompt')
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      } else {
-        document.querySelector('.content')?.scrollTo({ top: 0, behavior: 'smooth' })
-      }
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [scrollToBodyweightTick])
+  }, [refreshTick, profileRefreshTick, userId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function openTopSetEditor(lift) {
     setEditingLiftId(lift.exerciseId)
@@ -601,7 +590,7 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
   const bodyweightKg = profile?.bodyweight
     ? (useLbs ? lbsToKg(profile.bodyweight) : profile.bodyweight)
     : null
-  const missingBodyweight = profileLoaded && (profile.bodyweight === null || profile.bodyweight === undefined)
+  const missingBodyweight = profileLoaded && !profile?.bodyweight
   const isActiveMode = rankDisplayMode === ACTIVE_RANK_MODE
   const rankNow = Date.now()
 
@@ -881,6 +870,7 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
             }
           : item
       )))
+      onWorkoutDataChanged?.()
 
       const savedAllTimeRank = getLiftRank(lift, estimated1RMKg, bodyweightKg, gender)
       const savedActiveRank = nextActiveScore !== null && lift.thresholds
@@ -894,7 +884,7 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
       )
       closeTopSetEditor()
     } catch (error) {
-      setTopSetError(error?.message || 'Could not save your imported top set.')
+      setTopSetError(friendlyError(error, 'Could not save your imported top set.'))
     } finally {
       setTopSetSaving(false)
     }
@@ -1321,10 +1311,14 @@ export default function Ranks({ refreshTick = 0, onBodyweightChanged, scrollToBo
                     {isMax && <span className="lift-next-label" style={{ color: TIER_COLORS.Elite }}>Max Rank</span>}
                   </div>
 
-                  <div className="lift-progress-track">
-                    <div className="lift-progress-fill" style={{ width: `${progress}%`, background: color }} />
-                  </div>
-                  <div className="lift-progress-pct">{isMax ? '100%' : `${progress}%`}</div>
+                  <TierProgressBar
+                    currentTier={tier}
+                    nextTier={nextTier}
+                    progress={progress}
+                    color={color}
+                    isMax={isMax}
+                    badgeSize={18}
+                  />
 
                   {thresholds && <TierSwiper thresholds={thresholds} isBW={isBW} bodyweightKg={bodyweightKg} currentTierIdx={tierIdx} fmt={fmt} useLbs={useLbs} />}
                   <button className="lift-import-btn" onClick={() => isEditing ? closeTopSetEditor() : openTopSetEditor(lift)}>

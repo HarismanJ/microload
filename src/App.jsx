@@ -317,7 +317,7 @@ export default function App() {
   const [overtrainDismissedKey, setOvertrainDismissedKey] = useState(() => localStorage.getItem('liftlog:overtrainDismissedKey') || null)
   const [startEmptyWorkoutTick, setStartEmptyWorkoutTick] = useState(0)
   const [resumeWorkoutTick, setResumeWorkoutTick] = useState(0)
-  const [ranksBodyweightScrollTick, setRanksBodyweightScrollTick] = useState(0)
+  const [openWeightDetailTick, setOpenWeightDetailTick] = useState(0)
   const [openAddFoodTick, setOpenAddFoodTick] = useState(0)
   const [quickTimer, setQuickTimer] = useState(null)
   const [quickTimerValue, setQuickTimerValue] = useState(300)
@@ -330,6 +330,8 @@ export default function App() {
   const [weightRefreshTick, setWeightRefreshTick] = useState(0)
   const [workoutRefreshTick, setWorkoutRefreshTick] = useState(0)
   const [ranksRefreshTick, setRanksRefreshTick] = useState(0)
+  const [profileRefreshTick, setProfileRefreshTick] = useState(0)
+  const [nutritionRefreshTick, setNutritionRefreshTick] = useState(0)
   const [appForegroundTick, setAppForegroundTick] = useState(0)
   const [homeWorkoutStreak, setHomeWorkoutStreak] = useState(0)
   const [homeStreakStartDate, setHomeStreakStartDate] = useState(null)
@@ -421,6 +423,7 @@ export default function App() {
     if (isPremiumSync()) {
       setWorkoutSummary(summary)
       setWorkoutRefreshTick(t => t + 1)
+      setRanksRefreshTick(t => t + 1)
     } else {
       setAdGateCountdown({ seconds: 10, summary })
     }
@@ -448,6 +451,7 @@ export default function App() {
       setSummaryHadAd(true)
       setWorkoutSummary(summary)
       setWorkoutRefreshTick(t => t + 1)
+      setRanksRefreshTick(t => t + 1)
     }
 
     adGateContinueRef.current = complete
@@ -714,8 +718,8 @@ export default function App() {
   }, [scheduleTabCommit])
 
   const handleRequestLogBodyweight = useCallback(() => {
-    navigateToTab('ranks')
-    setRanksBodyweightScrollTick(t => t + 1)
+    navigateToTab('home')
+    setOpenWeightDetailTick(t => t + 1)
   }, [navigateToTab])
 
   useEffect(() => {
@@ -1463,17 +1467,23 @@ export default function App() {
     setWeightRefreshTick(t => t + 1)
     setRanksRefreshTick(t => t + 1)
   }, [])
+  const handleProfileSaved = useCallback(() => setProfileRefreshTick(t => t + 1), [])
+  const handleNutritionChanged = useCallback(() => setNutritionRefreshTick(t => t + 1), [])
+  const handleWorkoutDataChanged = useCallback(() => {
+    setWorkoutRefreshTick(t => t + 1)
+    setRanksRefreshTick(t => t + 1)
+  }, [])
   const homeIsVisible = tab === 'home'
   const homeBottomBannerVisible = workoutStatus.active || !isOnline || justCameOnline
   const otherScreens = useMemo(() => {
     if (!session?.user?.id) return {}
     return {
-      home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onStreakMetaChange={({ startDate, lastWorkoutAt }) => { setHomeStreakStartDate(startDate); setHomeStreakLastWorkoutAt(lastWorkoutAt) }} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} onWorkoutDeleted={handleWorkoutDeleted} onBodyweightChanged={handleBodyweightChanged} workoutActive={workoutStatus.active} bottomBannerVisible={homeBottomBannerVisible} onOvertrain={setOvertrain} isVisible={homeIsVisible} appForegroundTick={appForegroundTick} />,
-      ranks: <Ranks refreshTick={ranksRefreshTick} onBodyweightChanged={handleBodyweightChanged} scrollToBodyweightTick={ranksBodyweightScrollTick} />,
-      nutrition: <Nutrition openAddFoodTick={openAddFoodTick} />,
-      profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={handleWorkoutDeleted} onBodyweightChanged={handleBodyweightChanged} workoutActive={workoutStatus.active} />,
+      home: <Home userId={session.user.id} splashDone={!showIntroSplash} introMotionReady={homeIntroMotionReady} useStartupSnapshot={!initialScreenReady} onNavigate={handleNavigate} onWorkoutStreakChange={setHomeWorkoutStreak} onStreakMetaChange={({ startDate, lastWorkoutAt }) => { setHomeStreakStartDate(startDate); setHomeStreakLastWorkoutAt(lastWorkoutAt) }} onInitialReady={markInitialScreenReady} weightRefreshTick={weightRefreshTick} workoutRefreshTick={workoutRefreshTick} profileRefreshTick={profileRefreshTick} nutritionRefreshTick={nutritionRefreshTick} onWorkoutDeleted={handleWorkoutDeleted} onBodyweightChanged={handleBodyweightChanged} workoutActive={workoutStatus.active} bottomBannerVisible={homeBottomBannerVisible} onOvertrain={setOvertrain} isVisible={homeIsVisible} appForegroundTick={appForegroundTick} openWeightDetailTick={openWeightDetailTick} />,
+      ranks: <Ranks refreshTick={ranksRefreshTick} profileRefreshTick={profileRefreshTick} onBodyweightChanged={handleBodyweightChanged} onWorkoutDataChanged={handleWorkoutDataChanged} />,
+      nutrition: <Nutrition openAddFoodTick={openAddFoodTick} profileRefreshTick={profileRefreshTick} onNutritionChanged={handleNutritionChanged} />,
+      profile: <Profile onChallenge={handleChallengeFriend} onWorkoutDeleted={handleWorkoutDeleted} onBodyweightChanged={handleBodyweightChanged} onProfileSaved={handleProfileSaved} workoutActive={workoutStatus.active} />,
     }
-  }, [session, showIntroSplash, homeIntroMotionReady, initialScreenReady, handleNavigate, setHomeWorkoutStreak, markInitialScreenReady, weightRefreshTick, workoutRefreshTick, handleWorkoutDeleted, handleBodyweightChanged, ranksRefreshTick, ranksBodyweightScrollTick, openAddFoodTick, handleChallengeFriend, workoutStatus.active, homeBottomBannerVisible, setOvertrain, homeIsVisible, appForegroundTick])
+  }, [session, showIntroSplash, homeIntroMotionReady, initialScreenReady, handleNavigate, setHomeWorkoutStreak, markInitialScreenReady, weightRefreshTick, workoutRefreshTick, profileRefreshTick, nutritionRefreshTick, handleWorkoutDeleted, handleBodyweightChanged, handleProfileSaved, handleNutritionChanged, handleWorkoutDataChanged, ranksRefreshTick, openWeightDetailTick, openAddFoodTick, handleChallengeFriend, workoutStatus.active, homeBottomBannerVisible, setOvertrain, homeIsVisible, appForegroundTick])
 
   if (forceUpdate) {
     return (
@@ -1666,6 +1676,9 @@ export default function App() {
                 streakStartDate={homeStreakStartDate}
                 streakLastWorkoutAt={homeStreakLastWorkoutAt}
                 onRequestLogBodyweight={handleRequestLogBodyweight}
+                weightRefreshTick={weightRefreshTick}
+                profileRefreshTick={profileRefreshTick}
+                isPremium={isPremium}
                 onBattleRoomClosed={(status) => {
                   const closedRoomId = battleRoomIdRef.current
                   if ((status === 'waiting' || status === 'left') && closedRoomId) {

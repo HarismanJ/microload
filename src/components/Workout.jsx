@@ -9,6 +9,7 @@ import { fetchExerciseRankStates, mapExerciseRankStates } from '../data/rankStat
 import { calculateSetEstimatedOrm } from '../lib/orm'
 import { TEMPLATES } from '../data/templates'
 import { invalidateCache } from '../lib/cache'
+import { friendlyError } from '../lib/friendlyError'
 import { getAnchors, TIERS, expandAnchors, getTierIdx, getProgress, tierColor } from '../lib/strengthStandards'
 import { ACHIEVEMENTS } from '../data/achievements'
 import LoadingSpinner from './LoadingSpinner'
@@ -587,6 +588,9 @@ export default function Workout({
   streakStartDate = null,
   streakLastWorkoutAt = null,
   onRequestLogBodyweight,
+  weightRefreshTick = 0,
+  profileRefreshTick = 0,
+  isPremium = false,
 }) {
   const userId = useCurrentUserId()
   const [activeWorkout, setActiveWorkout] = useState(false)
@@ -795,7 +799,7 @@ export default function Workout({
       .order('created_at', { ascending: false })
 
     if (error) {
-      if (!isMissingPlanPersistence(error)) setPlanError(error.message || 'Could not load plan coaching.')
+      if (!isMissingPlanPersistence(error)) setPlanError(friendlyError(error, 'Could not load plan coaching.'))
       return
     }
 
@@ -842,7 +846,7 @@ export default function Workout({
         setExpiredWorkoutDraftSessionId(soloDraftState.expiredSessionId)
       } catch (err) {
         if (!cancelled) {
-          setBattleSyncError(err.message || 'Could not load your workout setup.')
+          setBattleSyncError(friendlyError(err, 'Could not load your workout setup.'))
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -859,6 +863,43 @@ export default function Workout({
     const timer = setTimeout(() => setBattleNotice(''), 2200)
     return () => clearTimeout(timer)
   }, [battleNotice])
+
+  useEffect(() => {
+    if (!userId || weightRefreshTick === 0) return
+    let cancelled = false
+    ;(async () => {
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('bodyweight, unit_preference')
+        .eq('id', userId)
+        .single()
+      if (cancelled) return
+      setUserBodyweightKg(getProfileBodyweightKg(prof))
+    })()
+    return () => { cancelled = true }
+  }, [userId, weightRefreshTick])
+
+  useEffect(() => {
+    if (!userId || profileRefreshTick === 0) return
+    let cancelled = false
+    ;(async () => {
+      const { data: prof } = await supabase
+        .from('profiles')
+        .select('default_rest_seconds, unit_preference, bodyweight, gender')
+        .eq('id', userId)
+        .single()
+      if (cancelled || !prof) return
+      setDefaultRest(prof.default_rest_seconds ?? 90)
+      setDefaultUnit(prof.unit_preference || 'kg')
+      setUserBodyweightKg(getProfileBodyweightKg(prof))
+      setUserGender(prof.gender || 'male')
+    })()
+    return () => { cancelled = true }
+  }, [userId, profileRefreshTick])
+
+  useEffect(() => {
+    if (isPremium) setProgressionUnlocked(true)
+  }, [isPremium])
 
   const showPlanPaywallAfterRender = useCallback(() => {
     const scrollWorkoutToTop = () => {
@@ -1130,7 +1171,7 @@ export default function Workout({
         try {
           await publishBattleEvent('workout_started', {})
         } catch (err) {
-          setBattleSyncError(err.message || 'Could not announce your battle workout start.')
+          setBattleSyncError(friendlyError(err, 'Could not announce your battle workout start.'))
         }
       }
 
@@ -1140,7 +1181,7 @@ export default function Workout({
         setActiveWorkout(false)
         workoutStartRef.current = null
       }
-      setBattleSyncError(err.message || 'Could not start your workout.')
+      setBattleSyncError(friendlyError(err, 'Could not start your workout.'))
       return false
     } finally {
       setBattleStarting(false)
@@ -1170,13 +1211,40 @@ export default function Workout({
     performStartWorkout()
   }, [performStartWorkout]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const bodyweightGateBusyRef = useRef(false)
   const gateOnBodyweight = useCallback((action) => {
     if (userBodyweightKg != null) {
       action()
       return
     }
-    setBodyweightWarning({ run: action })
-  }, [userBodyweightKg])
+    if (bodyweightGateBusyRef.current) return
+    if (!userId) {
+      setBodyweightWarning({ run: action })
+      return
+    }
+    bodyweightGateBusyRef.current = true
+    ;(async () => {
+      let resolvedBw = null
+      try {
+        const { data: prof } = await supabase
+          .from('profiles')
+          .select('bodyweight, unit_preference')
+          .eq('id', userId)
+          .single()
+        resolvedBw = getProfileBodyweightKg(prof)
+      } catch {
+        // network/RLS failure — fall through to warning modal
+      } finally {
+        bodyweightGateBusyRef.current = false
+      }
+      if (resolvedBw != null) {
+        setUserBodyweightKg(resolvedBw)
+        action()
+      } else {
+        setBodyweightWarning({ run: action })
+      }
+    })()
+  }, [userBodyweightKg, userId])
 
   const handleEmptyWorkoutStart = useCallback(() => {
     gateOnBodyweight(() => {
@@ -1236,7 +1304,7 @@ export default function Workout({
     const { data, error } = await supabase.from('user_training_plans').select('id, name, goal, days, duration_weeks, days_per_week, session_minutes, equipment, created_at').eq('user_id', uid).order('created_at', { ascending: false })
     if (error) {
       const message = error.message?.toLowerCase?.() || ''
-      if (!message.includes('user_training_plans')) setPlanError(error.message || 'Could not load your plans.')
+      if (!message.includes('user_training_plans')) setPlanError(friendlyError(error, 'Could not load your plans.'))
       return false
     }
     const normalized = (data || []).map(normalizeTrainingPlan).filter(Boolean)
@@ -1561,7 +1629,7 @@ export default function Workout({
         }
         refreshBattleProjection()
       } catch (err) {
-        if (mounted) setBattleSyncError(err.message || 'Could not sync your battle feed.')
+        if (mounted) setBattleSyncError(friendlyError(err, 'Could not sync your battle feed.'))
       }
     }
 
@@ -1892,7 +1960,7 @@ export default function Workout({
         if (finalized) onBattleRoomClosed?.('cancelled')
         else onBattleRoomClosed?.('left')
       } catch (err) {
-        setBattleSyncError(err.message || 'Could not update your battle room.')
+        setBattleSyncError(friendlyError(err, 'Could not update your battle room.'))
       }
     }
     setActiveWorkout(false)
@@ -1925,7 +1993,7 @@ export default function Workout({
       .eq('user_id', userId)
 
     if (error) {
-      setBattleSyncError(error.message || 'Could not start a fresh workout.')
+      setBattleSyncError(friendlyError(error, 'Could not start a fresh workout.'))
       return
     }
 
@@ -2145,11 +2213,15 @@ export default function Workout({
           : null
 
         if (oldPeakIdx === null || newIdx > oldPeakIdx) {
+          const toIsMax = newIdx === TIERS.length - 1
           rankUps.push({
             exercise: ex.name,
             from: oldPeakIdx === null ? 'Unranked' : TIERS[oldPeakIdx],
             to: TIERS[newIdx],
             color: tierColor(TIERS[newIdx]),
+            toProgress: getProgress(newRatio, thresholds, newIdx),
+            toNextTier: toIsMax ? null : TIERS[newIdx + 1],
+            toIsMax,
           })
         }
       }
@@ -2242,6 +2314,7 @@ export default function Workout({
       ? applyScheduledDeloadToPlanDay(completedPlanDay, sourcePlan.week)
       : completedPlanDay
     let planCoaching = null
+    let exerciseProgress = []
 
     if (sessionId) {
       const seen = new Set()
@@ -2260,7 +2333,7 @@ export default function Workout({
         }))
 
       const nowIso = new Date().toISOString()
-      const activeRankStateUpserts = hasRankBodyweight ? exercisesOverride
+      const activeRankUpdates = hasRankBodyweight ? exercisesOverride
         .map(ex => {
           const sessionOrmKg = sessionBestOrmKg[ex.id]
           if (!Number.isFinite(sessionOrmKg)) return null
@@ -2296,15 +2369,44 @@ export default function Workout({
             ? getContinuousExerciseScore(ex, newOrmKg[ex.id], bwKg, thresholds)
             : 0
 
+          const resolved = resolveTierFromScore(nextScore)
+          const previousResolved = resolveTierFromScore(priorScore)
+          const scoreDelta = nextScore - priorScore
+          const direction = Math.abs(scoreDelta) < 1e-6
+            ? 'same'
+            : scoreDelta > 0
+              ? 'up'
+              : 'down'
+
           return {
-            exerciseId: ex.id,
-            currentScore: nextScore,
-            peakScore: Math.max(previousPeakScore, nextScore, bestOrmAchievableScore),
-            lastRankedAt: nowIso,
-            updatedAt: nowIso,
+            upsert: {
+              exerciseId: ex.id,
+              currentScore: nextScore,
+              peakScore: Math.max(previousPeakScore, nextScore, bestOrmAchievableScore),
+              lastRankedAt: nowIso,
+              updatedAt: nowIso,
+            },
+            progress: {
+              exerciseId: ex.id,
+              exercise: ex.name,
+              tier: resolved.tier,
+              tierIdx: resolved.tierIdx,
+              nextTier: resolved.nextTier,
+              progress: resolved.progress,
+              color: resolved.color,
+              isMax: resolved.isMax,
+              previousTier: previousResolved.tier,
+              previousTierIdx: previousResolved.tierIdx,
+              previousProgress: previousResolved.progress,
+              previousColor: previousResolved.color,
+              direction,
+              tierChanged: resolved.tierIdx !== previousResolved.tierIdx,
+            },
           }
         })
         .filter(Boolean) : []
+      const activeRankStateUpserts = activeRankUpdates.map(u => u.upsert)
+      exerciseProgress = activeRankUpdates.map(u => u.progress)
 
       const newStreakStartDate = computeNewStreakStartDate(streakStartDate, streakLastWorkoutAt, nowIso)
 
@@ -2353,7 +2455,7 @@ export default function Workout({
             planCoaching = insertedAdaptation
             setPlanAdaptations(prev => [insertedAdaptation, ...prev.filter(item => item.id !== insertedAdaptation.id)])
           } else if (!isMissingPlanPersistence(adaptationError)) {
-            setPlanError(adaptationError.message || 'Could not save plan coaching.')
+            setPlanError(friendlyError(adaptationError, 'Could not save plan coaching.'))
           }
         }
       }
@@ -2455,6 +2557,7 @@ export default function Workout({
         })
         .filter(ex => ex && ex.sets.length > 0),
       rankUps,
+      exerciseProgress,
       bodyweightMissing: !hasRankBodyweight,
       newAchievements,
       planCoaching,
@@ -2486,7 +2589,7 @@ export default function Workout({
           onBattleRoomClosed?.('waiting')
         }
       } catch (err) {
-        setBattleSyncError(err.message || 'Could not finish the battle room cleanly.')
+        setBattleSyncError(friendlyError(err, 'Could not finish the battle room cleanly.'))
         return
       }
     }
@@ -2806,7 +2909,7 @@ export default function Workout({
       await loadUserRoutines(userId)
       closeRoutineBuilder()
     } catch (error) {
-      setRoutineError(error?.message || 'Could not save this routine. Check your connection and try again.')
+      setRoutineError(friendlyError(error, 'Could not save this routine. Check your connection and try again.'))
     } finally {
       setSavingRoutine(false)
     }
@@ -2910,7 +3013,7 @@ export default function Workout({
       setPlanBuilderStep(3)
       return plan
     } catch (error) {
-      setPlanError(error.message || 'Could not generate a plan from those inputs.')
+      setPlanError(friendlyError(error, 'Could not generate a plan from those inputs.'))
       return null
     }
   }
@@ -2943,7 +3046,7 @@ export default function Workout({
       if (!plansLoaded) return
       closePlanBuilder()
     } catch (error) {
-      setPlanError(error?.message || 'Could not save your plan.')
+      setPlanError(friendlyError(error, 'Could not save your plan.'))
     } finally {
       setSavingPlan(false)
     }
@@ -2953,7 +3056,7 @@ export default function Workout({
     if (!id || !userId) return
     const { error } = await supabase.from('user_training_plans').delete().eq('id', id).eq('user_id', userId)
     if (error) {
-      setPlanError(error.message || 'Could not delete this plan.')
+      setPlanError(friendlyError(error, 'Could not delete this plan.'))
       return
     }
     setUserTrainingPlans(prev => prev.filter(plan => plan.id !== id))
@@ -2998,7 +3101,7 @@ export default function Workout({
       .eq('id', adaptation.id)
       .eq('user_id', userId)
     if (error) {
-      if (!isMissingPlanPersistence(error)) setPlanError(error.message || 'Could not update this coaching suggestion.')
+      if (!isMissingPlanPersistence(error)) setPlanError(friendlyError(error, 'Could not update this coaching suggestion.'))
       return
     }
     setPlanAdaptations(prev => prev.filter(item => item.id !== adaptation.id))
@@ -3021,7 +3124,7 @@ export default function Workout({
       .eq('id', plan.id)
       .eq('user_id', userId)
     if (error) {
-      setPlanError(error.message || 'Could not apply this coaching suggestion.')
+      setPlanError(friendlyError(error, 'Could not apply this coaching suggestion.'))
       return
     }
     setUserTrainingPlans(prev => prev.map(item => item.id === plan.id ? nextPlan : item))
@@ -3103,7 +3206,7 @@ export default function Workout({
       }).then(() => {
         refreshBattleProjection()
       }).catch(err => {
-        setBattleSyncError(err.message || 'Could not sync your added exercises.')
+        setBattleSyncError(friendlyError(err, 'Could not sync your added exercises.'))
       })
     }
   }
@@ -3146,7 +3249,7 @@ export default function Workout({
       supabase.from('profiles').select('unit_preference').eq('id', userId).single(),
     ])
     if (error || !data?.id) {
-      setBattleSyncError(error?.message || 'Could not start this routine.')
+      setBattleSyncError(friendlyError(error, 'Could not start this routine.'))
       return false
     }
 
@@ -3217,7 +3320,7 @@ export default function Workout({
     ])
 
     if (error) {
-      setPlanError(error.message || 'Could not start this plan day.')
+      setPlanError(friendlyError(error, 'Could not start this plan day.'))
       return false
     }
 
@@ -3330,7 +3433,7 @@ export default function Workout({
         .eq('user_id', userId)
 
       if (error) {
-        setBattleSyncError(error.message || 'Could not discard your saved workout.')
+        setBattleSyncError(friendlyError(error, 'Could not discard your saved workout.'))
         return
       }
 
@@ -3512,7 +3615,7 @@ export default function Workout({
       }).then(() => {
         refreshBattleProjection()
       }).catch(err => {
-        setBattleSyncError(err.message || 'Could not sync your removed set.')
+        setBattleSyncError(friendlyError(err, 'Could not sync your removed set.'))
       })
     }
   }
@@ -3727,7 +3830,7 @@ export default function Workout({
       publishBattleEvent('set_completed', payload).then(() => {
         refreshBattleProjection()
       }).catch(err => {
-        setBattleSyncError(err.message || 'Could not sync your completed set.')
+        setBattleSyncError(friendlyError(err, 'Could not sync your completed set.'))
       })
     }
   }
@@ -3846,7 +3949,7 @@ export default function Workout({
     } catch (err) {
       const message = err.code === '23505'
         ? 'You already have an exercise with that name.'
-        : (err.message || 'Could not save your custom exercise.')
+        : friendlyError(err, 'Could not save your custom exercise.')
       setCustomExerciseError(message)
     } finally {
       setSavingCustomExercise(false)
@@ -3882,7 +3985,7 @@ export default function Workout({
       }).then(() => {
         refreshBattleProjection()
       }).catch(err => {
-        setBattleSyncError(err.message || 'Could not sync your removed set.')
+        setBattleSyncError(friendlyError(err, 'Could not sync your removed set.'))
       })
     }
   }
@@ -4319,6 +4422,7 @@ export default function Workout({
       {progressionAdGatePortal}
       {progressionPaywall}
       {planInfoModalPortal}
+      {bodyweightWarningDialog}
       </>
     )
   }

@@ -60,6 +60,31 @@ vi.mock('@capacitor/local-notifications', () => ({
   },
 }))
 
+vi.mock('@capacitor/haptics', () => ({
+  Haptics: {
+    impact: vi.fn(() => Promise.resolve()),
+  },
+  ImpactStyle: { Heavy: 'HEAVY', Light: 'LIGHT', Medium: 'MEDIUM' },
+}))
+
+if (typeof Element !== 'undefined' && typeof Element.prototype.animate !== 'function') {
+  Element.prototype.animate = function () {
+    return { cancel: () => {}, finish: () => {}, play: () => {}, pause: () => {} }
+  }
+}
+
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })
+}
+
 vi.mock('@sentry/react', () => ({
   init: vi.fn(),
   reactErrorHandler: vi.fn(() => () => {}),

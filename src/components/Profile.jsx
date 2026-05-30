@@ -18,6 +18,7 @@ import { useCurrentUser } from '../context/UserContext'
 import { convertWeight } from '../lib/liftMath'
 import { VALIDATION_LIMITS, normalizeUsername, validateLength, validateNumber, validateUsername } from '../lib/inputValidation'
 import { saveThemeForUser } from '../lib/theme'
+import { friendlyError } from '../lib/friendlyError'
 import { Capacitor } from '@capacitor/core'
 import { isPremiumSync, refreshPremiumStatus } from '../lib/purchases'
 import Paywall from './Paywall'
@@ -30,7 +31,7 @@ function normalizePersistableUsername(username) {
   return error ? null : normalized
 }
 
-export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightChanged, workoutActive = false }) {
+export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightChanged, onProfileSaved, workoutActive = false }) {
   const currentUser = useCurrentUser()
   const { themeId, switchTheme, previewTheme, themes } = useTheme()
   const profileIdRef = useRef(null)
@@ -57,7 +58,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
       .single()
 
     if (error || !data) {
-      setThemeError(error?.message || 'Could not save your preferred colour. Please try again.')
+      setThemeError(friendlyError(error, 'Could not save your preferred colour. Please try again.'))
       return
     }
 
@@ -251,12 +252,13 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
       setProfile(data)
       invalidateCache('profile', 'home', 'ranks')
       if (bodyweightRewritten) onBodyweightChanged?.()
+      onProfileSaved?.()
       setEditing(false)
     } catch (error) {
       if (error?.code === '23505' || error?.message?.toLowerCase().includes('username')) {
         setSaveError('That username is already in use.')
       } else {
-        setSaveError(error?.message || 'Could not save your profile.')
+        setSaveError(friendlyError(error, 'Could not save your profile.'))
       }
     } finally {
       setSaving(false)
@@ -295,7 +297,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
       markIntentionalLogout()
       await supabase.auth.signOut()
     } catch (err) {
-      setDeleteError(err?.message || 'Failed to delete account. Please try again or contact support.')
+      setDeleteError(friendlyError(err, 'Failed to delete account. Please try again or contact support.'))
       setDeleting(false)
     }
   }
@@ -618,7 +620,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
         </div>,
         document.body
       )}
-      {showDeleteConfirm && (
+      {showDeleteConfirm && createPortal(
         <div className={`bug-report-overlay${deleteConfirmClosing ? ' bug-report-overlay--closing' : ''}`} onClick={closeDeleteConfirm}>
           <div className="bug-report-modal" onClick={e => e.stopPropagation()} ref={deleteConfirmRef} tabIndex={-1} role="alertdialog" aria-modal="true" aria-labelledby="delete-confirm-title">
             <div id="delete-confirm-title" className="bug-report-title" style={{ color: '#ef4444' }}>Delete Account</div>
@@ -656,7 +658,8 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <div className="profile-made-by">microload by Harisman</div>

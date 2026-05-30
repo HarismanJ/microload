@@ -1,9 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Haptics, ImpactStyle } from '@capacitor/haptics'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { fmtCompact } from '../lib/liftMath'
 import { TIERS, tierColor, tierGroup } from '../lib/strengthStandards'
 import RankBadge from './RankBadge'
+import TierProgressBar from './TierProgressBar'
 import '../styles/WorkoutSummary.css'
+
+function prefersReducedMotion() {
+  if (typeof window === 'undefined') return false
+  return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+}
 
 function fmtTime(s) {
   const h = Math.floor(s / 3600)
@@ -84,26 +91,42 @@ function getBattleOutcome(battle) {
   }
 }
 
-const STEP_MS = 200
+const STEP_MS = 450
+const RANKUP_WALK_START_MS = 2320
 
-function RankUpCard({ r, i, show }) {
+function computeWalkPath(from, to) {
+  const toIdx = TIERS.indexOf(to)
+  if (toIdx < 0) return [to]
+  if (from === 'Unranked') return TIERS.slice(0, toIdx + 1)
+  const fromIdx = TIERS.indexOf(from)
+  if (fromIdx < 0 || toIdx <= fromIdx) return [to]
+  return TIERS.slice(fromIdx + 1, toIdx + 1)
+}
+
+const RankUpCard = forwardRef(function RankUpCard({ r, revealed, onSlam }, ref) {
   const fromGroup = r.from === 'Unranked' ? 'Unranked' : tierGroup(r.from)
 
-  const walkPath = useMemo(() => {
-    const toIdx = TIERS.indexOf(r.to)
-    if (toIdx < 0) return [r.to]
-    if (r.from === 'Unranked') return TIERS.slice(0, toIdx + 1)
-    const fromIdx = TIERS.indexOf(r.from)
-    if (fromIdx < 0 || toIdx <= fromIdx) return [r.to]
-    return TIERS.slice(fromIdx + 1, toIdx + 1)
-  }, [r.from, r.to])
+  const walkPath = useMemo(() => computeWalkPath(r.from, r.to), [r.from, r.to])
 
   const [stepIdx, setStepIdx] = useState(0)
   const [popKey, setPopKey] = useState(0)
+  const [postWalk, setPostWalk] = useState(false)
+  const [landingApplied, setLandingApplied] = useState(false)
+
+  // Card slam: pop animation peaks at 55% of 1.2s + 0.15s css delay = ~810ms after revealed
+  useEffect(() => {
+    if (!revealed) return undefined
+    if (prefersReducedMotion()) return undefined
+    const t = setTimeout(() => {
+      Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {})
+      onSlam?.('strong')
+    }, 810)
+    return () => clearTimeout(t)
+  }, [revealed, onSlam])
 
   useEffect(() => {
-    if (!show || walkPath.length <= 1) return
-    const startMs = (0.15 + i * 0.1 + 2.17) * 1000
+    if (!revealed || walkPath.length <= 1) return
+    const reduced = prefersReducedMotion()
     let timeoutId = null
     let cancelled = false
 
@@ -113,29 +136,61 @@ function RankUpCard({ r, i, show }) {
         if (cancelled) return
         const prevGroup = tierGroup(walkPath[nextIdx - 1])
         const nextGroup = tierGroup(walkPath[nextIdx])
+        const isMajor = prevGroup !== nextGroup
         setStepIdx(nextIdx)
-        if (prevGroup !== nextGroup) setPopKey(k => k + 1)
+        if (isMajor) setPopKey(k => k + 1)
+        if (!reduced) {
+          Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {})
+          onSlam?.(isMajor ? 'strong' : 'light')
+        }
         scheduleNext(nextIdx + 1)
       }, STEP_MS)
     }
 
-    const starter = setTimeout(() => scheduleNext(1), startMs)
+    const starter = setTimeout(() => scheduleNext(1), RANKUP_WALK_START_MS)
     return () => {
       cancelled = true
       clearTimeout(starter)
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [show, walkPath, i])
+  }, [revealed, walkPath, onSlam])
+
+  // Post-walk landing: empty + refill bar to actual % into next tier, swap right badge
+  useEffect(() => {
+    if (!revealed) return undefined
+    const walkLen = walkPath.length
+    const postWalkDelay = walkLen <= 1
+      ? 1700
+      : RANKUP_WALK_START_MS + (walkLen - 1) * STEP_MS + 500
+    const t1 = setTimeout(() => setPostWalk(true), postWalkDelay)
+    const t2 = setTimeout(() => setLandingApplied(true), postWalkDelay + 220)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+    }
+  }, [revealed, walkPath])
 
   const currentTier = walkPath[stepIdx]
   const currentGroup = tierGroup(currentTier)
   const currentColor = tierColor(currentTier)
 
+  const landingTier = r.toNextTier ?? null
+  const landingGroup = landingTier ? tierGroup(landingTier) : null
+  const landingColor = landingTier ? tierColor(landingTier) : currentColor
+  const landingProgressRaw = typeof r.toProgress === 'number' ? r.toProgress : 0
+  const landingProgress = Math.max(0, Math.min(100, Math.round(landingProgressRaw)))
+  const landingPct = r.toIsMax ? 1 : landingProgress / 100
+  const cardColor = postWalk && !r.toIsMax && landingColor ? landingColor : currentColor
+
   return (
     <div
-      className={`ws-rankup-card ${show ? 'ws-rankup-in' : ''}`}
-      style={{ '--delay': `${0.15 + i * 0.1}s`, '--tier-color': currentColor }}
+      ref={ref}
+      className={`ws-rankup-card${revealed ? ' ws-rankup-revealed' : ''}${postWalk ? ' ws-rankup-postwalk' : ''}`}
+      style={{ '--delay': '0.15s', '--tier-color': cardColor }}
     >
+      {popKey > 0 && (
+        <div key={`flash-${popKey}`} className="ws-rankup-major-flash" aria-hidden="true" />
+      )}
       <div className="ws-rankup-header">
         <div className="ws-rankup-arrow">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -146,29 +201,187 @@ function RankUpCard({ r, i, show }) {
       </div>
       <div className="ws-rankup-journey">
         <div className="ws-rankup-from-side">
-          <RankBadge tier={fromGroup} size={20} />
-          <span className="ws-rankup-from-name">{r.from}</span>
+          <RankBadge tier={postWalk ? tierGroup(r.to) : fromGroup} size={20} />
+          <span className="ws-rankup-from-name">{postWalk ? r.to : r.from}</span>
         </div>
         <div className="ws-rankup-bar-wrap">
-          <div className="ws-rankup-bar-fill" />
+          <div
+            key={postWalk ? 'landing' : stepIdx}
+            className={
+              postWalk
+                ? 'ws-rankup-bar-fill ws-rankup-bar-fill-landing'
+                : `ws-rankup-bar-fill${stepIdx > 0 ? ' ws-rankup-bar-fill-step' : ''}`
+            }
+            style={postWalk ? { transform: landingApplied ? `scaleX(${landingPct})` : 'scaleX(0)' } : undefined}
+          />
         </div>
         <div
-          key={popKey}
+          key={postWalk ? 'landing-to' : popKey}
           className="ws-rankup-to-side"
-          data-initial={popKey === 0 ? 'true' : undefined}
+          data-initial={!postWalk && popKey === 0 ? 'true' : undefined}
+          data-postwalk={postWalk ? 'true' : undefined}
         >
-          <RankBadge tier={currentGroup} size={26} />
-          <span className="ws-rankup-to-name">{currentTier}</span>
+          {postWalk && r.toIsMax ? (
+            <span className="ws-rankup-max-pill">MAX</span>
+          ) : (
+            <>
+              <RankBadge tier={postWalk && landingGroup ? landingGroup : currentGroup} size={26} />
+              <span className="ws-rankup-to-name">{postWalk && landingTier ? landingTier : currentTier}</span>
+            </>
+          )}
         </div>
+      </div>
+      {postWalk && (
+        <div className="ws-rankup-landing-pct">
+          {r.toIsMax ? 'Max rank reached' : `${landingProgress}% to ${landingTier}`}
+        </div>
+      )}
+    </div>
+  )
+})
+
+const PROGRESS_SLAM_MS = 810
+const PROGRESS_BAR_FILL_MS = 600
+const PROGRESS_TIER_SWAP_MS = 350
+
+const ProgressCard = forwardRef(function ProgressCard({ p, revealed }, ref) {
+  const isMaintained = p.direction === 'same'
+  const isDown = p.direction === 'down'
+  const tierChanged = Boolean(p.tierChanged)
+
+  // Stages:
+  //  'initial'        — before slam settles; bar at previousProgress, previous tier badges
+  //  'transitioning'  — bar moving; for tier-change cases, this is the "empty" half
+  //  'tierSwap'       — badges swap (only for tier-change cases)
+  //  'final'          — bar at new progress, current tier badges
+  const [stage, setStage] = useState('initial')
+  const [barTarget, setBarTarget] = useState(p.previousProgress)
+  const [shaking, setShaking] = useState(false)
+
+  useEffect(() => {
+    if (!revealed) return undefined
+    const reduced = prefersReducedMotion()
+    if (isMaintained) {
+      // Just show the card silently; no bar movement, no haptic, no shake.
+      setStage('final')
+      setBarTarget(p.progress)
+      return undefined
+    }
+
+    const timeouts = []
+    if (tierChanged) {
+      timeouts.push(setTimeout(() => {
+        setStage('transitioning')
+        setBarTarget(0)
+      }, PROGRESS_SLAM_MS))
+      timeouts.push(setTimeout(() => {
+        setStage('tierSwap')
+      }, PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS))
+      timeouts.push(setTimeout(() => {
+        setStage('final')
+        setBarTarget(p.progress)
+      }, PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS + PROGRESS_TIER_SWAP_MS))
+    } else {
+      timeouts.push(setTimeout(() => {
+        setStage('final')
+        setBarTarget(p.progress)
+      }, PROGRESS_SLAM_MS))
+    }
+
+    if (!reduced) {
+      timeouts.push(setTimeout(() => {
+        Haptics.impact({ style: ImpactStyle.Light }).catch(() => {})
+        if (isDown) {
+          setShaking(true)
+          timeouts.push(setTimeout(() => setShaking(false), 380))
+        }
+      }, PROGRESS_SLAM_MS))
+    }
+
+    return () => timeouts.forEach(clearTimeout)
+  }, [revealed, isMaintained, isDown, tierChanged, p.progress, p.previousProgress])
+
+  const showFinalBadges = stage === 'final' || stage === 'tierSwap' || (stage === 'transitioning' && !tierChanged)
+  const displayTier = showFinalBadges ? p.tier : p.previousTier
+  const displayNextTier = showFinalBadges ? p.nextTier : null
+  const displayIsMax = showFinalBadges ? p.isMax : false
+  const displayColor = showFinalBadges ? p.color : (p.previousColor || p.color)
+  const barPctClamped = Math.max(0, Math.min(100, Math.round(barTarget)))
+
+  return (
+    <div
+      ref={ref}
+      className={[
+        'ws-progress-card',
+        revealed ? 'ws-progress-card-revealed' : '',
+        isDown ? 'ws-progress-card-down' : '',
+        isMaintained ? 'ws-progress-card-maintained' : '',
+        shaking ? 'ws-progress-card-shaking' : '',
+      ].filter(Boolean).join(' ')}
+      style={{ '--delay': '0.15s', '--tier-color': displayColor }}
+    >
+      <div className="ws-progress-card-header">
+        <span className="ws-progress-card-exercise">{p.exercise}</span>
+      </div>
+      <div className="ws-progress-card-journey">
+        <div className="ws-progress-card-from-side">
+          <RankBadge tier={tierGroup(displayTier)} size={20} />
+          <span className="ws-progress-card-tier-name">{displayTier}</span>
+        </div>
+        <div className="ws-progress-card-bar-wrap">
+          <div
+            className="ws-progress-card-bar-fill"
+            style={{ width: `${barPctClamped}%` }}
+          />
+        </div>
+        {displayIsMax ? (
+          <span className="ws-progress-card-max-pill">MAX</span>
+        ) : (
+          <div className="ws-progress-card-to-side">
+            {displayNextTier && <RankBadge tier={tierGroup(displayNextTier)} size={20} />}
+          </div>
+        )}
       </div>
     </div>
   )
-}
+})
 
 export default function WorkoutSummary({ summary, onDismiss }) {
   const [show, setShow] = useState(false)
+  const [revealIndex, setRevealIndex] = useState(-1)
+  const [autoScrollPaused, setAutoScrollPaused] = useState(false)
   const [expandedExercises, setExpandedExercises] = useState(new Set())
   const wsScreenRef = useRef(null)
+  const bodyRef = useRef(null)
+  const itemRefs = useRef([])
+  const shakeAnimRef = useRef(null)
+
+  const triggerScreenShake = useCallback((kind = 'strong') => {
+    const el = wsScreenRef.current
+    if (!el || typeof el.animate !== 'function') return
+    if (prefersReducedMotion()) return
+    const strong = kind === 'strong'
+    const keyframes = strong
+      ? [
+          { transform: 'translate(0, 0)' },
+          { transform: 'translate(-13px, 4px)' },
+          { transform: 'translate(12px, -5px)' },
+          { transform: 'translate(-9px, 5px)' },
+          { transform: 'translate(7px, -2px)' },
+          { transform: 'translate(0, 0)' },
+        ]
+      : [
+          { transform: 'translate(0, 0)' },
+          { transform: 'translate(-5px, 2px)' },
+          { transform: 'translate(5px, -2px)' },
+          { transform: 'translate(0, 0)' },
+        ]
+    shakeAnimRef.current?.cancel()
+    shakeAnimRef.current = el.animate(keyframes, {
+      duration: strong ? 380 : 240,
+      easing: 'ease-out',
+    })
+  }, [])
 
   const toggleExercise = name => setExpandedExercises(prev => {
     const next = new Set(prev)
@@ -200,6 +413,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     unit,
     exercises,
     rankUps = [],
+    exerciseProgress = [],
     bodyweightMissing = false,
     newAchievements = [],
     battle = null,
@@ -219,6 +433,108 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     ...(battle?.yourHighlights || []).map(item => ({ ...item, owner: 'You' })),
     ...(battle?.opponentHighlights || []).map(item => ({ ...item, owner: battle?.opponentName || 'Opponent' })),
   ]
+
+  const rankUpSignature = rankUps.map(r => `${r.from}>${r.to}`).join('|')
+  const progressSignature = exerciseProgress
+    .map(p => `${p.exerciseId}:${p.direction}:${p.tierChanged ? 1 : 0}`)
+    .join('|')
+
+  // Unified per-exercise recap in workout order. Rank-up takes precedence over progress
+  // for the same exercise. Cardio + non-rankable strength exercises are filtered out
+  // (they don't appear in either rankUps or exerciseProgress).
+  const recap = useMemo(() => {
+    const rankUpByName = new Map(rankUps.map(r => [r.exercise, r]))
+    const progressByName = new Map(exerciseProgress.map(p => [p.exercise, p]))
+    return exercises
+      .filter(ex => !ex.isCardio)
+      .map(ex => {
+        const rankUp = rankUpByName.get(ex.name)
+        if (rankUp) return { kind: 'rankup', key: ex.name, exercise: ex.name, data: rankUp }
+        const progress = progressByName.get(ex.name)
+        if (progress) return { kind: 'progress', key: ex.name, exercise: ex.name, data: progress }
+        return null
+      })
+      .filter(Boolean)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exercises, rankUpSignature, progressSignature])
+
+  const revealItemCount = newAchievements.length + recap.length
+
+  const revealSchedule = useMemo(() => {
+    const offsets = []
+    let cumulative = 150
+    for (let i = 0; i < newAchievements.length; i++) {
+      offsets.push(cumulative)
+      cumulative += 1100
+    }
+    for (const item of recap) {
+      offsets.push(cumulative)
+      if (item.kind === 'rankup') {
+        const walkLen = computeWalkPath(item.data.from, item.data.to).length
+        cumulative += walkLen <= 1
+          ? 2700 + 900
+          : 2320 + (walkLen - 1) * STEP_MS + 550 + 300 + 900
+      } else {
+        // progress card
+        const { direction, tierChanged } = item.data
+        if (direction === 'same') cumulative += 800
+        else if (tierChanged) cumulative += PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS + PROGRESS_TIER_SWAP_MS + PROGRESS_BAR_FILL_MS + 200
+        else cumulative += PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS + 200
+      }
+    }
+    return offsets
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newAchievements.length, recap])
+
+  useEffect(() => {
+    if (!show || revealSchedule.length === 0) return
+    const timeouts = revealSchedule.map((offset, idx) =>
+      setTimeout(() => setRevealIndex(curr => Math.max(curr, idx)), offset)
+    )
+    return () => timeouts.forEach(clearTimeout)
+  }, [show, revealSchedule])
+
+  const handleTapToSkip = useCallback((e) => {
+    if (e.target.closest('button, a, input, textarea, [role="button"]')) return
+    if (revealItemCount === 0) return
+    setRevealIndex(curr => Math.min(curr + 1, revealItemCount - 1))
+  }, [revealItemCount])
+
+  // Achievement slam: ws-achievement-in peaks at 55% of 0.9s = ~495ms after revealed
+  useEffect(() => {
+    if (revealIndex < 0 || revealIndex >= newAchievements.length) return undefined
+    if (prefersReducedMotion()) return undefined
+    const t = setTimeout(() => {
+      Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {})
+      triggerScreenShake('strong')
+    }, 495)
+    return () => clearTimeout(t)
+  }, [revealIndex, newAchievements.length, triggerScreenShake])
+
+  useEffect(() => {
+    if (autoScrollPaused || revealIndex < 0) return
+    const body = bodyRef.current
+    const node = itemRefs.current[revealIndex]
+    if (!body || !node) return
+    const bodyRect = body.getBoundingClientRect()
+    const nodeRect = node.getBoundingClientRect()
+    const target = body.scrollTop + (nodeRect.top - bodyRect.top) - (bodyRect.height - nodeRect.height) / 2
+    body.scrollTo({ top: Math.max(0, target), behavior: 'smooth' })
+  }, [revealIndex, autoScrollPaused])
+
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!body) return
+    const onUserInput = () => setAutoScrollPaused(true)
+    body.addEventListener('wheel', onUserInput, { passive: true })
+    body.addEventListener('touchmove', onUserInput, { passive: true })
+    return () => {
+      body.removeEventListener('wheel', onUserInput)
+      body.removeEventListener('touchmove', onUserInput)
+    }
+  }, [])
+
+  itemRefs.current.length = revealItemCount
 
   return (
     <div className={`ws-overlay ${show ? 'ws-overlay-in' : ''}`}>
@@ -273,7 +589,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
           </div>
         )}
 
-        <div className="ws-body">
+        <div className="ws-body" ref={bodyRef} onClick={handleTapToSkip}>
           {battle && battleOutcome && (
             <div className="ws-section">
               <div className="ws-section-title">
@@ -382,8 +698,8 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                 {newAchievements.map((a, i) => (
                   <div
                     key={a.id}
-                    className={`ws-achievement-card ${show ? 'ws-achievement-in' : ''}`}
-                    style={{ '--delay': `${0.1 + i * 0.08}s` }}
+                    ref={el => { itemRefs.current[i] = el }}
+                    className={`ws-achievement-card${revealIndex >= i ? ' ws-achievement-revealed' : ''}`}
                   >
                     <div className="ws-achievement-badge">
                       {a.emoji
@@ -410,17 +726,37 @@ export default function WorkoutSummary({ summary, onDismiss }) {
             </div>
           )}
 
-          {/* Rank-ups */}
-          {!battleOnly && rankUps.length > 0 && (
+          {/* Unified recap: one card per trained rankable exercise, in workout order */}
+          {!battleOnly && recap.length > 0 && (
             <div className="ws-section">
               <div className="ws-section-title">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-                Rank Ups
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+                Recap
               </div>
               <div className="ws-rankups">
-                {rankUps.map((r, i) => (
-                  <RankUpCard key={r.exercise} r={r} i={i} show={show} />
-                ))}
+                {recap.map((item, i) => {
+                  const absoluteIdx = newAchievements.length + i
+                  const isRevealed = revealIndex >= absoluteIdx
+                  if (item.kind === 'rankup') {
+                    return (
+                      <RankUpCard
+                        key={item.key}
+                        ref={el => { itemRefs.current[absoluteIdx] = el }}
+                        r={item.data}
+                        revealed={isRevealed}
+                        onSlam={triggerScreenShake}
+                      />
+                    )
+                  }
+                  return (
+                    <ProgressCard
+                      key={item.key}
+                      ref={el => { itemRefs.current[absoluteIdx] = el }}
+                      p={item.data}
+                      revealed={isRevealed}
+                    />
+                  )
+                })}
               </div>
             </div>
           )}

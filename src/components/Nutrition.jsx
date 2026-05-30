@@ -7,6 +7,7 @@ import NutritionFoodPicker from './nutrition/NutritionFoodPicker'
 import LoadingSpinner from './LoadingSpinner'
 import { NUTRITION_FIELD_LIMITS, validateNumber } from '../lib/inputValidation'
 import { fmtCompact } from '../lib/liftMath'
+import { friendlyError } from '../lib/friendlyError'
 import '../styles/Nutrition.css'
 
 const FEED_FILTERS = [
@@ -260,7 +261,7 @@ function NutritionDemoCard() {
   )
 }
 
-export default function Nutrition({ openAddFoodTick = 0 }) {
+export default function Nutrition({ openAddFoodTick = 0, profileRefreshTick = 0, onNutritionChanged }) {
   const userId = useCurrentUserId()
   const [date, setDate] = useState(today)
   const [logs, setLogs] = useState([])
@@ -367,7 +368,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
       setGoals(resolvedGoals)
       setExerciseCalories(burnedKcal)
     } catch (error) {
-      setLogError(error?.message || 'Could not load nutrition. Check your connection and try again.')
+      setLogError(friendlyError(error, 'Could not load nutrition. Check your connection and try again.'))
     } finally {
       setLoading(false)
     }
@@ -378,7 +379,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
   useEffect(() => {
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [date, userId])
+  }, [date, userId, profileRefreshTick])
 
   async function addLog(food, servings) {
     if (!userId) return
@@ -410,6 +411,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     if (error) { setAddingFood(false); setLogError('Failed to add food. Please try again.'); return }
     if (data) setLogs(prev => [...prev, data])
     invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`, `recent_foods:${userId}`)
+    onNutritionChanged?.()
     setAddingFood(false)
   }
 
@@ -419,6 +421,7 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
     if (error) { setLogError('Failed to remove food. Please try again.'); return }
     setLogs(prev => prev.filter(l => l.id !== id))
     invalidateCache('home', `nut_${date}`, `cal_${date.slice(0, 7)}`)
+    onNutritionChanged?.()
   }
 
   const sum = key => logs.reduce((a, l) => a + (l[key] || 0), 0)
@@ -492,9 +495,10 @@ export default function Nutrition({ openAddFoodTick = 0 }) {
         vitamin_b6: updates.vitamin_b6_goal,
       })
       invalidateCache('profile', 'home', `nut_${date}`)
+      onNutritionChanged?.()
       setEditingGoals(false)
     } catch (error) {
-      setGoalsError(error?.message || 'Could not save nutrition goals.')
+      setGoalsError(friendlyError(error, 'Could not save nutrition goals.'))
     } finally {
       setSavingGoals(false)
     }

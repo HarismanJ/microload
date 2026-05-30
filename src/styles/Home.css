@@ -739,7 +739,7 @@
 
 /* drawing: line reveals left to right */
 .home-chart-ghost-mask--drawing {
-  animation: ghost-draw 1.8s cubic-bezier(0.22, 1, 0.36, 1) 0.1s 1 forwards;
+  animation: ghost-draw 1.2s linear 0.1s 1 forwards;
 }
 
 @keyframes ghost-draw {
@@ -755,7 +755,7 @@
 
 /* erasing: line hides left to right without Safari-hostile negative dash offsets */
 .home-chart-ghost-mask--erasing {
-  animation: ghost-erase 1.4s cubic-bezier(0.4, 0, 1, 1) 0s 1 forwards;
+  animation: ghost-erase 1.0s linear 0s 1 forwards;
 }
 
 @keyframes ghost-erase {
