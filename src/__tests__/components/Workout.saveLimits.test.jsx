@@ -2,6 +2,7 @@ const supabaseMock = vi.hoisted(() => {
   const _responses = {}
   const _inserts = []
   const _updates = []
+  const _deletes = []
 
   function makeChain(tableName) {
     const chain = {
@@ -33,7 +34,11 @@ const supabaseMock = vi.hoisted(() => {
         _updates.push({ table: tableName, payload })
         return chain
       }),
-      delete: vi.fn(() => { chain._operation = 'delete'; return chain }),
+      delete: vi.fn(() => {
+        chain._operation = 'delete'
+        _deletes.push({ table: tableName })
+        return chain
+      }),
       upsert: vi.fn(() => { chain._operation = 'upsert'; return chain }),
       single: vi.fn(() => {
         if (tableName === 'user_training_plans' && chain._select === 'preferences') {
@@ -55,6 +60,7 @@ const supabaseMock = vi.hoisted(() => {
     _responses,
     _inserts,
     _updates,
+    _deletes,
     from: vi.fn(table => makeChain(table)),
     rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
   }
@@ -232,7 +238,9 @@ describe('Workout saved plan and routine limits', () => {
     vi.clearAllMocks()
     supabaseMock._inserts.length = 0
     supabaseMock._updates.length = 0
+    supabaseMock._deletes.length = 0
     Object.keys(supabaseMock._responses).forEach(key => delete supabaseMock._responses[key])
+    localStorage.removeItem('hiddenTemplates')
     isPremiumSyncMock.mockReturnValue(true)
   })
 
@@ -323,5 +331,72 @@ describe('Workout saved plan and routine limits', () => {
 
     expect(await screen.findByText('You can save up to 15 routines. Delete an old routine to save this one.')).toBeTruthy()
     expect(supabaseMock._inserts.filter(item => item.table === 'user_routines')).toHaveLength(1)
+  })
+
+  it('confirms before deleting a saved training plan', async () => {
+    setup({ plans: [makePlan(1)] })
+
+    const deleteButton = await screen.findByRole('button', { name: 'Delete Plan 1' })
+    fireEvent.click(deleteButton)
+
+    expect(await screen.findByRole('dialog', { name: 'Delete Plan?' })).toBeTruthy()
+    expect(screen.getByText(/This will permanently delete "Plan 1"/)).toBeTruthy()
+    expect(supabaseMock._deletes.filter(item => item.table === 'user_training_plans')).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Delete Plan?' })).toBeNull()
+    })
+    expect(supabaseMock._deletes.filter(item => item.table === 'user_training_plans')).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Plan 1' }))
+    await screen.findByRole('dialog', { name: 'Delete Plan?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Plan' }))
+
+    await waitFor(() => {
+      expect(supabaseMock._deletes.filter(item => item.table === 'user_training_plans')).toHaveLength(1)
+    })
+  })
+
+  it('confirms before deleting a saved routine', async () => {
+    setup({ routines: [makeRoutine(1)] })
+
+    const deleteButton = await screen.findByRole('button', { name: 'Delete Routine 1' })
+    fireEvent.click(deleteButton)
+
+    expect(await screen.findByRole('dialog', { name: 'Delete Routine?' })).toBeTruthy()
+    expect(screen.getByText(/This will permanently delete "Routine 1"/)).toBeTruthy()
+    expect(supabaseMock._deletes.filter(item => item.table === 'user_routines')).toHaveLength(0)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Routine' }))
+
+    await waitFor(() => {
+      expect(supabaseMock._deletes.filter(item => item.table === 'user_routines')).toHaveLength(1)
+    })
+  })
+
+  it('confirms before hiding a provided routine', async () => {
+    setup()
+
+    const hideButton = await screen.findByRole('button', { name: 'Hide Push' })
+    fireEvent.click(hideButton)
+
+    expect(await screen.findByRole('dialog', { name: 'Hide Routine?' })).toBeTruthy()
+    expect(screen.getByText(/This will hide "Push" from Suggested Routines/)).toBeTruthy()
+    expect(localStorage.getItem('hiddenTemplates')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Hide Routine?' })).toBeNull()
+    })
+    expect(localStorage.getItem('hiddenTemplates')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Push' }))
+    await screen.findByRole('dialog', { name: 'Hide Routine?' })
+    fireEvent.click(screen.getByRole('button', { name: 'Hide Routine' }))
+
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem('hiddenTemplates') || '[]')).toContain('push')
+    })
   })
 })

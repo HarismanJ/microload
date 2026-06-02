@@ -675,8 +675,10 @@ export default function Workout({
   const [deleteConfirmExId, setDeleteConfirmExId] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
-  const [confirmAction, setConfirmAction] = useState(null) // null | 'cancel' | 'finish' | 'restart' | 'incomplete'
+  const [confirmAction, setConfirmAction] = useState(null) // null | 'cancel' | 'finish' | 'restart' | 'incomplete' | 'delete-plan' | 'delete-routine' | 'hide-template'
   const [confirmBusy, setConfirmBusy] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null) // null | { type, id, name }
+  const [deleteConfirmError, setDeleteConfirmError] = useState('')
   const [finishSaveError, setFinishSaveError] = useState('')
   const confirmDialogRef = useRef(null)
   const [bodyweightWarning, setBodyweightWarning] = useState(null) // null | { run: () => any }
@@ -2112,6 +2114,8 @@ export default function Workout({
   const closeConfirm = () => {
     if (!confirmBusy) {
       setConfirmAction(null)
+      setDeleteTarget(null)
+      setDeleteConfirmError('')
       setFinishSaveError('')
     }
   }
@@ -2188,26 +2192,36 @@ export default function Workout({
 
   const runConfirmedAction = async () => {
     if (!confirmAction || confirmBusy || isFinishingRef.current) return
+    const action = confirmAction
     isFinishingRef.current = true
     setConfirmBusy(true)
+    setDeleteConfirmError('')
     setFinishSaveError('')
     try {
-      if (confirmAction === 'cancel') await confirmCancel()
-      if (confirmAction === 'incomplete') {
+      if (action === 'cancel') await confirmCancel()
+      if (action === 'incomplete') {
         const completedExercises = buildWorkoutExercisesWithIncompleteSetsDone()
         setWorkoutExercises(completedExercises)
         await finishWorkout(completedExercises)
       }
-      if (confirmAction === 'finish') {
+      if (action === 'finish') {
         Sentry.addBreadcrumb({ category: 'workout', message: 'Workout finished', level: 'info' })
         await finishWorkout()
       }
-      if (confirmAction === 'restart') await restartWorkoutFromSavedDraft()
+      if (action === 'restart') await restartWorkoutFromSavedDraft()
+      if (action === 'delete-plan') await deleteTrainingPlan(deleteTarget?.id)
+      if (action === 'delete-routine') await deleteRoutine(deleteTarget?.id)
+      if (action === 'hide-template') hideTemplate(deleteTarget?.id)
       setConfirmAction(null)
+      setDeleteTarget(null)
     } catch (err) {
       console.error('runConfirmedAction failed:', err)
-      if (confirmAction === 'finish' || confirmAction === 'incomplete') {
+      if (action === 'finish' || action === 'incomplete') {
         setFinishSaveError('Could not save workout. Check your connection and try again.')
+      } else if (action === 'delete-plan') {
+        setDeleteConfirmError(friendlyError(err, 'Could not delete this plan.'))
+      } else if (action === 'delete-routine') {
+        setDeleteConfirmError(friendlyError(err, 'Could not delete this routine.'))
       }
     } finally {
       setConfirmBusy(false)
@@ -2797,7 +2811,13 @@ export default function Workout({
                   ? 'Start Fresh Workout?'
                   : confirmAction === 'incomplete'
                     ? 'Incomplete Workout'
-                    : 'Cancel Workout?'}
+                    : confirmAction === 'delete-plan'
+                      ? 'Delete Plan?'
+                      : confirmAction === 'delete-routine'
+                        ? 'Delete Routine?'
+                        : confirmAction === 'hide-template'
+                          ? 'Hide Routine?'
+                        : 'Cancel Workout?'}
             </div>
             <div className="confirm-body">
               {confirmAction === 'finish'
@@ -2806,9 +2826,16 @@ export default function Workout({
                   ? 'You have incomplete sets with recorded repetitions. Would you like to mark all completed sets before finishing this workout?'
                 : confirmAction === 'restart'
                   ? 'All progress in the current saved workout will be lost.'
+                  : confirmAction === 'delete-plan'
+                    ? `This will permanently delete "${deleteTarget?.name || 'this plan'}". Completed workouts already in your history will stay saved.`
+                  : confirmAction === 'delete-routine'
+                    ? `This will permanently delete "${deleteTarget?.name || 'this routine'}". Completed workouts already in your history will stay saved.`
+                  : confirmAction === 'hide-template'
+                    ? `This will hide "${deleteTarget?.name || 'this routine'}" from Suggested Routines.`
                   : 'All progress will be lost.'}
             </div>
             {finishSaveError && <div className="battle-panel-error">{finishSaveError}</div>}
+            {deleteConfirmError && <div className="battle-panel-error">{deleteConfirmError}</div>}
             <div className="confirm-actions">
               <button
                 type="button"
@@ -2816,11 +2843,15 @@ export default function Workout({
                 onClick={closeConfirm}
                 disabled={confirmBusy}
               >
-                {confirmAction === 'incomplete' ? 'Back' : 'Keep Going'}
+                {confirmAction === 'incomplete'
+                  ? 'Back'
+                  : confirmAction === 'delete-plan' || confirmAction === 'delete-routine' || confirmAction === 'hide-template'
+                    ? 'Cancel'
+                    : 'Keep Going'}
               </button>
               <button
                 type="button"
-                className={confirmAction === 'cancel' || confirmAction === 'restart' ? 'confirm-discard' : 'confirm-submit'}
+                className={confirmAction === 'cancel' || confirmAction === 'restart' || confirmAction === 'delete-plan' || confirmAction === 'delete-routine' || confirmAction === 'hide-template' ? 'confirm-discard' : 'confirm-submit'}
                 onClick={runConfirmedAction}
                 disabled={confirmBusy}
               >
@@ -2832,7 +2863,13 @@ export default function Workout({
                       ? 'Start Fresh'
                       : confirmAction === 'incomplete'
                         ? 'Check and Finish'
-                        : 'Discard'}
+                        : confirmAction === 'delete-plan'
+                          ? 'Delete Plan'
+                          : confirmAction === 'delete-routine'
+                            ? 'Delete Routine'
+                            : confirmAction === 'hide-template'
+                              ? 'Hide Routine'
+                              : 'Discard'}
               </button>
             </div>
           </div>
@@ -3078,8 +3115,25 @@ export default function Workout({
     localStorage.setItem('hiddenTemplates', JSON.stringify(updated))
   }
 
+  const requestHideTemplate = (template) => {
+    if (!template?.id) return
+    setDeleteConfirmError('')
+    setDeleteTarget({ type: 'template', id: template.id, name: template.name || 'this routine' })
+    setConfirmAction('hide-template')
+  }
+
+  const requestDeleteRoutine = (routine) => {
+    if (!routine?.id) return
+    setRoutineError('')
+    setDeleteConfirmError('')
+    setDeleteTarget({ type: 'routine', id: routine.id, name: routine.name || 'this routine' })
+    setConfirmAction('delete-routine')
+  }
+
   const deleteRoutine = async (id) => {
-    await supabase.from('user_routines').delete().eq('id', id)
+    if (!id) throw new Error('Missing routine id')
+    const { error } = await supabase.from('user_routines').delete().eq('id', id)
+    if (error) throw error
     setUserRoutines(prev => prev.filter(r => r.id !== id))
   }
 
@@ -3214,13 +3268,18 @@ export default function Workout({
     }
   }
 
+  const requestDeleteTrainingPlan = (plan) => {
+    if (!plan?.id) return
+    setPlanError('')
+    setDeleteConfirmError('')
+    setDeleteTarget({ type: 'plan', id: plan.id, name: plan.name || 'this plan' })
+    setConfirmAction('delete-plan')
+  }
+
   const deleteTrainingPlan = async (id) => {
-    if (!id || !userId) return
+    if (!id || !userId) throw new Error('Missing plan id')
     const { error } = await supabase.from('user_training_plans').delete().eq('id', id).eq('user_id', userId)
-    if (error) {
-      setPlanError(friendlyError(error, 'Could not delete this plan.'))
-      return
-    }
+    if (error) throw error
     setUserTrainingPlans(prev => prev.filter(plan => plan.id !== id))
     if (viewingTrainingPlanId === id) setViewingTrainingPlanId(null)
   }
@@ -4879,11 +4938,12 @@ export default function Workout({
             })}
           </div>
 
-          <button className="empty-workout-btn plan-detail-delete" onClick={() => deleteTrainingPlan(viewingTrainingPlan.id)}>
+          <button className="empty-workout-btn plan-detail-delete" onClick={() => requestDeleteTrainingPlan(viewingTrainingPlan)}>
             Delete Plan
           </button>
         </div>
       </div>
+      {confirmDialog}
       {planAdGatePortal}
       {planPaywall}
       {planStartLoadingPortal}
@@ -6382,7 +6442,11 @@ export default function Workout({
                           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
                         </svg>
                       </button>
-                      <button className="template-icon-btn template-icon-btn-danger" onClick={() => deleteTrainingPlan(plan.id)}>
+                      <button
+                        className="template-icon-btn template-icon-btn-danger"
+                        aria-label={`Delete ${plan.name}`}
+                        onClick={() => requestDeleteTrainingPlan(plan)}
+                      >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                           <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
@@ -6436,7 +6500,7 @@ export default function Workout({
                   <div key={r.id} className="template-swipe-wrapper"
                     onTouchStart={e => handleTemplateTouchStart(r.id, e)}
                     onTouchMove={e => handleTemplateTouchMove(r.id, e)}
-                    onTouchEnd={() => handleTemplateTouchEnd(r.id, () => deleteRoutine(r.id))}
+                    onTouchEnd={() => handleTemplateTouchEnd(r.id, () => requestDeleteRoutine(r))}
                     onTouchCancel={handleTemplateTouchCancel}
                   >
                     {revealing && (
@@ -6448,7 +6512,11 @@ export default function Workout({
                       </div>
                     )}
                     <div className="template-card" style={{ transform: `translateX(${dx}px)`, transition: isActive ? 'none' : 'transform 0.2s ease' }}>
-                      <button className="template-icon-btn template-icon-btn-danger" onClick={() => deleteRoutine(r.id)}>
+                      <button
+                        className="template-icon-btn template-icon-btn-danger"
+                        aria-label={`Delete ${r.name}`}
+                        onClick={() => requestDeleteRoutine(r)}
+                      >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                           <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
@@ -6491,7 +6559,7 @@ export default function Workout({
               <div key={t.id} className="template-swipe-wrapper"
                 onTouchStart={e => handleTemplateTouchStart(t.id, e)}
                 onTouchMove={e => handleTemplateTouchMove(t.id, e)}
-                onTouchEnd={() => handleTemplateTouchEnd(t.id, () => hideTemplate(t.id))}
+                onTouchEnd={() => handleTemplateTouchEnd(t.id, () => requestHideTemplate(t))}
                 onTouchCancel={handleTemplateTouchCancel}
               >
                 {revealing && (
@@ -6503,7 +6571,11 @@ export default function Workout({
                   </div>
                 )}
                 <div className="template-card" style={{ transform: `translateX(${dx}px)`, transition: isActive ? 'none' : 'transform 0.2s ease' }}>
-                  <button className="template-icon-btn template-icon-btn-danger" onClick={() => hideTemplate(t.id)}>
+                  <button
+                    className="template-icon-btn template-icon-btn-danger"
+                    aria-label={`Hide ${t.name}`}
+                    onClick={() => requestHideTemplate(t)}
+                  >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
                       <path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
