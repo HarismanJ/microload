@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 
 import WorkoutSummary from '../../components/WorkoutSummary.jsx'
 
@@ -189,5 +189,109 @@ describe('WorkoutSummary bodyweight-missing banner', () => {
       />,
     )
     expect(screen.queryByText('Bodyweight must be entered to see ranks.')).toBeNull()
+  })
+})
+
+describe('WorkoutSummary plan-coach apply', () => {
+  const coachSummary = {
+    durationSeconds: 1200,
+    totalSets: 4,
+    totalWorkingSets: 4,
+    totalVolume: 500,
+    unit: 'kg',
+    exercises: [
+      {
+        name: 'Bench Press',
+        sets: [{ weight: 100, reps: 5, unit: 'kg', setType: 'normal' }],
+      },
+    ],
+    planCoaching: {
+      id: 'adapt-1',
+      plan_id: 'plan-1',
+      summary: 'Progress next targets',
+      body: 'Most completed strength sets reached the top of the planned range.',
+      metrics: { completedSets: 4, plannedSets: 5, actualMinutes: 20, completionRate: 0.8 },
+    },
+  }
+
+  it('shows an Apply to Plan button and pending pill when a coaching handler is provided', () => {
+    render(
+      <WorkoutSummary onDismiss={vi.fn()} summary={{ ...coachSummary, applyCoaching: vi.fn() }} />,
+    )
+    expect(screen.getByText('Progress next targets')).toBeTruthy()
+    expect(screen.getByText('Pending Review')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Apply to Plan' })).toBeTruthy()
+  })
+
+  it('renders the coaching card read-only (no Apply button) when no handler is provided', () => {
+    render(<WorkoutSummary onDismiss={vi.fn()} summary={{ ...coachSummary }} />)
+    expect(screen.getByText('Progress next targets')).toBeTruthy()
+    expect(screen.getByText('Pending Review')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply to Plan' })).toBeNull()
+  })
+
+  it('starts in the applied state when coaching was auto-applied during workout finish', () => {
+    render(
+      <WorkoutSummary
+        onDismiss={vi.fn()}
+        summary={{ ...coachSummary, applyCoaching: vi.fn(), coachAutoApplied: true }}
+      />,
+    )
+
+    expect(screen.getByText('Applied to Plan')).toBeTruthy()
+    expect(screen.getByText('Your plan has been updated')).toBeTruthy()
+    expect(screen.queryByText('Pending Review')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Apply to Plan' })).toBeNull()
+  })
+
+  it('shows the spinner and disables the button while applying, then flips to an applied state', async () => {
+    let resolveApply
+    const applyCoaching = vi.fn(() => new Promise((resolve) => { resolveApply = resolve }))
+    const { container } = render(
+      <WorkoutSummary onDismiss={vi.fn()} summary={{ ...coachSummary, applyCoaching }} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to Plan' }))
+
+    // Mid-flight: label is replaced by the loading spinner and the button is disabled.
+    const btn = container.querySelector('.ws-coach-apply')
+    expect(btn).toBeTruthy()
+    expect(btn.disabled).toBe(true)
+    expect(btn.querySelector('.spinner')).toBeTruthy()
+    expect(screen.queryByText('Apply to Plan')).toBeNull()
+    expect(applyCoaching).toHaveBeenCalledTimes(1)
+
+    await act(async () => { resolveApply(true) })
+
+    // Applied: pill + note swap in and the action button is gone.
+    expect(screen.getByText('Applied to Plan')).toBeTruthy()
+    expect(screen.getByText('Your plan has been updated')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Apply to Plan' })).toBeNull()
+  })
+
+  it('returns to the idle state when applying fails so the user can retry', async () => {
+    const applyCoaching = vi.fn().mockResolvedValue(false)
+    render(<WorkoutSummary onDismiss={vi.fn()} summary={{ ...coachSummary, applyCoaching }} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply to Plan' }))
+    })
+
+    expect(applyCoaching).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Apply to Plan' })).toBeTruthy()
+    expect(screen.queryByText('Applied to Plan')).toBeNull()
+    expect(screen.queryByText('Your plan has been updated')).toBeNull()
+  })
+
+  it('recovers to the idle state if the apply handler throws', async () => {
+    const applyCoaching = vi.fn().mockRejectedValue(new Error('network down'))
+    render(<WorkoutSummary onDismiss={vi.fn()} summary={{ ...coachSummary, applyCoaching }} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Apply to Plan' }))
+    })
+
+    expect(screen.getByRole('button', { name: 'Apply to Plan' })).toBeTruthy()
+    expect(screen.queryByText('Applied to Plan')).toBeNull()
   })
 })

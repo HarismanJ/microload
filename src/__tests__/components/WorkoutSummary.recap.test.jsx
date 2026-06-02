@@ -7,9 +7,12 @@ import WorkoutSummary from '../../components/WorkoutSummary.jsx'
 const SHOW_DELAY_MS = 30
 const STEP_MS = 450
 const RANKUP_WALK_START_MS = 2320
+const RANKUP_INITIAL_STEP_MS = 1800
 const PROGRESS_SLAM_MS = 810
 const PROGRESS_BAR_FILL_MS = 600
 const PROGRESS_TIER_SWAP_MS = 350
+const PROGRESS_DOWN_DRAIN_MS = 850
+const PROGRESS_DOWN_SETTLE_MS = STEP_MS
 
 const baseSummary = {
   durationSeconds: 1200,
@@ -208,9 +211,45 @@ describe('WorkoutSummary recap pipeline', () => {
     expect(fill.style.transform).toBe('scaleX(0.7)')
   })
 
+  it('fires a haptic when a one-step RankUpCard reveals the new tier', () => {
+    const summary = {
+      ...baseSummary,
+      exercises: [makeExercise()],
+      rankUps: [makeRankUp({ from: 'Bronze I', to: 'Bronze II' })],
+    }
+    render(<WorkoutSummary summary={summary} onDismiss={vi.fn()} />)
+
+    advancePastShow(150 + 5)
+    advance(810 + 5)
+    expect(Haptics.impact).toHaveBeenCalledTimes(1)
+
+    advance(RANKUP_INITIAL_STEP_MS - 810)
+    expect(Haptics.impact).toHaveBeenCalledTimes(2)
+    expect(Haptics.impact).toHaveBeenLastCalledWith({ style: 'HEAVY' })
+  })
+
+  it('fires haptics for the first and later tiers in a multi-step RankUpCard walk', () => {
+    const summary = {
+      ...baseSummary,
+      exercises: [makeExercise()],
+      rankUps: [makeRankUp({ from: 'Bronze I', to: 'Bronze III' })],
+    }
+    render(<WorkoutSummary summary={summary} onDismiss={vi.fn()} />)
+
+    advancePastShow(150 + 5)
+    advance(810 + 5)
+    expect(Haptics.impact).toHaveBeenCalledTimes(1)
+
+    advance(RANKUP_INITIAL_STEP_MS - 810)
+    expect(Haptics.impact).toHaveBeenCalledTimes(2)
+
+    advance(RANKUP_WALK_START_MS - RANKUP_INITIAL_STEP_MS + STEP_MS)
+    expect(Haptics.impact).toHaveBeenCalledTimes(3)
+  })
+
   // ─── ProgressCard 4-stage machine ─────────────────────────────────────────
 
-  it('immediately stages a maintained ProgressCard at final with no haptic', () => {
+  it('immediately stages a maintained ProgressCard at final and fires a slam', () => {
     const summary = {
       ...baseSummary,
       exercises: [makeExercise()],
@@ -221,14 +260,16 @@ describe('WorkoutSummary recap pipeline', () => {
     advancePastShow(150 + 5)
     const card = container.querySelector('.ws-progress-card')
     expect(card.classList.contains('ws-progress-card-maintained')).toBe(true)
-    expect(card.classList.contains('ws-progress-card-shaking')).toBe(false)
 
     // Bar should be at progress (30%) since stage went straight to 'final'
     const fill = container.querySelector('.ws-progress-card-bar-fill')
     expect(fill.style.width).toBe('30%')
 
-    // No haptic on maintained tier (the slam haptic is gated on isMaintained === false)
     expect(Haptics.impact).not.toHaveBeenCalled()
+    advance(PROGRESS_SLAM_MS + 5)
+    expect(Haptics.impact).toHaveBeenCalledWith({ style: 'HEAVY' })
+    expect(animateSpy).toHaveBeenCalled()
+    expect(animateSpy.mock.calls.at(-1)[1].duration).toBe(380)
   })
 
   it('progresses a tier-changed ProgressCard through initial → transitioning → tierSwap → final', () => {
@@ -281,7 +322,7 @@ describe('WorkoutSummary recap pipeline', () => {
     expect(container.querySelector('.ws-progress-card-bar-fill').style.width).toBe('80%')
   })
 
-  it('applies the shaking class for a downward tier-changed progress card', () => {
+  it('shakes and pulses a downward tier-changed progress card', () => {
     const summary = {
       ...baseSummary,
       exercises: [makeExercise()],
@@ -299,12 +340,52 @@ describe('WorkoutSummary recap pipeline', () => {
 
     advancePastShow(150 + 5)
     advance(PROGRESS_SLAM_MS + 5)
-    // Right after the slam, isDown card should be shaking
-    expect(container.querySelector('.ws-progress-card-shaking')).toBeTruthy()
+    expect(animateSpy).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('.ws-progress-card-pulsing')).toBeNull()
 
-    // After the 380ms shake window, the shaking class is removed
+    advance(PROGRESS_DOWN_DRAIN_MS + 5)
+    expect(animateSpy).toHaveBeenCalledTimes(2)
+    expect(animateSpy.mock.calls.at(-1)[1].duration).toBe(380)
+    expect(container.querySelector('.ws-progress-card-pulsing')).toBeTruthy()
+
     advance(385)
-    expect(container.querySelector('.ws-progress-card-shaking')).toBeNull()
+    expect(container.querySelector('.ws-progress-card-pulsing')).toBeTruthy()
+
+    // After the red pulse window, the pulsing class is removed
+    advance(520)
+    expect(container.querySelector('.ws-progress-card-pulsing')).toBeNull()
+  })
+
+  it('walks a downward tier change backward from 100% in the lower tier', () => {
+    const summary = {
+      ...baseSummary,
+      exercises: [makeExercise()],
+      exerciseProgress: [makeProgressItem({
+        direction: 'down',
+        tierChanged: true,
+        tier: 'Bronze III',
+        previousTier: 'Silver I',
+        nextTier: 'Silver I',
+        progress: 80,
+        previousProgress: 10,
+      })],
+    }
+    const { container } = render(<WorkoutSummary summary={summary} onDismiss={vi.fn()} />)
+
+    advancePastShow(150 + 5)
+    expect(container.querySelector('.ws-progress-card-bar-fill').style.width).toBe('10%')
+
+    advance(PROGRESS_SLAM_MS + 5)
+    expect(container.querySelector('.ws-progress-card-bar-fill').style.width).toBe('0%')
+
+    advance(PROGRESS_DOWN_DRAIN_MS + 5)
+    const fill = container.querySelector('.ws-progress-card-bar-fill')
+    expect(fill.style.width).toBe('100%')
+    expect(fill.classList.contains('ws-progress-card-bar-fill-snap')).toBe(true)
+
+    advance(PROGRESS_DOWN_SETTLE_MS + 5)
+    expect(container.querySelector('.ws-progress-card-bar-fill').style.width).toBe('80%')
+    expect(container.querySelector('.ws-progress-card-landing-pct')?.textContent).toBe('80% to Silver I')
   })
 
   // ─── Haptics + screen shake ────────────────────────────────────────────────
@@ -341,7 +422,7 @@ describe('WorkoutSummary recap pipeline', () => {
     expect(opts.duration).toBe(380)
   })
 
-  it('fires a Light haptic on a non-maintained ProgressCard slam', () => {
+  it('fires a Heavy haptic on a ProgressCard slam', () => {
     const summary = {
       ...baseSummary,
       exercises: [makeExercise()],
@@ -351,7 +432,7 @@ describe('WorkoutSummary recap pipeline', () => {
 
     advancePastShow(150 + 5)
     advance(PROGRESS_SLAM_MS + 5)
-    expect(Haptics.impact).toHaveBeenCalledWith({ style: 'LIGHT' })
+    expect(Haptics.impact).toHaveBeenCalledWith({ style: 'HEAVY' })
   })
 
   // ─── Reduced-motion bailout ────────────────────────────────────────────────

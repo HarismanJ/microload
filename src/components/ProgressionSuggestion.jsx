@@ -44,7 +44,7 @@ export default function ProgressionSuggestion({
   const [bodyweightSideOverrides, setBodyweightSideOverrides] = useState({})
   const containerRef = useRef(null)
 
-  const unit = unitPreference || 'kg'
+  const unit = unitPreference || 'lbs'
   const bodyweightAlternates = suggestion?.bodyweightAlternates
   const hasBodyweightAlternates = Boolean(bodyweightAlternates?.reps && bodyweightAlternates?.load)
   const defaultBodyweightSide = suggestion?.isBodyweightOnly ? 'reps' : 'load'

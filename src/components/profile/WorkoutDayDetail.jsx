@@ -2,21 +2,16 @@ import { useState, useEffect, useEffectEvent, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
 import { invalidateCache } from '../../lib/cache'
 import { recalculateStreakAfterDeletion } from '../../lib/streakUtils'
+import { recalculateExercisePrs, recalculateExerciseRankStatesFromHistory } from '../../lib/workoutHistory'
 import { getLocalTrainingWeekRange } from '../../lib/muscleWorkload'
 import { useCurrentUserId } from '../../context/UserContext'
-import { calculateSetEstimatedOrm } from '../../lib/orm'
 import {
   DEFAULT_BODYWEIGHT_KG,
-  MAX_REPS,
   convertWeight,
   fmtCompact,
   getProfileBodyweightKg,
   getSetTrainingVolumeKg,
   getSetTrainingVolumeInUnit,
-  getWeightInputMax,
-  getWeightInputMin,
-  isRepsWithinInputRange,
-  isWeightWithinInputRange,
 } from '../../lib/liftMath'
 import { VALIDATION_LIMITS, validateLength, validateNumber } from '../../lib/inputValidation'
 import '../../styles/Profile.css'
@@ -128,13 +123,6 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
   const [weightLogs, setWeightLogs] = useState([])
   const [profileMeta, setProfileMeta] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [editingSetId, setEditingSetId] = useState(null)
-  const [setEditDraft, setSetEditDraft] = useState({ weight: '', reps: '' })
-  const [setEditError, setSetEditError] = useState('')
-  const [savingSetId, setSavingSetId] = useState(null)
-  const [deleteSetTargetId, setDeleteSetTargetId] = useState(null)
-  const [deletingSetId, setDeletingSetId] = useState(null)
-  const [deleteSetError, setDeleteSetError] = useState('')
   const [deleteTargetId, setDeleteTargetId] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
   const [deleteError, setDeleteError] = useState('')
@@ -155,10 +143,6 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     setLoading(true)
     setLoadError('')
     setWorkoutSessions([])
-    setEditingSetId(null)
-    setSetEditError('')
-    setDeleteSetTargetId(null)
-    setDeleteSetError('')
     setDeleteError('')
     setDeleteTargetId(null)
     setEditingFoodLogId(null)
@@ -260,180 +244,6 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
     return () => clearTimeout(timer)
   }, [sessionId, sessionIds, dateStr, userId])
 
-  function startSetEdit(set) {
-    setEditingSetId(set.id)
-    setDeleteSetTargetId(null)
-    setSetEditDraft({ weight: String(set.weight), reps: String(set.reps) })
-    setSetEditError('')
-  }
-
-  async function handleUpdateSet(set, group) {
-    if (!set?.id || savingSetId) return
-
-    const weight = parseFloat(setEditDraft.weight)
-    const reps = parseInt(setEditDraft.reps, 10)
-    const allowsAssistance = group?.equipment === 'Bodyweight'
-    const bodyweightKg = getProfileBodyweightKg(profileMeta)
-
-    if (
-      !isWeightWithinInputRange(weight, { equipment: group?.equipment, unit: set.unit, bodyweightKg })
-      || !isRepsWithinInputRange(reps)
-    ) {
-      setSetEditError(allowsAssistance
-        ? 'Enter a valid weight and 1 to 9999 reps before confirming. Assisted sets can use negative weight down to your bodyweight.'
-        : 'Enter a valid weight and at least 1 rep before confirming.')
-      return
-    }
-
-    setSavingSetId(set.id)
-    setSetEditError('')
-
-    try {
-      const estimatedOrm = calculateSetEstimatedOrm({
-        weight,
-        reps,
-        unit: set.unit,
-        equipment: group?.equipment,
-        bodyweightKg,
-      })
-      const volumeBodyweightKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
-      const previousVolumeKg = getSetTrainingVolumeKg({
-        weight: set.weight,
-        reps: set.reps,
-        unit: set.unit,
-        equipment: group?.equipment,
-        bodyweightKg: volumeBodyweightKg,
-        set_type: set.set_type,
-        is_warmup: set.is_warmup,
-      })
-      const nextVolumeKg = getSetTrainingVolumeKg({
-        weight,
-        reps,
-        unit: set.unit,
-        equipment: group?.equipment,
-        bodyweightKg: volumeBodyweightKg,
-        set_type: set.set_type,
-        is_warmup: set.is_warmup,
-      })
-      const { data: profileVol, error: profileFetchError } = await supabase.from('profiles').select('lifetime_volume_kg').eq('id', userId).single()
-      if (profileFetchError) throw profileFetchError
-      const nextLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - previousVolumeKg + nextVolumeKg)
-
-      const [{ error }, { error: profileUpdateError }] = await Promise.all([
-        supabase
-          .from('workout_sets')
-          .update({ weight, reps, estimated_1rm: estimatedOrm })
-          .eq('id', set.id),
-        supabase.from('profiles').update({ lifetime_volume_kg: nextLifetimeVolumeKg }).eq('id', userId),
-      ])
-
-      if (error || profileUpdateError) throw (error || profileUpdateError)
-
-      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`, priorWeekMuscleKey())
-      setWorkoutSessions(prev => prev.map(sess => ({
-        ...sess,
-        groups: sess.groups.map(group => ({
-          ...group,
-          sets: group.sets.map(existing => existing.id === set.id
-            ? { ...existing, weight, reps, estimated_1rm: estimatedOrm }
-            : existing),
-        })),
-      })))
-      setEditingSetId(null)
-      onRefresh?.()
-    } catch (error) {
-      setSetEditError(error?.message || 'Could not update this set.')
-    } finally {
-      if (mountedRef.current) setSavingSetId(null)
-    }
-  }
-
-  async function handleDeleteSet(sessionId, group, set) {
-    if (!set?.id || deletingSetId) return
-
-    const remainingSets = group.sets.filter(existing => existing.id !== set.id)
-    const renumberTargets = remainingSets
-      .map((existing, index) => ({ ...existing, nextSetNumber: index + 1 }))
-      .filter(existing => existing.set_number !== existing.nextSetNumber)
-
-    setDeletingSetId(set.id)
-    setDeleteSetError('')
-
-    const bwKg = getProfileBodyweightKg(profileMeta, DEFAULT_BODYWEIGHT_KG)
-    const setVolumeKg = getSetTrainingVolumeKg({
-      weight: set.weight,
-      reps: set.reps,
-      unit: set.unit,
-      equipment: group?.equipment,
-      bodyweightKg: bwKg,
-      set_type: set.set_type,
-      is_warmup: set.is_warmup,
-    })
-
-    try {
-      const [{ error: deleteError }, { data: profileVol }] = await Promise.all([
-        supabase.from('workout_sets').delete().eq('id', set.id),
-        supabase.from('profiles').select('lifetime_volume_kg').eq('id', userId).single(),
-      ])
-
-      if (!mountedRef.current) return
-      if (deleteError) throw deleteError
-
-      const newLifetimeVolumeKg = Math.max(0, (profileVol?.lifetime_volume_kg ?? 0) - setVolumeKg)
-      const { error: profileUpdateError } = await supabase.from('profiles').update({ lifetime_volume_kg: newLifetimeVolumeKg }).eq('id', userId)
-      if (profileUpdateError) throw profileUpdateError
-
-      if (renumberTargets.length) {
-        const renumberResults = await Promise.all(
-          renumberTargets.map(existing => (
-            supabase
-              .from('workout_sets')
-              .update({ set_number: existing.nextSetNumber })
-              .eq('id', existing.id)
-          ))
-        )
-
-        const renumberError = renumberResults.find(result => result.error)?.error
-        if (renumberError) {
-          setDeleteSetError(renumberError.message || 'This set was deleted, but the remaining set order could not be updated cleanly.')
-          await load()
-          return
-        }
-      }
-
-      invalidateCache('home', 'profile', 'ranks', 'achievements', `cal_${dateStr.slice(0, 7)}`, priorWeekMuscleKey())
-      setWorkoutSessions(prev => prev.map(sess => (
-        sess.id !== sessionId
-          ? sess
-          : {
-              ...sess,
-              groups: sess.groups
-                .map(existingGroup => (
-                  existingGroup.exerciseId !== group.exerciseId
-                    ? existingGroup
-                    : {
-                        ...existingGroup,
-                        sets: existingGroup.sets
-                          .filter(existingSet => existingSet.id !== set.id)
-                          .map((existingSet, index) => ({ ...existingSet, set_number: index + 1 })),
-                      }
-                ))
-                .filter(existingGroup => existingGroup.sets.length > 0),
-            }
-      )))
-      setDeleteSetTargetId(null)
-      if (editingSetId === set.id) {
-        setEditingSetId(null)
-        setSetEditError('')
-      }
-      onRefresh?.()
-    } catch (error) {
-      if (mountedRef.current) setDeleteSetError(error?.message || 'Could not delete this set.')
-    } finally {
-      if (mountedRef.current) setDeletingSetId(null)
-    }
-  }
-
   function startFoodLogEdit(item) {
     setEditingFoodLogId(item.id)
     setNutritionDeleteTargetId(null)
@@ -533,40 +343,8 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
 
       if (error || profileError) throw (error || profileError)
 
-      // Recalculate cached PRs for exercises that were in the deleted session.
-      if (affectedExerciseIds.length > 0) {
-        const { data: remainingBests, error: remainingBestsError } = await supabase
-          .from('workout_sets')
-          .select('exercise_id, estimated_1rm, unit')
-          .eq('user_id', userId)
-          .in('exercise_id', affectedExerciseIds)
-          .not('estimated_1rm', 'is', null)
-
-        if (remainingBestsError) throw remainingBestsError
-
-        const newBestByExercise = {}
-        for (const s of remainingBests || []) {
-          const estimatedOrm = Number(s.estimated_1rm)
-          if (!Number.isFinite(estimatedOrm)) continue
-          const kg = s.unit === 'lbs' ? estimatedOrm * 0.453592 : estimatedOrm
-          newBestByExercise[s.exercise_id] = Math.max(newBestByExercise[s.exercise_id] || 0, kg)
-        }
-
-        try {
-          await Promise.all(affectedExerciseIds.map(exId =>
-            newBestByExercise[exId]
-              ? supabase.from('exercise_prs').upsert({
-                  user_id: userId,
-                  exercise_id: exId,
-                  best_1rm_kg: newBestByExercise[exId],
-                  updated_at: new Date().toISOString(),
-                }, { onConflict: 'user_id,exercise_id' })
-              : supabase.from('exercise_prs').delete().eq('user_id', userId).eq('exercise_id', exId)
-          ))
-        } catch (err) {
-          console.error('PR cache update failed after workout deletion:', err)
-        }
-      }
+      await recalculateExercisePrs(supabase, userId, affectedExerciseIds)
+      await recalculateExerciseRankStatesFromHistory(supabase, userId, affectedExerciseIds)
 
       const remainingSessions = workoutSessions.filter(sess => sess.id !== targetSessionId)
       await recalculateStreakAfterDeletion(supabase, userId)
@@ -808,136 +586,20 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                         <span>Set</span>
                         <span>Weight</span>
                         <span>Reps</span>
-                        <span>Est. 1RM</span>
-                        <span />
                       </div>
                       {group.sets.map(set => (
                         <div key={set.id} className="day-set-item">
                           <div className="day-set-row">
                             <span className="day-set-num">{set.set_number}</span>
                             {set.duration_seconds != null ? (
-                              <span style={{ gridColumn: 'span 3' }}>{Math.round(set.duration_seconds / 60)} min</span>
+                              <span className="day-set-duration">{Math.round(set.duration_seconds / 60)} min</span>
                             ) : (
                               <>
                                 <span>{set.weight} {set.unit}</span>
                                 <span>{set.reps}</span>
-                                <span className="day-set-orm">{set.estimated_1rm ? `${set.estimated_1rm.toFixed(1)} ${set.unit}` : '—'}</span>
                               </>
                             )}
-                            <div className="day-set-actions">
-                              <button
-                                className="day-edit-btn"
-                                onClick={() => {
-                                  if (editingSetId === set.id) {
-                                    setEditingSetId(null)
-                                    setSetEditError('')
-                                    return
-                                  }
-                                  startSetEdit(set)
-                                }}
-                                disabled={Boolean(savingSetId) || Boolean(deletingSetId)}
-                              >
-                                {editingSetId === set.id ? 'Cancel' : 'Edit'}
-                              </button>
-                              <button
-                                className="day-edit-btn day-edit-btn-danger"
-                                onClick={() => {
-                                  setDeleteSetTargetId(deleteSetTargetId === set.id ? null : set.id)
-                                  setDeleteSetError('')
-                                  if (editingSetId === set.id) {
-                                    setEditingSetId(null)
-                                    setSetEditError('')
-                                  }
-                                }}
-                                disabled={Boolean(savingSetId) || Boolean(deletingSetId)}
-                              >
-                                {deleteSetTargetId === set.id ? 'Cancel' : 'Delete'}
-                              </button>
-                            </div>
                           </div>
-                          {editingSetId === set.id && (
-                            <div className="day-edit-card">
-                              <div className="day-edit-grid day-edit-grid-2">
-                                <label className="day-edit-field">
-                                  <span className="day-edit-label">
-                                    {group.equipment === 'Bodyweight' ? `Added / assisted weight (${set.unit})` : `Weight (${set.unit})`}
-                                  </span>
-                                  <input
-                                    className="day-edit-input"
-                                    type="number"
-                                    min={String(getWeightInputMin(group.equipment, set.unit, getProfileBodyweightKg(profileMeta)))}
-                                    max={String(getWeightInputMax(group.equipment, set.unit))}
-                                    step="0.1"
-                                    value={setEditDraft.weight}
-                                    onChange={e => setSetEditDraft(draft => ({ ...draft, weight: e.target.value }))}
-                                  />
-                                </label>
-                                <label className="day-edit-field">
-                                  <span className="day-edit-label">Reps</span>
-                                  <input
-                                    className="day-edit-input"
-                                    type="number"
-                                    min="1"
-                                    max={String(MAX_REPS)}
-                                    step="1"
-                                    value={setEditDraft.reps}
-                                    onChange={e => setSetEditDraft(draft => ({ ...draft, reps: e.target.value }))}
-                                  />
-                                </label>
-                              </div>
-                              {group.equipment === 'Bodyweight' && (
-                                <div className="day-edit-hint">Use a negative weight for assisted machine reps.</div>
-                              )}
-                              {setEditError && <div className="day-delete-error">{setEditError}</div>}
-                              <div className="day-delete-actions">
-                                <button
-                                  className="day-delete-cancel"
-                                  onClick={() => {
-                                    setEditingSetId(null)
-                                    setSetEditError('')
-                                  }}
-                                  disabled={Boolean(savingSetId)}
-                                >
-                                  Keep original
-                                </button>
-                                <button
-                                  className="day-delete-confirm"
-                                  onClick={() => handleUpdateSet(set, group)}
-                                  disabled={savingSetId === set.id}
-                                >
-                                  {savingSetId === set.id ? 'Saving…' : 'Confirm update'}
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                          {deleteSetTargetId === set.id && (
-                            <div className="day-delete-card">
-                              <div className="day-delete-title">Delete this set?</div>
-                              <div className="day-delete-text">
-                                This removes only this set. Remaining sets in this exercise will shift up and your ranks, stats, and history will recalculate from the sets left.
-                              </div>
-                              {deleteSetError && <div className="day-delete-error">{deleteSetError}</div>}
-                              <div className="day-delete-actions">
-                                <button
-                                  className="day-delete-cancel"
-                                  onClick={() => {
-                                    setDeleteSetTargetId(null)
-                                    setDeleteSetError('')
-                                  }}
-                                  disabled={Boolean(deletingSetId)}
-                                >
-                                  Keep set
-                                </button>
-                                <button
-                                  className="day-delete-confirm"
-                                  onClick={() => handleDeleteSet(sess.id, group, set)}
-                                  disabled={deletingSetId === set.id}
-                                >
-                                  {deletingSetId === set.id ? 'Deleting…' : 'Delete forever'}
-                                </button>
-                              </div>
-                            </div>
-                          )}
                         </div>
                       ))}
                       {sess.exercise_notes?.[group.exerciseId] && (
@@ -987,8 +649,8 @@ export default function WorkoutDayDetail({ sessionId = null, sessionIds = [], da
                     <div key={item.id} className="day-meal-item">
                       <div className="day-meal-row">
                         <span className="day-meal-food">{item.food_name}</span>
+                        <span className="day-meal-meta">{item.servings} × {Math.round(item.calories)} kcal</span>
                         <div className="day-meal-right">
-                          <span className="day-meal-meta">{item.servings}× · {Math.round(item.calories)} kcal</span>
                           <button
                             className="day-edit-btn"
                             onClick={() => {

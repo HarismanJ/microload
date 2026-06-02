@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useFocusTrap } from '../../lib/useFocusTrap'
 import { supabase } from '../../lib/supabase'
 import { BATTLE_MODES, getBattleModeLabel, loadHeadToHeadByOpponent } from '../../lib/battles'
 import LoadingSpinner from '../LoadingSpinner'
+import '../../styles/Paywall.css'
 import {
   acceptFriendRequest,
   loadFriendships,
@@ -63,14 +65,94 @@ export default function FriendsSection({ userId, username, profileLoaded = false
   const [actionKey, setActionKey] = useState('')
   const [notice, setNotice] = useState('')
   const [battleModeFriendship, setBattleModeFriendship] = useState(null)
+  const [battleModeClosing, setBattleModeClosing] = useState(false)
+  const [selectedBattleMode, setSelectedBattleMode] = useState('')
+  const battleModeOverlayRef = useRef(null)
   const battleModeModalRef = useRef(null)
-  useFocusTrap(battleModeModalRef, { active: !!battleModeFriendship, onEscape: () => setBattleModeFriendship(null) })
+  const battleModeCloseTimerRef = useRef(null)
+  const battleModeTouchStartYRef = useRef(null)
+  const battleModeTouchCurrentYRef = useRef(null)
+  useFocusTrap(battleModeModalRef, { active: !!battleModeFriendship && !battleModeClosing, onEscape: () => closeBattleModeAnimated() })
   const friendsRefreshTimerRef = useRef(null)
   const friendsFallbackPollRef = useRef(null)
   const friendsRealtimeHealthyRef = useRef(true)
   const hasUsername = Boolean(username?.trim())
   const missingUsername = profileLoaded && !hasUsername
   const canSearchForFriends = profileLoaded && hasUsername
+
+  const closeBattleModeAnimated = useCallback(() => {
+    const challengeBusy = battleModeFriendship && actionKey === `challenge-${battleModeFriendship.id}`
+    if (battleModeClosing || challengeBusy) return
+    setBattleModeClosing(true)
+    clearTimeout(battleModeCloseTimerRef.current)
+    battleModeCloseTimerRef.current = setTimeout(() => {
+      setBattleModeFriendship(null)
+      setBattleModeClosing(false)
+    }, 340)
+  }, [actionKey, battleModeClosing, battleModeFriendship])
+
+  const handleBattleModeOverlayClick = useCallback((event) => {
+    if (event.target === battleModeOverlayRef.current) closeBattleModeAnimated()
+  }, [closeBattleModeAnimated])
+
+  const resetBattleModeDrag = useCallback(() => {
+    battleModeTouchStartYRef.current = null
+    battleModeTouchCurrentYRef.current = null
+    if (battleModeModalRef.current) {
+      battleModeModalRef.current.style.transition = ''
+      battleModeModalRef.current.style.transform = ''
+    }
+  }, [])
+
+  const handleBattleModeTouchStart = useCallback((event) => {
+    const challengeBusy = battleModeFriendship && actionKey === `challenge-${battleModeFriendship.id}`
+    if (battleModeClosing || challengeBusy) return
+    const touch = event.touches?.[0]
+    if (!touch) return
+    battleModeTouchStartYRef.current = touch.clientY
+    battleModeTouchCurrentYRef.current = touch.clientY
+    if (battleModeModalRef.current) {
+      battleModeModalRef.current.style.transition = 'none'
+    }
+  }, [actionKey, battleModeClosing, battleModeFriendship])
+
+  const handleBattleModeTouchMove = useCallback((event) => {
+    if (battleModeTouchStartYRef.current === null) return
+    const touch = event.touches?.[0]
+    if (!touch) return
+    battleModeTouchCurrentYRef.current = touch.clientY
+    const deltaY = Math.max(0, touch.clientY - battleModeTouchStartYRef.current)
+    if (battleModeModalRef.current) {
+      battleModeModalRef.current.style.transform = `translateY(${Math.min(deltaY, 180)}px)`
+    }
+  }, [])
+
+  const handleBattleModeTouchEnd = useCallback(() => {
+    if (battleModeTouchStartYRef.current === null || battleModeTouchCurrentYRef.current === null) {
+      resetBattleModeDrag()
+      return
+    }
+
+    const deltaY = battleModeTouchCurrentYRef.current - battleModeTouchStartYRef.current
+    if (deltaY > 82) {
+      resetBattleModeDrag()
+      closeBattleModeAnimated()
+      return
+    }
+
+    resetBattleModeDrag()
+  }, [closeBattleModeAnimated, resetBattleModeDrag])
+
+  useEffect(() => () => {
+    clearTimeout(battleModeCloseTimerRef.current)
+  }, [])
+
+  useEffect(() => {
+    if (!battleModeFriendship) return
+    setBattleModeClosing(false)
+    setSelectedBattleMode('')
+    resetBattleModeDrag()
+  }, [battleModeFriendship, resetBattleModeDrag])
 
   const clearScheduledFriendsRefresh = useCallback(() => {
     if (!friendsRefreshTimerRef.current) return
@@ -381,6 +463,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
 
     const key = `challenge-${friendship.id}`
     setActionKey(key)
+    setSelectedBattleMode(battleMode)
     setError('')
     setNotice('')
 
@@ -403,6 +486,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
       setError(message)
     } finally {
       setActionKey('')
+      setSelectedBattleMode('')
     }
   }
 
@@ -588,7 +672,10 @@ export default function FriendsSection({ userId, username, profileLoaded = false
                     </button>
                     <button
                       className="friends-primary-btn"
-                      onClick={() => setBattleModeFriendship(friendship)}
+                      onClick={() => {
+                        setBattleModeClosing(false)
+                        setBattleModeFriendship(friendship)
+                      }}
                       disabled={actionKey === `challenge-${friendship.id}` || !username || !friendship.otherProfile?.username || workoutActive}
                     >
                       {actionKey === `challenge-${friendship.id}`
@@ -613,9 +700,25 @@ export default function FriendsSection({ userId, username, profileLoaded = false
           </div>
         </div>
       </div>
-      {battleModeFriendship && (
-        <div className="friends-battle-mode-overlay" onClick={() => setBattleModeFriendship(null)}>
-          <div className="friends-battle-mode-modal" onClick={event => event.stopPropagation()} ref={battleModeModalRef} tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="battle-mode-title">
+      {battleModeFriendship && createPortal(
+        <div
+          className={`friends-battle-mode-overlay${battleModeClosing ? ' friends-battle-mode-overlay--closing' : ''}`}
+          ref={battleModeOverlayRef}
+          onClick={handleBattleModeOverlayClick}
+        >
+          <div
+            className="friends-battle-mode-modal"
+            onClick={event => event.stopPropagation()}
+            onTouchStart={handleBattleModeTouchStart}
+            onTouchMove={handleBattleModeTouchMove}
+            onTouchEnd={handleBattleModeTouchEnd}
+            onTouchCancel={handleBattleModeTouchEnd}
+            ref={battleModeModalRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="battle-mode-title"
+          >
             <div className="friends-battle-mode-kicker">Choose Battle</div>
             <div id="battle-mode-title" className="friends-battle-mode-title">
               {`Challenge ${getDisplayName(battleModeFriendship.otherProfile)}`}
@@ -625,7 +728,7 @@ export default function FriendsSection({ userId, username, profileLoaded = false
                 <button
                   key={mode}
                   type="button"
-                  className="friends-battle-mode-option"
+                  className={`friends-battle-mode-option${selectedBattleMode === mode ? ' friends-battle-mode-option--selected' : ''}`}
                   onClick={() => handleChallenge(battleModeFriendship, mode)}
                   disabled={actionKey === `challenge-${battleModeFriendship.id}`}
                 >
@@ -643,13 +746,14 @@ export default function FriendsSection({ userId, username, profileLoaded = false
             <button
               type="button"
               className="friends-battle-mode-cancel"
-              onClick={() => setBattleModeFriendship(null)}
+              onClick={closeBattleModeAnimated}
               disabled={actionKey === `challenge-${battleModeFriendship.id}`}
             >
               Cancel
             </button>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

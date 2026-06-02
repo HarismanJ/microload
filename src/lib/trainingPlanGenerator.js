@@ -21,6 +21,7 @@ export const TRAINING_PLAN_EQUIPMENT = [
   { id: 'Bodyweight', label: 'Bodyweight' },
   { id: 'Dumbbell', label: 'Dumbbells' },
   { id: 'Barbell', label: 'Barbell' },
+  { id: 'EZ Bar', label: 'EZ Bar' },
   { id: 'Cable', label: 'Cable' },
   { id: 'Machine', label: 'Machines' },
   { id: 'Cardio Machines', label: 'Cardio Machines' },
@@ -89,7 +90,7 @@ export const DEFAULT_TRAINING_PLAN_FORM = {
   daysPerWeek: 4,
   sessionMinutes: 60,
   durationWeeks: 8,
-  equipment: ['Bodyweight', 'Dumbbell', 'Barbell', 'Cable', 'Machine', 'Cardio Machines'],
+  equipment: ['Bodyweight', 'Dumbbell', 'Barbell', 'EZ Bar', 'Cable', 'Machine', 'Cardio Machines'],
   focusAreas: [],
   avoid: '',
   scheduleMode: 'flexible',
@@ -99,6 +100,7 @@ export const DEFAULT_TRAINING_PLAN_FORM = {
   deloadPolicy: 'adaptive',
   blockGoal: 'accumulation',
   adaptiveCoach: true,
+  adaptiveCoachAutoApply: true,
 }
 
 const GOAL_SET_RULES = {
@@ -851,11 +853,15 @@ function scoreCandidateExercise(exercise, {
   return score
 }
 
-function pickRankedExercise(library, options) {
+function getRankedCandidateExercises(library, options) {
   return library
     .filter(ex => !options.dayExercises.some(dayEx => normalizeSearchValue(dayEx.name) === normalizeSearchValue(ex.name)))
     .map(ex => ({ exercise: ex, score: scoreCandidateExercise(ex, options) }))
-    .sort((a, b) => b.score - a.score || a.exercise.name.localeCompare(b.exercise.name))[0]?.exercise || null
+    .sort((a, b) => b.score - a.score || a.exercise.name.localeCompare(b.exercise.name))
+}
+
+function pickRankedExercise(library, options) {
+  return getRankedCandidateExercises(library, options)[0]?.exercise || null
 }
 
 function getSplit(daysPerWeek, experience) {
@@ -1590,6 +1596,7 @@ export function normalizeTrainingPlanForm(raw = {}) {
     deloadPolicy: hasOption(TRAINING_PLAN_DELOAD_POLICIES, base.deloadPolicy) ? base.deloadPolicy : 'adaptive',
     blockGoal: hasOption(TRAINING_PLAN_BLOCK_GOALS, base.blockGoal) ? base.blockGoal : 'accumulation',
     adaptiveCoach: base.adaptiveCoach !== false,
+    adaptiveCoachAutoApply: base.adaptiveCoachAutoApply !== false,
   }
 }
 
@@ -1619,6 +1626,320 @@ export function validateTrainingPlanForm(form) {
     integer: true,
     required: true,
   }) || (!normalized.equipment.length ? 'Select at least one equipment option.' : '')
+}
+
+function getFormFromPlan(plan = {}) {
+  const preferences = plan.preferences && typeof plan.preferences === 'object' ? plan.preferences : {}
+  const schedule = preferences.schedule && typeof preferences.schedule === 'object' ? preferences.schedule : {}
+  const periodization = preferences.periodization && typeof preferences.periodization === 'object' ? preferences.periodization : {}
+  const adaptiveCoach = preferences.adaptiveCoach && typeof preferences.adaptiveCoach === 'object' ? preferences.adaptiveCoach : {}
+  return normalizeTrainingPlanForm({
+    name: plan.name,
+    goal: plan.goal,
+    secondaryGoal: preferences.secondaryGoal || '',
+    experience: plan.experience,
+    daysPerWeek: plan.days_per_week,
+    sessionMinutes: plan.session_minutes,
+    durationWeeks: plan.duration_weeks,
+    equipment: plan.equipment,
+    focusAreas: preferences.focusAreas || [],
+    avoid: Array.isArray(preferences.avoid) ? preferences.avoid.join(', ') : preferences.avoid,
+    scheduleMode: schedule.mode,
+    trainingDays: schedule.trainingDays,
+    splitPreference: schedule.splitPreference,
+    periodizationStyle: periodization.style,
+    deloadPolicy: periodization.deloadPolicy,
+    blockGoal: periodization.blockGoal,
+    adaptiveCoach: adaptiveCoach.enabled !== false,
+    adaptiveCoachAutoApply: adaptiveCoach.autoApply !== false,
+  })
+}
+
+function getPlanDayById(plan, dayId) {
+  return (plan?.days || []).find(day => String(day?.id) === String(dayId)) || null
+}
+
+function getPrimaryMuscleSet(exercise) {
+  return new Set(getExerciseMuscleBuckets(exercise).primary)
+}
+
+function getPrimaryMuscleOverlap(first, second) {
+  const firstSet = getPrimaryMuscleSet(first)
+  const secondSet = getPrimaryMuscleSet(second)
+  let overlap = 0
+  firstSet.forEach(group => { if (secondSet.has(group)) overlap += 1 })
+  return overlap
+}
+
+function getReplacementCompatibility(originalExercise, replacementExercise) {
+  const originalCategory = originalExercise?.category || ''
+  const replacementCategory = replacementExercise?.category || ''
+  const originalPattern = originalExercise?.movementPattern || classifyMovementPattern(originalExercise)
+  const replacementPattern = classifyMovementPattern(replacementExercise)
+  const primaryOverlap = getPrimaryMuscleOverlap(originalExercise, replacementExercise)
+  return {
+    sameCategory: originalCategory === replacementCategory,
+    samePattern: originalPattern === replacementPattern,
+    primaryOverlap,
+    originalPattern,
+    replacementPattern,
+  }
+}
+
+function getReplacementReason(originalExercise, replacementExercise, warning = null) {
+  const compatibility = getReplacementCompatibility(originalExercise, replacementExercise)
+  if (warning?.level === 'strong') return 'Manual override - changes plan target'
+  if (compatibility.samePattern && compatibility.primaryOverlap > 0) return `Same movement - same muscles - ${replacementExercise.equipment || 'Exercise'}`
+  if (compatibility.samePattern) return `Same movement - ${replacementExercise.equipment || 'Exercise'}`
+  if (compatibility.sameCategory && compatibility.primaryOverlap > 0) return `Same category - similar muscles - ${replacementExercise.equipment || 'Exercise'}`
+  if (compatibility.sameCategory) return `Same category - ${replacementExercise.equipment || 'Exercise'}`
+  return 'Manual override - changes plan target'
+}
+
+function getPlanExerciseIdentifier(exercise) {
+  return String(exercise?.exerciseId ?? exercise?.id ?? exercise?.name ?? '')
+}
+
+export function getPlanExerciseReplacementWarning(originalExercise, replacementExercise, plan = {}, day = null) {
+  if (!originalExercise || !replacementExercise) return null
+  const compatibility = getReplacementCompatibility(originalExercise, replacementExercise)
+  const equipmentAllowed = isEquipmentAllowed(replacementExercise, normalizeEquipment(plan.equipment))
+  const replacementName = normalizeSearchValue(replacementExercise.name)
+  const duplicateInDay = Boolean(day?.exercises?.some(exercise => (
+    normalizeSearchValue(exercise.name) === replacementName
+      && normalizeSearchValue(exercise.name) !== normalizeSearchValue(originalExercise.name)
+  )))
+
+  if (duplicateInDay) {
+    return {
+      level: 'strong',
+      title: 'Duplicate exercise',
+      message: `${replacementExercise.name} is already in this plan day. You can still replace it, but the day may become repetitive.`,
+    }
+  }
+
+  if (!equipmentAllowed) {
+    return {
+      level: 'strong',
+      title: 'Outside plan equipment',
+      message: `${replacementExercise.name} uses ${replacementExercise.equipment || 'different equipment'}, which is outside this plan's equipment setup.`,
+    }
+  }
+
+  if (!compatibility.sameCategory) {
+    return {
+      level: 'strong',
+      title: 'This changes the plan target',
+      message: `${originalExercise.name} is a ${originalExercise.category || 'planned'} exercise. ${replacementExercise.name} is a ${replacementExercise.category || 'different'} exercise.`,
+    }
+  }
+
+  if (!compatibility.samePattern && compatibility.primaryOverlap === 0) {
+    return {
+      level: 'mild',
+      title: 'Different movement pattern',
+      message: `${replacementExercise.name} trains a different pattern than ${originalExercise.name}. The plan can still use it, but the day balance may shift.`,
+    }
+  }
+
+  return null
+}
+
+export function getPrioritizedReplacementExercises({
+  plan,
+  day,
+  exercise,
+  exerciseLibrary,
+  query = '',
+  includeOffPlan = false,
+  limit = 12,
+} = {}) {
+  if (!plan || !day || !exercise || !Array.isArray(exerciseLibrary)) return []
+  const form = getFormFromPlan(plan)
+  const dayFocusKey = day.focusKey || FOCUS_KEYS_BY_LABEL[day.focus] || null
+  const allowedLibrary = includeOffPlan
+    ? (exerciseLibrary || []).filter(item => item?.name)
+    : getAllowedLibrary(exerciseLibrary, form)
+  const focusLibrary = includeOffPlan
+    ? allowedLibrary
+    : getFocusCompatibleLibrary(allowedLibrary, dayFocusKey)
+  const normalizedQuery = String(query || '').trim()
+  const originalName = normalizeSearchValue(exercise.name)
+  const originalId = String(exercise.exerciseId ?? exercise.id ?? '')
+  const dayExercises = (day.exercises || []).filter(item => normalizeSearchValue(item.name) !== originalName)
+  const allOtherExercises = (plan.days || []).flatMap(item => item.exercises || []).filter(item => normalizeSearchValue(item.name) !== originalName)
+  const coverage = getCoverageFromDays((plan.days || []).map(item => ({
+    ...item,
+    exercises: (item.exercises || []).filter(ex => normalizeSearchValue(ex.name) !== originalName),
+  })))
+  const options = {
+    role: exercise.role || 'accessory',
+    desiredPattern: exercise.movementPattern || classifyMovementPattern(exercise),
+    form,
+    dayExercises,
+    weekUsedNames: new Set(allOtherExercises.map(item => item.name).filter(Boolean)),
+    muscleCoverage: coverage.muscles,
+    volumeTargets: plan.preferences?.volumeTargets || computeVolumeTargets(form),
+    patternCoverage: coverage.patterns,
+    patternTargets: plan.preferences?.patternTargets || computePatternTargets(form),
+    seedNames: [exercise.name, ...(FOCUS_SLOT_NAMES[dayFocusKey] || [])].filter(Boolean),
+  }
+
+  return getRankedCandidateExercises(focusLibrary, options)
+    .filter(({ exercise: candidate }) => {
+      const candidateId = String(candidate.id ?? '')
+      if (candidateId && originalId && candidateId === originalId) return false
+      if (normalizeSearchValue(candidate.name) === originalName) return false
+      if (!includeOffPlan && dayExercises.some(dayEx => normalizeSearchValue(dayEx.name) === normalizeSearchValue(candidate.name))) return false
+      if (!normalizedQuery) return true
+      return matchesSearchQuery(
+        normalizedQuery,
+        candidate.name,
+        candidate.category,
+        candidate.equipment,
+        (candidate.primary_muscles || []).join(' '),
+        (candidate.secondary_muscles || []).join(' ')
+      )
+    })
+    .map(({ exercise: candidate, score }) => {
+      const warning = getPlanExerciseReplacementWarning(exercise, candidate, plan, day)
+      const compatibility = getReplacementCompatibility(exercise, candidate)
+      const searchBoost = normalizedQuery ? scoreExerciseMatch(normalizedQuery, candidate) : 0
+      const replacementScore = score
+        + (compatibility.sameCategory ? 60 : -80)
+        + (compatibility.samePattern ? 50 : 0)
+        + Math.min(30, compatibility.primaryOverlap * 12)
+        + (isEquipmentAllowed(candidate, normalizeEquipment(plan.equipment)) ? 12 : -28)
+        + searchBoost
+        - (warning?.level === 'strong' ? 40 : warning?.level === 'mild' ? 12 : 0)
+      return {
+        exercise: candidate,
+        score: replacementScore,
+        reason: getReplacementReason(exercise, candidate, warning),
+        warning,
+      }
+    })
+    .sort((a, b) => b.score - a.score || a.exercise.name.localeCompare(b.exercise.name))
+    .slice(0, Math.max(1, Number(limit) || 12))
+}
+
+function buildSubstitutedFrom(exercise) {
+  return {
+    exerciseId: exercise.exerciseId || exercise.id || null,
+    name: exercise.name,
+    category: exercise.category,
+    equipment: exercise.equipment,
+  }
+}
+
+function buildReplacementPlanExercise(originalExercise, replacementExercise, plan, day, exerciseIndex, replacementMode = 'suggested') {
+  const form = getFormFromPlan(plan)
+  const dayFocusKey = day?.focusKey || FOCUS_KEYS_BY_LABEL[day?.focus] || null
+  const originalIsCardio = originalExercise.category === 'Cardio'
+  const replacementIsCardio = replacementExercise.category === 'Cardio'
+  const sameCategory = originalIsCardio === replacementIsCardio
+  const base = getPlanExercise(replacementExercise, form, exerciseIndex, dayFocusKey || undefined, {
+    dayIndex: Math.max(0, (plan.days || []).findIndex(item => String(item.id) === String(day?.id))),
+    durationSeconds: originalExercise.durationSeconds,
+  })
+  const preservedMeta = {
+    substitutedFrom: originalExercise.substitutedFrom || buildSubstitutedFrom(originalExercise),
+    replacementMode: sameCategory ? replacementMode : 'override',
+    rationale: `Substituted for ${originalExercise.name}.`,
+    notes: sameCategory ? originalExercise.notes : 'Manual replacement changes the original plan target.',
+  }
+
+  if (sameCategory && replacementIsCardio) {
+    return {
+      ...base,
+      sets: originalExercise.sets || base.sets,
+      durationSeconds: originalExercise.durationSeconds || base.durationSeconds,
+      restSeconds: originalExercise.restSeconds ?? base.restSeconds,
+      periodizationStyle: originalExercise.periodizationStyle || base.periodizationStyle,
+      intensityTag: originalExercise.intensityTag || base.intensityTag,
+      progressionBias: originalExercise.progressionBias || base.progressionBias,
+      progression: originalExercise.progression || base.progression,
+      ...preservedMeta,
+    }
+  }
+
+  if (sameCategory) {
+    return {
+      ...base,
+      sets: originalExercise.sets || base.sets,
+      reps: originalExercise.reps || base.reps,
+      repRange: originalExercise.repRange || base.repRange,
+      restSeconds: originalExercise.restSeconds ?? base.restSeconds,
+      periodizationStyle: originalExercise.periodizationStyle || base.periodizationStyle,
+      intensityTag: originalExercise.intensityTag || base.intensityTag,
+      progressionBias: originalExercise.progressionBias || base.progressionBias,
+      progression: originalExercise.progression || base.progression,
+      ...preservedMeta,
+    }
+  }
+
+  if (replacementIsCardio) {
+    const sessionMinutes = Number(plan.session_minutes) || DEFAULT_TRAINING_PLAN_FORM.sessionMinutes
+    return {
+      ...base,
+      role: 'cardio',
+      sets: 1,
+      durationSeconds: clamp(Math.round(sessionMinutes * 15), 600, 1200),
+      restSeconds: originalExercise.restSeconds ?? base.restSeconds,
+      progression: base.progression,
+      ...preservedMeta,
+    }
+  }
+
+  const role = originalExercise.role && originalExercise.role !== 'cardio' ? originalExercise.role : 'accessory'
+  const periodization = getExercisePeriodization(form, role, exerciseIndex, replacementExercise, 0, dayFocusKey)
+  const rules = GOAL_SET_RULES[form.goal] || GOAL_SET_RULES.hypertrophy
+  const prescription = getPeriodizedPrescription({
+    sets: Math.max(2, Number(originalExercise.sets) || rules.sets),
+    reps: rules.reps,
+    repRange: rules.repRange,
+    restSeconds: originalExercise.restSeconds ?? rules.restSeconds,
+  }, form, role, periodization)
+  return {
+    ...base,
+    role,
+    sets: prescription.sets,
+    reps: prescription.reps,
+    repRange: prescription.repRange,
+    restSeconds: prescription.restSeconds,
+    periodizationStyle: periodization.style,
+    intensityTag: periodization.intensityTag,
+    progressionBias: periodization.progressionBias,
+    progression: getProgressionForExercise(form, role, periodization),
+    stimulusScore: getStimulusScore(replacementExercise, prescription.sets),
+    ...preservedMeta,
+  }
+}
+
+export function replaceTrainingPlanExercise(plan, dayId, exerciseKey, replacementExercise, { replacementMode = 'suggested' } = {}) {
+  if (!plan || !replacementExercise) return normalizeTrainingPlan(plan)
+  const targetDay = getPlanDayById(plan, dayId)
+  if (!targetDay) return normalizeTrainingPlan(plan)
+  const nextDays = (plan.days || []).map(day => {
+    if (String(day.id) !== String(dayId)) return day
+    let replaced = false
+    const exercises = (day.exercises || []).map((exercise, index) => {
+      const keyMatches = typeof exerciseKey === 'number'
+        ? index === exerciseKey
+        : getPlanExerciseIdentifier(exercise) === String(exerciseKey) || normalizeSearchValue(exercise.name) === normalizeSearchValue(exerciseKey)
+      if (!keyMatches || replaced) return exercise
+      replaced = true
+      return buildReplacementPlanExercise(exercise, replacementExercise, plan, day, index, replacementMode)
+    })
+    return {
+      ...day,
+      exercises: orderPlanExercisesForSession(exercises, day.focusKey),
+      estimatedMinutes: estimatePlanDayMinutes(exercises),
+      quality: scorePlanDayQuality(exercises, plan.session_minutes, day.focusKey),
+    }
+  })
+
+  return normalizeTrainingPlan({ ...plan, days: nextDays })
 }
 
 export function generateTrainingPlan(rawForm, exerciseLibrary = []) {
@@ -1683,6 +2004,7 @@ export function generateTrainingPlan(rawForm, exerciseLibrary = []) {
       adaptiveCoach: {
         enabled: form.adaptiveCoach !== false,
         style: 'guided',
+        autoApply: form.adaptiveCoachAutoApply !== false,
         lastReviewedAt: null,
       },
       volumeTargets,
@@ -1840,6 +2162,7 @@ export function normalizeTrainingPlan(plan) {
       adaptiveCoach: {
         enabled: adaptiveCoach.enabled === true,
         style: adaptiveCoach.style || 'guided',
+        autoApply: adaptiveCoach.autoApply !== false,
         lastReviewedAt: adaptiveCoach.lastReviewedAt || null,
       },
       volumeTargets,

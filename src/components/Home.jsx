@@ -1,4 +1,5 @@
 import { useState, useEffect, useEffectEvent, useLayoutEffect, useRef, useMemo, useCallback } from 'react'
+import { push as pushBack, remove as removeBack } from '../lib/backStack'
 import { localDate } from '../lib/dateUtils'
 import { computeStreak } from '../lib/streakUtils'
 import { useFocusTrap } from '../lib/useFocusTrap'
@@ -417,6 +418,22 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     return () => { contentNode.classList.remove('content-home-locked') }
   }, [isVisible, isPhoneWidth, selectedDay, showWeightDetail, workoutActive, bottomBannerVisible])
 
+  // Register a back-stack handler while a full-screen sub-view is open so the iOS
+  // edge-swipe / Android back gesture closes it (same pattern as Profile). The back
+  // buttons route through window.history.back() so button + swipe run this same close.
+  const hasHomeSubView = Boolean(selectedDay) || showWeightDetail
+  useEffect(() => {
+    if (!hasHomeSubView) return undefined
+    const id = pushBack(() => {
+      setSelectedDay(null)
+      setShowWeightDetail(false)
+      setBwError('')
+      setWeightDeleteError('')
+      setWeightDeleteTargetId(null)
+    })
+    return () => removeBack(id)
+  }, [hasHomeSubView])
+
   function handleDeletedWorkout({ remainingSessionIds = [], dateStr }) {
     setSelectedDay({ sessionIds: remainingSessionIds, dateStr })
     setLoading(true)
@@ -435,7 +452,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     const goalKg = prof?.weight_goal_kg ?? null
     setGoalWeightKg(goalKg)
     if (goalKg !== null) {
-      const unit = prof?.unit_preference || 'kg'
+      const unit = prof?.unit_preference || 'lbs'
       const goalInUnit = unit === 'lbs'
         ? Math.round(goalKg * 2.20462 * 10) / 10
         : Math.round(goalKg * 10) / 10
@@ -454,7 +471,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       setTrendModeConfig({ rateKgPerWeek: trendRate, anchorDate: trendAnchorDate, anchorWeightKg: trendAnchorWeightKg })
       setTrendModeInput(trendMode)
       if (trendMode === 'custom') {
-        const displayUnit = prof?.unit_preference || 'kg'
+        const displayUnit = prof?.unit_preference || 'lbs'
         setTrendRateInput(String(displayUnit === 'lbs'
           ? Math.round(trendRate * 2.20462 * 100) / 100
           : Math.round(trendRate * 100) / 100))
@@ -900,7 +917,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
   async function logWeightFromHome() {
     const val = parseFloat(bwInput)
-    const unit = weightSheetUnit || profile?.unit_preference || 'kg'
+    const unit = weightSheetUnit || profile?.unit_preference || 'lbs'
     if (bwSaving) return
     const weightError = validateBodyweight(bwInput, unit)
     if (weightError) { setBwError(weightError); return }
@@ -985,7 +1002,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     if (goalSaving) return
     const trimmed = goalInput.trim()
     const parsed = trimmed === '' ? null : parseFloat(trimmed)
-    const unit = weightSheetUnit || profile?.unit_preference || 'kg'
+    const unit = weightSheetUnit || profile?.unit_preference || 'lbs'
     if (parsed !== null) {
       const goalError = validateBodyweight(goalInput, unit, { label: 'Goal weight' })
       if (goalError) { setBwError(goalError); return }
@@ -1037,8 +1054,14 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
     if (trendModeInput === 'custom') {
       const parsed = parseFloat(trendRateInput)
       if (!Number.isFinite(parsed)) { setBwError('Enter a valid rate (e.g. 0.5 or -0.5).'); return }
-      const unit = weightSheetUnit || profile?.unit_preference || 'kg'
+      const unit = weightSheetUnit || profile?.unit_preference || 'lbs'
       rateKgPerWeek = unit === 'lbs' ? parsed / 2.20462 : parsed
+      const maxRateKg = VALIDATION_LIMITS.weightTrendRateMaxKgPerWeek
+      if (Math.abs(rateKgPerWeek) > maxRateKg) {
+        const maxDisplay = unit === 'lbs' ? Math.round(maxRateKg * 2.20462) : maxRateKg
+        setBwError(`Pace can't exceed ${maxDisplay} ${unit}/week.`)
+        return
+      }
     } else {
       rateKgPerWeek = getPresetRate(trendModeInput) ?? 0
     }
@@ -1137,7 +1160,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
 
       const latestRemainingLog = latestRows?.[0] ?? null
       const nextBodyweight = latestRemainingLog
-        ? convertWeight(latestRemainingLog.weight, latestRemainingLog.unit || profile?.unit_preference || 'kg', profile?.unit_preference || 'kg')
+        ? convertWeight(latestRemainingLog.weight, latestRemainingLog.unit || profile?.unit_preference || 'lbs', profile?.unit_preference || 'lbs')
         : null
 
       const { error: profileError } = await supabase.from('profiles').update({ bodyweight: nextBodyweight }).eq('id', userId)
@@ -1163,7 +1186,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const burnComplete = !noGoalSet && burnedToday >= effectiveBurnGoal
   const burnDash = burnPct * BURN_C
   const calBarWidth = `${barsAnimatedIn ? calPct * 100 : 0}%`
-  const activeWeightUnit = weightSheetUnit || profile?.unit_preference || 'kg'
+  const activeWeightUnit = weightSheetUnit || profile?.unit_preference || 'lbs'
   const homeChartHeight = isPhoneWidth ? Math.round(Math.min(188, Math.max(108, viewportHeight * 0.202))) : 388
   const homeChartTickCount = 5
   const homeChartPadding = isPhoneWidth ? 'tight-mobile' : 'tight'
@@ -1183,7 +1206,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const displayCurrentBodyweight = profile?.bodyweight !== null && profile?.bodyweight !== undefined
     ? Math.round(convertWeight(profile.bodyweight, profile?.unit_preference || activeWeightUnit, activeWeightUnit) * 10) / 10
     : null
-  const calendarRefreshKey = `${weightLogs.length}:${weightLogs.at(-1)?.loggedAt || ''}:${todayNut.calories}:${todayNut.protein}:${todayNut.carbs}:${todayNut.fat}`
+  const calendarRefreshKey = `${workoutRefreshTick}:${weightLogs.length}:${weightLogs.at(-1)?.loggedAt || ''}:${todayNut.calories}:${todayNut.protein}:${todayNut.carbs}:${todayNut.fat}`
   const burnWidgetIsMuscle = burnWidgetSide === 'muscle-front' || burnWidgetSide === 'muscle-back'
 
   useEffect(() => {
@@ -1218,7 +1241,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
           setLoading(true)
           load()
         }}
-        onBack={() => setSelectedDay(null)}
+        onBack={() => window.history.back()}
       />
     )
   }
@@ -1226,12 +1249,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   if (showWeightDetail) {
     return (
       <BodyWeightDetail
-        onBack={() => {
-          setShowWeightDetail(false)
-          setBwError('')
-          setWeightDeleteError('')
-          setWeightDeleteTargetId(null)
-        }}
+        onBack={() => window.history.back()}
         currentWeight={displayCurrentBodyweight}
         activeUnit={activeWeightUnit}
         inputValue={bwInput}

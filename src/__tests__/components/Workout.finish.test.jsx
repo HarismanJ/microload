@@ -66,6 +66,7 @@ const isPremiumSyncMock = vi.hoisted(() => vi.fn(() => true))
  * draft via mockReturnValueOnce without touching other tests.
  */
 const readDraftMock = vi.hoisted(() => vi.fn(() => ({ draft: null, expiredSessionId: null })))
+const clearStoredWorkoutDraftMock = vi.hoisted(() => vi.fn())
 
 /**
  * getAnchors — hoisted so Test 5 can supply exercise-specific anchors that
@@ -146,7 +147,7 @@ vi.mock('../../lib/workoutDraft.js',        () => ({
   // default → null draft → no "Resume Workout" prompt → "Empty Workout" button visible
   readStoredWorkoutDraft:  readDraftMock,
   writeStoredWorkoutDraft: vi.fn(),
-  clearStoredWorkoutDraft: vi.fn(),
+  clearStoredWorkoutDraft: clearStoredWorkoutDraftMock,
 }))
 
 vi.mock('../../lib/battles.js',             () => ({
@@ -239,6 +240,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import Workout from '../../components/Workout.jsx'
 import { UserProvider } from '../../context/UserContext.jsx'
 import { getTierIdx } from '../../lib/strengthStandards'
+import { fetchRecentSessionsWithStatus } from '../../lib/progressiveOverload'
 
 // ─── 4. Helpers ───────────────────────────────────────────────────────────────
 
@@ -292,7 +294,7 @@ async function openFinishDialog() {
  * home screen shows the "Resume" button.
  *
  * resumeSavedWorkout() verifies the session still exists via
- *   supabase.from('workout_sessions').select('id').eq().eq().is('finished_at', null).maybeSingle()
+ *   supabase.from('workout_sessions').select('id, finished_at').eq().eq().maybeSingle()
  * The _responses['workout_sessions'] entry supplies the maybeSingle result.
  */
 async function startFromDraft() {
@@ -379,6 +381,57 @@ describe('Workout finish flow', () => {
 
     // No error message anywhere
     expect(screen.queryByText(/Could not save workout/i)).toBeNull()
+  })
+
+  it('refreshes active progression history when workoutHistoryRefreshTick changes', async () => {
+    const BENCH_ID = 88
+    const exerciseDraft = {
+      sessionId: 'test-session-id',
+      startedAt: Date.now() - 120_000,
+      savedAt: Date.now() - 10_000,
+      defaultUnit: 'kg',
+      defaultRest: 90,
+      exerciseNotes: {},
+      notesOpen: {},
+      workoutExercises: [{
+        id: BENCH_ID,
+        name: 'Bench Press',
+        category: 'Strength',
+        unit: 'kg',
+        equipment: 'Barbell',
+        primary_muscles: ['Chest'],
+        secondary_muscles: [],
+        sets: [{ reps: '', weight: '', done: false, setType: 'normal' }],
+      }],
+    }
+
+    readDraftMock.mockReturnValue({ draft: exerciseDraft, expiredSessionId: null })
+    fetchRecentSessionsWithStatus.mockResolvedValue({
+      sessionsByExercise: { [BENCH_ID]: [] },
+      statusByExercise: { [BENCH_ID]: 'empty' },
+    })
+
+    const { rerender, onFinish } = renderWorkout({ workoutHistoryRefreshTick: 0 })
+    await startFromDraft()
+
+    await waitFor(() => {
+      expect(fetchRecentSessionsWithStatus).toHaveBeenCalledTimes(1)
+    })
+    const adaptationCallsBefore = supabaseMock.from.mock.calls.filter(([table]) => table === 'user_training_plan_adaptations').length
+
+    rerender(
+      <UserProvider user={TEST_USER}>
+        <div className="app">
+          <Workout isVisible={true} onFinish={onFinish} workoutHistoryRefreshTick={1} />
+        </div>
+      </UserProvider>
+    )
+
+    await waitFor(() => {
+      expect(fetchRecentSessionsWithStatus).toHaveBeenCalledTimes(2)
+    })
+    expect(supabaseMock.from.mock.calls.filter(([table]) => table === 'user_training_plan_adaptations').length)
+      .toBeGreaterThan(adaptationCallsBefore)
   })
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────
@@ -602,6 +655,137 @@ describe('Workout finish flow', () => {
 
     // Workout completes normally after correct payload delivery
     await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1))
+  })
+
+  it('finishes a resumed cardio draft with zero reps and duration seconds', async () => {
+    const CARDIO_ID = 88
+    const exerciseDraft = {
+      sessionId: 'test-session-id',
+      startedAt: Date.now() - 120_000,
+      savedAt: Date.now() - 10_000,
+      defaultUnit: 'kg',
+      defaultRest: 90,
+      exerciseNotes: {},
+      notesOpen: {},
+      workoutExercises: [{
+        id: CARDIO_ID,
+        name: 'Running',
+        category: 'Cardio',
+        unit: 'kg',
+        equipment: 'Bodyweight',
+        primary_muscles: ['Cardio'],
+        secondary_muscles: [],
+        sets: [{
+          duration: 900,
+          done: true,
+          completedAt: new Date().toISOString(),
+        }],
+      }],
+    }
+
+    readDraftMock.mockReturnValue({ draft: exerciseDraft, expiredSessionId: null })
+
+    const { onFinish } = renderWorkout()
+
+    await startFromDraft()
+    await openFinishDialog()
+    fireEvent.click(screen.getByText('Finish'))
+
+    await waitFor(() => expect(finishAtomicMock).toHaveBeenCalledTimes(1))
+    const [, payload] = finishAtomicMock.mock.calls[0]
+
+    expect(payload.sets).toHaveLength(1)
+    expect(payload.sets[0]).toEqual(expect.objectContaining({
+      exercise_id: CARDIO_ID,
+      reps: 0,
+      weight: 0,
+      duration_seconds: 900,
+    }))
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText(/Could not save workout/i)).toBeNull()
+  })
+
+  it('clears a resumed solo draft when its server session was already finished', async () => {
+    const exerciseDraft = {
+      sessionId: 'test-session-id',
+      startedAt: Date.now() - 120_000,
+      savedAt: Date.now() - 10_000,
+      defaultUnit: 'kg',
+      defaultRest: 90,
+      exerciseNotes: {},
+      notesOpen: {},
+      workoutExercises: [{
+        id: 42,
+        name: 'Barbell Squat',
+        category: 'Strength',
+        unit: 'kg',
+        equipment: 'Barbell',
+        primary_muscles: ['Quadriceps'],
+        secondary_muscles: [],
+        sets: [{ reps: 5, weight: 100, done: true, setType: 'normal' }],
+      }],
+    }
+
+    readDraftMock.mockReturnValue({ draft: exerciseDraft, expiredSessionId: null })
+    supabaseMock._responses.workout_sessions = {
+      data: { id: 'test-session-id', finished_at: '2026-06-01T12:00:00.000Z' },
+      error: null,
+    }
+
+    const { onFinish } = renderWorkout()
+
+    await screen.findByText('Resume')
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+
+    await screen.findByText('That workout was already saved. Your local resume copy was cleared.')
+    expect(clearStoredWorkoutDraftMock).toHaveBeenCalledWith(TEST_USER.id)
+    expect(screen.queryByText('Finish Workout')).toBeNull()
+    expect(finishAtomicMock).not.toHaveBeenCalled()
+    expect(onFinish).not.toHaveBeenCalled()
+  })
+
+  it('unlocks exact-name OHP achievements when finishing a qualifying press workout', async () => {
+    const PRESS_ID = 77
+
+    readDraftMock.mockReturnValue({
+      draft: {
+        sessionId: 'test-session-id',
+        startedAt: Date.now() - 120_000,
+        savedAt: Date.now() - 10_000,
+        defaultUnit: 'kg',
+        defaultRest: 90,
+        exerciseNotes: {},
+        notesOpen: {},
+        workoutExercises: [{
+          id: PRESS_ID,
+          name: 'Military Press',
+          category: 'Strength',
+          unit: 'kg',
+          equipment: 'Barbell',
+          primary_muscles: ['Shoulders'],
+          secondary_muscles: [],
+          sets: [{
+            reps: 1,
+            weight: 60,
+            done: true,
+            completedAt: new Date().toISOString(),
+            setType: 'normal',
+            restBeforeSeconds: 90,
+          }],
+        }],
+      },
+      expiredSessionId: null,
+    })
+
+    const { onFinish } = renderWorkout()
+
+    await startFromDraft()
+    await openFinishDialog()
+    fireEvent.click(screen.getByText('Finish'))
+
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1))
+    const [summary] = onFinish.mock.calls[0]
+    expect(summary.newAchievements.map(a => a.id)).toContain('ohp_1p')
   })
 
   it('skips rank-ups and rank-state updates when profile bodyweight is missing', async () => {

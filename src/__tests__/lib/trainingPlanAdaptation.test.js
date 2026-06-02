@@ -1,6 +1,9 @@
 import {
   applyPlanAdaptation,
   buildPlanAdaptation,
+  supersedeSameDayPending,
+  dismissSupersededSameDayAdaptations,
+  resolveAdaptiveCoachMode,
 } from '../../lib/trainingPlanAdaptation.js'
 
 const NOW = new Date('2026-05-14T12:00:00.000Z')
@@ -58,6 +61,15 @@ function makeAdaptation(overrides = {}) {
     ...overrides,
   }
 }
+
+describe('resolveAdaptiveCoachMode', () => {
+  it('gates generation on coach enabled and defaults auto-apply on only when enabled', () => {
+    expect(resolveAdaptiveCoachMode()).toEqual({ generate: false, autoApply: false })
+    expect(resolveAdaptiveCoachMode({ enabled: false, autoApply: true })).toEqual({ generate: false, autoApply: false })
+    expect(resolveAdaptiveCoachMode({ enabled: true })).toEqual({ generate: true, autoApply: true })
+    expect(resolveAdaptiveCoachMode({ enabled: true, autoApply: false })).toEqual({ generate: true, autoApply: false })
+  })
+})
 
 describe('buildPlanAdaptation', () => {
   it('returns null for missing plan/day identity or no completed plan exercises', () => {
@@ -488,5 +500,73 @@ describe('buildPlanAdaptation parseRepRange object and numeric inputs', () => {
     })
     // String('10') → no regex → Number(10) = 10 > 0 → { low: 10, high: 10 } → all hit top
     expect(adaptation.metrics).toMatchObject({ targetableSets: 3, hitTopRangeSets: 3 })
+  })
+})
+
+describe('supersedeSameDayPending', () => {
+  const inserted = { id: 'new-1', plan_id: 'plan-1', plan_day_id: 'day-1', status: 'pending' }
+
+  it('drops a prior pending row for the same plan + day and puts the inserted row first', () => {
+    const prior = { id: 'old-1', plan_id: 'plan-1', plan_day_id: 'day-1', status: 'pending' }
+    expect(supersedeSameDayPending([prior], inserted)).toEqual([inserted])
+  })
+
+  it('keeps pending rows for a different day in the same plan', () => {
+    const otherDay = { id: 'old-2', plan_id: 'plan-1', plan_day_id: 'day-2', status: 'pending' }
+    expect(supersedeSameDayPending([otherDay], inserted)).toEqual([inserted, otherDay])
+  })
+
+  it('keeps pending rows for a different plan even with the same day id', () => {
+    const otherPlan = { id: 'old-3', plan_id: 'plan-2', plan_day_id: 'day-1', status: 'pending' }
+    expect(supersedeSameDayPending([otherPlan], inserted)).toEqual([inserted, otherPlan])
+  })
+
+  it('de-dupes the inserted row when an entry with its id already exists', () => {
+    const stale = { id: 'old-1', plan_id: 'plan-1', plan_day_id: 'day-1', status: 'pending' }
+    const result = supersedeSameDayPending([{ ...inserted }, stale], inserted)
+    expect(result).toEqual([inserted])
+    expect(result.filter(item => item.id === inserted.id)).toHaveLength(1)
+  })
+
+  it('returns the list unchanged when there is no inserted row', () => {
+    const list = [{ id: 'a', plan_id: 'plan-1', plan_day_id: 'day-1' }]
+    expect(supersedeSameDayPending(list, null)).toBe(list)
+    expect(supersedeSameDayPending(list, undefined)).toBe(list)
+  })
+
+  it('tolerates a non-array first argument', () => {
+    expect(supersedeSameDayPending(undefined, inserted)).toEqual([inserted])
+  })
+})
+
+describe('dismissSupersededSameDayAdaptations', () => {
+  function makeFakeSupabase() {
+    const calls = { table: null, payload: null, eq: [], neq: null }
+    const chain = {
+      update: vi.fn(payload => { calls.payload = payload; return chain }),
+      eq: vi.fn((col, val) => { calls.eq.push([col, val]); return chain }),
+      neq: vi.fn((col, val) => { calls.neq = [col, val]; return chain }),
+    }
+    const supabase = { from: vi.fn(table => { calls.table = table; return chain }) }
+    return { supabase, calls }
+  }
+
+  it('builds a dismiss update scoped to the same plan + day, excluding the inserted row', () => {
+    const { supabase, calls } = makeFakeSupabase()
+    dismissSupersededSameDayAdaptations(supabase, {
+      userId: 'user-1', planId: 'plan-1', planDayId: 'day-1', exceptId: 'new-1',
+    })
+    expect(calls.table).toBe('user_training_plan_adaptations')
+    expect(calls.payload).toMatchObject({ status: 'dismissed' })
+    expect(typeof calls.payload.resolved_at).toBe('string')
+    // Only same plan + same day + still-pending rows are targeted.
+    expect(calls.eq).toEqual([
+      ['user_id', 'user-1'],
+      ['plan_id', 'plan-1'],
+      ['plan_day_id', 'day-1'],
+      ['status', 'pending'],
+    ])
+    // The freshly inserted row is excluded so it stays pending.
+    expect(calls.neq).toEqual(['id', 'new-1'])
   })
 })

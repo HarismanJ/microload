@@ -3,6 +3,7 @@ import { push as pushBack, remove as removeBack } from '../lib/backStack'
 import * as Sentry from '@sentry/react'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { createPortal } from 'react-dom'
+import { AlertTriangle, Check, RefreshCw, Search } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { createCustomExercise, fetchExercises } from '../data/exercises'
 import { fetchExerciseRankStates, mapExerciseRankStates } from '../data/rankStates'
@@ -98,12 +99,15 @@ import {
   TRAINING_PLAN_SPLITS,
   TRAINING_PLAN_WEEKDAYS,
   generateTrainingPlan,
+  getPlanExerciseReplacementWarning,
+  getPrioritizedReplacementExercises,
   getTrainingPlanGoalLabel,
   normalizeTrainingPlan,
   normalizeTrainingPlanForm,
+  replaceTrainingPlanExercise,
   validateTrainingPlanForm,
 } from '../lib/trainingPlanGenerator'
-import { applyPlanAdaptation, buildPlanAdaptation } from '../lib/trainingPlanAdaptation'
+import { applyPlanAdaptation, buildPlanAdaptation, supersedeSameDayPending, dismissSupersededSameDayAdaptations, resolveAdaptiveCoachMode } from '../lib/trainingPlanAdaptation'
 import {
   applyScheduledDeloadToPlanDay,
   applyScheduledDeloadToSuggestion,
@@ -118,6 +122,19 @@ const formatTrainingPlanDuration = (weeks) =>
   Number(weeks) >= VALIDATION_LIMITS.trainingPlanDurationWeeksMax ? 'Ongoing' : `${weeks} weeks`
 const formatTrainingPlanDurationShort = (weeks) =>
   Number(weeks) >= VALIDATION_LIMITS.trainingPlanDurationWeeksMax ? 'Ongoing' : `${weeks}w`
+const MAX_SAVED_TRAINING_PLANS = 5
+const MAX_SAVED_ROUTINES = 15
+const TRAINING_PLAN_LIMIT_MESSAGE = `You can save up to ${MAX_SAVED_TRAINING_PLANS} training plans. Delete an old plan to save this one.`
+const ROUTINE_LIMIT_MESSAGE = `You can save up to ${MAX_SAVED_ROUTINES} routines. Delete an old routine to save this one.`
+const TRAINING_PLAN_LIMIT_ERROR = 'Saved training plan limit reached'
+const ROUTINE_LIMIT_ERROR = 'Saved routine limit reached'
+
+function getSavedItemLimitMessage(error, fallback) {
+  const message = String(error?.message || '')
+  if (message.includes(TRAINING_PLAN_LIMIT_ERROR)) return TRAINING_PLAN_LIMIT_MESSAGE
+  if (message.includes(ROUTINE_LIMIT_ERROR)) return ROUTINE_LIMIT_MESSAGE
+  return friendlyError(error, fallback)
+}
 
 function getLoggedSetEstimatedOrmKg({ weight, reps, unit, equipment, bodyweightKg }) {
   const estimatedOrm = calculateSetEstimatedOrm({ weight, reps, unit, equipment, bodyweightKg })
@@ -273,7 +290,7 @@ const PLAN_BUILDER_HELP = {
   ],
   equipment: [
     'What it means: What equipment the plan generator is allowed to use.',
-    'The plan will avoid unselected equipment. Cardio Machines enables machine-based cardio options.',
+    'The plan will avoid unselected equipment. EZ Bar enables curl-bar movements, and Cardio Machines enables machine-based cardio options.',
     'How to answer: Select only equipment you reliably have access to.',
   ],
   focusAreas: [
@@ -351,6 +368,56 @@ function PlanInfoLabel({ label, helpKey, onOpen }) {
       </button>
     </div>
   )
+}
+
+const BATTLE_METRIC_HELP = {
+  strength_volume_bw: 'Effective Volume / BW compares total strength training work normalized by bodyweight, so heavier lifting gets credit without ignoring lifter size.',
+  top_set_strength_bw: 'Top Set Strength / BW compares your strongest completed strength set normalized by bodyweight.',
+  shared_or_matched_strength_bw: 'Shared/Matched Top Set / BW compares top strength on the same lift, or a close name match, when both lifters log one.',
+  strength_density: 'Strength Density compares bodyweight-normalized strength work per minute.',
+  cardio_met_minutes: 'Cardio MET-Minutes estimates conditioning work from cardio intensity and time.',
+  cardio_duration: 'Cardio Duration compares total completed cardio time.',
+  cardio_density: 'Cardio Density compares cardio intensity per minute.',
+  overall_density: 'Overall Work Density compares combined strength and cardio work per minute.',
+  completion_breadth: 'Completion Breadth gives a small bonus for logging more completed sets and exercises.',
+}
+
+function getBattleScoreInfoItems(projection) {
+  const metrics = projection?.metrics || []
+  const items = [
+    'The live score is weighted out of 100. Each metric gives points based on your value compared with your opponent.',
+    'Unavailable metrics are ignored for now, and their weight is redistributed across the metrics that both lifters have data for.',
+    'Very close metric values count as a tie for that metric, even if the displayed numbers are not exactly identical.',
+  ]
+
+  for (const metric of metrics) {
+    const weight = Number(metric.effectiveWeight ?? metric.weight)
+    const weightText = Number.isFinite(weight) && weight > 0 ? ` (${Math.round(weight)} pts right now)` : ''
+    const rawText = metric.available
+      ? ` Raw values: you ${formatBattleMetricValue(metric, metric.yourValue)}, them ${formatBattleMetricValue(metric, metric.opponentValue)}.`
+      : ' Raw values: waiting for both lifters to log enough data.'
+    const help = BATTLE_METRIC_HELP[metric.id] || metric.unavailableText || 'This metric compares both lifters on the labeled battle category.'
+    items.push(`${metric.label}${weightText}: ${help}${rawText}`)
+  }
+
+  return items
+}
+
+function formatBattleMetricValue(metric, value) {
+  if (value === null || value === undefined) return '—'
+  const suffix = metric.display?.includes('min') && !metric.display?.includes('/')
+    ? ''
+    : metric.display?.includes('MET')
+      ? ''
+      : metric.id === 'completion_breadth'
+        ? ''
+        : 'x'
+  return `${Number(value).toFixed(2)}${suffix}`
+}
+
+function formatBattleMetricPoints(value) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? `${Math.round(numeric)} pts` : '—'
 }
 
 function getPlanDetailSplitInfo(label, rationale) {
@@ -590,7 +657,9 @@ export default function Workout({
   onRequestLogBodyweight,
   weightRefreshTick = 0,
   profileRefreshTick = 0,
+  workoutHistoryRefreshTick = 0,
   isPremium = false,
+  trainingLoadAdvisory = null,
 }) {
   const userId = useCurrentUserId()
   const [activeWorkout, setActiveWorkout] = useState(false)
@@ -637,7 +706,7 @@ export default function Workout({
   const [recentSessionsMap, setRecentSessionsMap] = useState({})
   const [historyStatusMap, setHistoryStatusMap] = useState({})
   const [plateCalc, setPlateCalc] = useState(null) // { exId, setIndex } | null
-  const [defaultUnit, setDefaultUnit] = useState('kg')
+  const [defaultUnit, setDefaultUnit] = useState('lbs')
   const workoutStartRef = useRef(null) // absolute timestamp when workout started
   const startTemplateRef = useRef(null)
   const pendingPlanStartRef = useRef(null) // { plan, day, routine, unlockProgression }
@@ -717,6 +786,7 @@ export default function Workout({
   const [planAdGateLoading, setPlanAdGateLoading] = useState(false)
   const [showPlanPaywall, setShowPlanPaywall] = useState(false)
   const [planAdaptations, setPlanAdaptations] = useState([])
+  const [applyingAdaptationId, setApplyingAdaptationId] = useState(null)
   const [viewingTrainingPlanId, setViewingTrainingPlanId] = useState(null)
   const [showPlanBuilder, setShowPlanBuilder] = useState(false)
   const [planInfoModal, setPlanInfoModal] = useState(null)
@@ -726,6 +796,12 @@ export default function Workout({
   const [editingPlanId, setEditingPlanId] = useState(null)
   const [planError, setPlanError] = useState('')
   const [savingPlan, setSavingPlan] = useState(false)
+  const [savingPlanPreferenceId, setSavingPlanPreferenceId] = useState(null)
+  const [planReplacement, setPlanReplacement] = useState(null) // { planId, dayId, exerciseIndex }
+  const [planReplacementSearch, setPlanReplacementSearch] = useState('')
+  const [selectedPlanReplacement, setSelectedPlanReplacement] = useState(null) // { exercise, source, reason, warning }
+  const [savingPlanReplacement, setSavingPlanReplacement] = useState(false)
+  const [planReplacementWarning, setPlanReplacementWarning] = useState(null)
   const [suggestionFlashKey, setSuggestionFlashKey] = useState(null)
   const [appliedSuggestionMap, setAppliedSuggestionMap] = useState({})
   const [progressionUnlocked, setProgressionUnlocked] = useState(() => {
@@ -736,6 +812,7 @@ export default function Workout({
   const [progressionAdGateLoading, setProgressionAdGateLoading] = useState(false)
   const [showProgressionPaywall, setShowProgressionPaywall] = useState(false)
   const [planStartLoading, setPlanStartLoading] = useState(false)
+  const [startingPlanDayKey, setStartingPlanDayKey] = useState(null)
   const [customIncrements, setCustomIncrements] = useState(() => getCustomIncrements())
   const [startingWeights, setStartingWeights] = useState(() => getCustomStartingWeights())
   const [openSetType, setOpenSetType] = useState(null) // { key, exId, setIdx }
@@ -827,7 +904,7 @@ export default function Workout({
         )
         setExerciseLibrary(libraryWithPrefs)
         setDefaultRest(prof?.default_rest_seconds ?? 90)
-        setDefaultUnit(prof?.unit_preference || 'kg')
+        setDefaultUnit(prof?.unit_preference || 'lbs')
         setUserBodyweightKg(getProfileBodyweightKg(prof))
         setUserGender(prof?.gender || 'male')
         setUserRoutines(routines || [])
@@ -890,7 +967,7 @@ export default function Workout({
         .single()
       if (cancelled || !prof) return
       setDefaultRest(prof.default_rest_seconds ?? 90)
-      setDefaultUnit(prof.unit_preference || 'kg')
+      setDefaultUnit(prof.unit_preference || 'lbs')
       setUserBodyweightKg(getProfileBodyweightKg(prof))
       setUserGender(prof.gender || 'male')
     })()
@@ -1201,7 +1278,7 @@ export default function Workout({
         return
       }
       setProgressionUnlocked(true)
-      try { localStorage.setItem('liftlog:progression-unlocked', '1') } catch {}
+      try { localStorage.setItem('liftlog:progression-unlocked', '1') } catch { /* storage may be unavailable */ }
       performStartWorkout()
     })
   }, [performStartWorkout]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1476,6 +1553,24 @@ export default function Workout({
     })
   }, [])
 
+  const refreshWorkoutHistoryCaches = useEffectEvent(() => {
+    clearProgressionHistoryForExercises(workoutExercises)
+    if (activeWorkout && userId && sessionId && workoutExercises.length > 0) {
+      loadRecentExerciseHistory(workoutExercises, userId, sessionId)
+    }
+    if (userId && userTrainingPlans.length > 0) {
+      loadPlanProgress(userId, userTrainingPlans)
+    }
+    if (userId) {
+      loadPlanAdaptations(userId)
+    }
+  })
+
+  useEffect(() => {
+    if (workoutHistoryRefreshTick === 0) return
+    refreshWorkoutHistoryCaches()
+  }, [workoutHistoryRefreshTick])
+
   const progressionMap = useMemo(() => {
     const nextMap = {}
 
@@ -1572,7 +1667,12 @@ export default function Workout({
         : prevSet.unit === 'lbs'
           ? Math.round(prevSet.weight * 0.453592 * 10) / 10
           : Math.round(prevSet.weight * 2.20462 * 10) / 10
-      return { ...ex, sets: ex.sets.map((s, i) => i === 0 ? { ...s, weight: String(weight), reps: String(prevSet.reps) } : s) }
+      return {
+        ...ex,
+        sets: ex.sets.map((s, i) => i === 0
+          ? { ...s, weight: String(weight), reps: String(prevSet.reps), ...(prevSet.setType === 'warmup' ? { setType: 'warmup' } : {}) }
+          : s),
+      }
     }))
   }, [prevSetsMap])
 
@@ -1736,15 +1836,19 @@ export default function Workout({
     try {
       const { data: sessionRow, error } = await supabase
         .from('workout_sessions')
-        .select('id')
+        .select('id, finished_at')
         .eq('id', savedBattleWorkoutDraft.sessionId)
         .eq('user_id', userId)
-        .is('finished_at', null)
         .maybeSingle()
 
       if (error || !sessionRow) {
         clearBattleWorkoutDraft()
         setBattleSyncError('Your shared workout could not be resumed.')
+        return
+      }
+      if (sessionRow.finished_at) {
+        clearBattleWorkoutDraft()
+        setBattleSyncError('That workout was already saved. Your local resume copy was cleared.')
         return
       }
 
@@ -1802,15 +1906,19 @@ export default function Workout({
     try {
       const { data: sessionRow, error } = await supabase
         .from('workout_sessions')
-        .select('id')
+        .select('id, finished_at')
         .eq('id', savedWorkoutDraft.sessionId)
         .eq('user_id', userId)
-        .is('finished_at', null)
         .maybeSingle()
 
       if (error || !sessionRow) {
         clearWorkoutDraft()
         setBattleSyncError('Your saved workout could not be resumed.')
+        return
+      }
+      if (sessionRow.finished_at) {
+        clearWorkoutDraft()
+        setBattleSyncError('That workout was already saved. Your local resume copy was cleared.')
         return
       }
 
@@ -1965,7 +2073,7 @@ export default function Workout({
     }
     setActiveWorkout(false)
     setProgressionUnlocked(isPremiumSync())
-    try { localStorage.removeItem('liftlog:progression-unlocked') } catch {}
+    try { localStorage.removeItem('liftlog:progression-unlocked') } catch { /* storage may be unavailable */ }
     setWorkoutExercises([])
     clearAppliedSuggestion()
     setSessionId(null)
@@ -2264,7 +2372,12 @@ export default function Workout({
     const newSessionCount = prevSessionCount_ + 1
 
     for (const a of ACHIEVEMENTS) {
-      if (a.match) {
+      if (a.matchNames) {
+        const nameSet = new Set(a.matchNames)
+        const prevBest = Object.entries(prevOrmByName).filter(([n]) => nameSet.has(n)).reduce((m, [, v]) => Math.max(m, v), 0)
+        const newBest  = Object.entries(newOrmByName).filter(([n]) => nameSet.has(n)).reduce((m, [, v]) => Math.max(m, v), 0)
+        if (prevBest < a.kgTarget && newBest >= a.kgTarget) newAchievements.push(a)
+      } else if (a.match) {
         const prevBest = Object.entries(prevOrmByName).filter(([n]) => n.includes(a.match)).reduce((m, [, v]) => Math.max(m, v), 0)
         const newBest  = Object.entries(newOrmByName).filter(([n]) => n.includes(a.match)).reduce((m, [, v]) => Math.max(m, v), 0)
         if (prevBest < a.kgTarget && newBest >= a.kgTarget) newAchievements.push(a)
@@ -2314,6 +2427,7 @@ export default function Workout({
       ? applyScheduledDeloadToPlanDay(completedPlanDay, sourcePlan.week)
       : completedPlanDay
     let planCoaching = null
+    let coachAutoApplied = false
     let exerciseProgress = []
 
     if (sessionId) {
@@ -2425,14 +2539,18 @@ export default function Workout({
       })
 
       if (completedPlan && completedPlanDayForAdaptation) {
-        const adaptation = buildPlanAdaptation({
-          plan: completedPlan,
+        // List-loaded plans don't carry preferences, so resolve them to read the coach
+        // settings. Generation (and auto-apply below) only run when the coach is enabled.
+        const planWithPrefs = await ensurePlanPreferences(completedPlan)
+        const { generate, autoApply } = resolveAdaptiveCoachMode(planWithPrefs.preferences?.adaptiveCoach)
+        const adaptation = generate ? buildPlanAdaptation({
+          plan: planWithPrefs,
           day: completedPlanDayForAdaptation,
           exercises: exercisesOverride,
           durationSeconds: seconds,
           sessionId,
           planWeek: sourcePlan.week,
-        })
+        }) : null
         if (adaptation) {
           planCoaching = adaptation
           const { data: insertedAdaptation, error: adaptationError } = await supabase
@@ -2453,7 +2571,32 @@ export default function Workout({
             .single()
           if (!adaptationError) {
             planCoaching = insertedAdaptation
-            setPlanAdaptations(prev => [insertedAdaptation, ...prev.filter(item => item.id !== insertedAdaptation.id)])
+            setPlanAdaptations(prev => supersedeSameDayPending(prev, insertedAdaptation))
+            // Newest suggestion wins: dismiss any older still-pending suggestion for the
+            // same plan day so Coach Review never stacks stale/contradictory cards.
+            // Best-effort — if this cleanup fails we keep the older row (degrades to the
+            // prior accumulate behavior; no data loss).
+            await dismissSupersededSameDayAdaptations(supabase, {
+              userId,
+              planId: insertedAdaptation.plan_id,
+              planDayId: insertedAdaptation.plan_day_id,
+              exceptId: insertedAdaptation.id,
+            })
+            // Auto-apply mode: apply the suggestion to the plan immediately and mark it
+            // applied, so the summary shows the applied screen and no pending card lingers.
+            if (autoApply) {
+              const nextPlan = normalizeTrainingPlan(applyPlanAdaptation(planWithPrefs, insertedAdaptation))
+              const { error: applyError } = await supabase
+                .from('user_training_plans')
+                .update({ preferences: nextPlan.preferences, days: nextPlan.days })
+                .eq('id', planWithPrefs.id)
+                .eq('user_id', userId)
+              if (!applyError) {
+                setUserTrainingPlans(prev => prev.map(p => p.id === planWithPrefs.id ? nextPlan : p))
+                await updateAdaptationStatus(insertedAdaptation, 'applied')
+                coachAutoApplied = true
+              }
+            }
           } else if (!isMissingPlanPersistence(adaptationError)) {
             setPlanError(friendlyError(adaptationError, 'Could not save plan coaching.'))
           }
@@ -2596,7 +2739,7 @@ export default function Workout({
 
     setActiveWorkout(false)
     setProgressionUnlocked(isPremiumSync())
-    try { localStorage.removeItem('liftlog:progression-unlocked') } catch {}
+    try { localStorage.removeItem('liftlog:progression-unlocked') } catch { /* storage may be unavailable */ }
     setWorkoutExercises([])
     clearAppliedSuggestion()
     setSessionId(null)
@@ -2613,6 +2756,16 @@ export default function Workout({
     if (battleModeActive) clearBattleWorkoutDraft()
     else clearWorkoutDraft()
     loadPlanProgress(userId, userTrainingPlans)
+    // Surface the coaching suggestion on the summary. If auto-apply already applied it,
+    // flag it so the summary shows the applied screen; otherwise let the summary apply it
+    // directly (which clears it from planAdaptations so it won't linger in Coach Review).
+    if (planCoaching?.id && planCoaching?.plan_id) {
+      if (coachAutoApplied) {
+        summary.coachAutoApplied = true
+      } else {
+        summary.applyCoaching = () => applyPendingPlanAdaptation(planCoaching)
+      }
+    }
     onFinish?.(summary)
   }
 
@@ -2881,6 +3034,10 @@ export default function Workout({
 
   const saveRoutine = async () => {
     if (savingRoutine) return
+    if (!editingRoutineId && userRoutines.length >= MAX_SAVED_ROUTINES) {
+      setRoutineError(ROUTINE_LIMIT_MESSAGE)
+      return
+    }
     const nameError = validateLength(routineName, {
       label: 'Routine name',
       min: 1,
@@ -2909,7 +3066,7 @@ export default function Workout({
       await loadUserRoutines(userId)
       closeRoutineBuilder()
     } catch (error) {
-      setRoutineError(friendlyError(error, 'Could not save this routine. Check your connection and try again.'))
+      setRoutineError(getSavedItemLimitMessage(error, 'Could not save this routine. Check your connection and try again.'))
     } finally {
       setSavingRoutine(false)
     }
@@ -2972,6 +3129,7 @@ export default function Workout({
         deloadPolicy: periodization.deloadPolicy || 'adaptive',
         blockGoal: periodization.blockGoal || 'accumulation',
         adaptiveCoach: adaptiveCoach.enabled !== false,
+        adaptiveCoachAutoApply: adaptiveCoach.autoApply !== false,
       }))
       setGeneratedPlan(normalized)
       setEditingPlanId(normalized.id)
@@ -3020,6 +3178,10 @@ export default function Workout({
 
   const saveTrainingPlan = async () => {
     if (!userId || savingPlan) return
+    if (!editingPlanId && userTrainingPlans.length >= MAX_SAVED_TRAINING_PLANS) {
+      setPlanError(TRAINING_PLAN_LIMIT_MESSAGE)
+      return
+    }
     const plan = generatedPlan || generatePlanPreview()
     if (!plan) return
     setSavingPlan(true)
@@ -3046,7 +3208,7 @@ export default function Workout({
       if (!plansLoaded) return
       closePlanBuilder()
     } catch (error) {
-      setPlanError(friendlyError(error, 'Could not save your plan.'))
+      setPlanError(getSavedItemLimitMessage(error, 'Could not save your plan.'))
     } finally {
       setSavingPlan(false)
     }
@@ -3075,11 +3237,90 @@ export default function Workout({
     setViewingTrainingPlanId(null)
   }
 
+  const closePlanReplacement = useCallback(() => {
+    setPlanReplacement(null)
+    setPlanReplacementSearch('')
+    setSelectedPlanReplacement(null)
+    setSavingPlanReplacement(false)
+    setPlanReplacementWarning(null)
+  }, [])
+
+  const openPlanReplacement = (plan, day, exerciseIndex, { context = 'saved' } = {}) => {
+    if (!plan || !day?.id) return
+    setPlanError('')
+    setPlanReplacement({
+      planId: plan.id || '__generated_plan__',
+      dayId: day.id,
+      exerciseIndex,
+      context,
+    })
+    setPlanReplacementSearch('')
+    setSelectedPlanReplacement(null)
+    setPlanReplacementWarning(null)
+  }
+
+  const savePlanReplacement = async (candidate = selectedPlanReplacement, { force = false } = {}) => {
+    if (!candidate?.exercise || !planReplacement || !userId || savingPlanReplacement) return
+    const plan = planReplacement.context === 'generated'
+      ? generatedPlan
+      : userTrainingPlans.find(item => item.id === planReplacement.planId)
+    const day = plan?.days?.find(item => String(item.id) === String(planReplacement.dayId))
+    const originalExercise = day?.exercises?.[planReplacement.exerciseIndex]
+    if (!plan || !day || !originalExercise) return
+
+    const warning = getPlanExerciseReplacementWarning(originalExercise, candidate.exercise, plan, day)
+    if (warning && !force) {
+      setPlanReplacementWarning({ candidate, warning })
+      return
+    }
+
+    setSavingPlanReplacement(true)
+    setPlanError('')
+    try {
+      const replacementMode = warning
+        ? 'override'
+        : candidate.source === 'suggested'
+          ? 'suggested'
+          : 'manual'
+      const nextPlan = replaceTrainingPlanExercise(plan, day.id, planReplacement.exerciseIndex, candidate.exercise, { replacementMode })
+      if (planReplacement.context === 'generated') {
+        setGeneratedPlan(nextPlan)
+        closePlanReplacement()
+        return
+      }
+      const { error } = await supabase
+        .from('user_training_plans')
+        .update({
+          days: nextPlan.days,
+          preferences: nextPlan.preferences,
+        })
+        .eq('id', plan.id)
+        .eq('user_id', userId)
+      if (error) throw error
+      setUserTrainingPlans(prev => prev.map(item => item.id === plan.id ? nextPlan : item))
+      closePlanReplacement()
+    } catch (error) {
+      setPlanError(friendlyError(error, 'Could not replace this exercise. Check your connection and try again.'))
+    } finally {
+      setSavingPlanReplacement(false)
+      setPlanReplacementWarning(null)
+    }
+  }
+
+  const getStartingPlanDayKey = (plan, day) => `${plan?.id || '__plan__'}:${day?.id || '__day__'}`
+
   const handleStartFromPlanDay = (plan, day) => {
+    const startKey = getStartingPlanDayKey(plan, day)
+    if (startingPlanDayKey === startKey) return
     gateOnBodyweight(async () => {
       if (isPremiumSync()) {
-        const started = await startFromPlanDay(plan, day)
-        if (started) setViewingTrainingPlanId(null)
+        setStartingPlanDayKey(startKey)
+        try {
+          const started = await startFromPlanDay(plan, day)
+          if (started) setViewingTrainingPlanId(null)
+        } finally {
+          setStartingPlanDayKey(null)
+        }
       } else {
         setPlanAdGate({ plan, day })
         setPlanAdGateCountdown(10)
@@ -3110,25 +3351,68 @@ export default function Workout({
   const dismissPlanAdaptation = (adaptation) => updateAdaptationStatus(adaptation, 'dismissed')
 
   const applyPendingPlanAdaptation = async (adaptation) => {
-    if (!adaptation?.plan_id || !userId) return
+    if (!adaptation?.plan_id || !userId) return false
     const planFromState = userTrainingPlans.find(item => item.id === adaptation.plan_id)
-    if (!planFromState) return
-    const plan = await ensurePlanPreferences(planFromState)
-    const nextPlan = normalizeTrainingPlan(applyPlanAdaptation(plan, adaptation))
-    const { error } = await supabase
-      .from('user_training_plans')
-      .update({
-        preferences: nextPlan.preferences,
-        days: nextPlan.days,
-      })
-      .eq('id', plan.id)
-      .eq('user_id', userId)
-    if (error) {
-      setPlanError(friendlyError(error, 'Could not apply this coaching suggestion.'))
-      return
+    if (!planFromState) return false
+    setApplyingAdaptationId(adaptation.id ?? adaptation.plan_id)
+    try {
+      const plan = await ensurePlanPreferences(planFromState)
+      const nextPlan = normalizeTrainingPlan(applyPlanAdaptation(plan, adaptation))
+      const { error } = await supabase
+        .from('user_training_plans')
+        .update({
+          preferences: nextPlan.preferences,
+          days: nextPlan.days,
+        })
+        .eq('id', plan.id)
+        .eq('user_id', userId)
+      if (error) {
+        setPlanError(friendlyError(error, 'Could not apply this coaching suggestion.'))
+        return false
+      }
+      setUserTrainingPlans(prev => prev.map(item => item.id === plan.id ? nextPlan : item))
+      await updateAdaptationStatus(adaptation, 'applied')
+      return true
+    } finally {
+      setApplyingAdaptationId(null)
     }
-    setUserTrainingPlans(prev => prev.map(item => item.id === plan.id ? nextPlan : item))
-    await updateAdaptationStatus(adaptation, 'applied')
+  }
+
+  const setPlanAutoApply = async (plan, autoApply) => {
+    if (!plan?.id || !userId || savingPlanPreferenceId === plan.id) return false
+    setSavingPlanPreferenceId(plan.id)
+    setPlanError('')
+    try {
+      const planWithPrefs = await ensurePlanPreferences(plan)
+      const preferences = planWithPrefs.preferences || {}
+      const adaptiveCoach = preferences.adaptiveCoach || {}
+      const nextPlan = normalizeTrainingPlan({
+        ...planWithPrefs,
+        preferences: {
+          ...preferences,
+          adaptiveCoach: {
+            ...adaptiveCoach,
+            autoApply: Boolean(autoApply),
+          },
+        },
+      })
+      const { error } = await supabase
+        .from('user_training_plans')
+        .update({ preferences: nextPlan.preferences })
+        .eq('id', planWithPrefs.id)
+        .eq('user_id', userId)
+      if (error) {
+        setPlanError(friendlyError(error, 'Could not update plan coaching.'))
+        return false
+      }
+      setUserTrainingPlans(prev => prev.map(item => item.id === planWithPrefs.id ? nextPlan : item))
+      return true
+    } catch (error) {
+      setPlanError(friendlyError(error, 'Could not update plan coaching.'))
+      return false
+    } finally {
+      setSavingPlanPreferenceId(null)
+    }
   }
 
   const createWorkoutSession = async (metadata = {}) => {
@@ -3168,20 +3452,6 @@ export default function Workout({
     const secondsPart = total % 60
     return `${minutes}:${String(secondsPart).padStart(2, '0')}`
   }
-  const fmtBattleMetric = (metric, value) => {
-    if (value === null || value === undefined) return '—'
-    const suffix = metric.display?.includes('min') && !metric.display?.includes('/')
-      ? ''
-      : metric.display?.includes('MET')
-        ? ''
-        : 'x'
-    return `${Number(value).toFixed(2)}${suffix}`
-  }
-  const fmtBattleMetricWeight = (metric) => {
-    const weight = Number(metric.effectiveWeight ?? metric.weight)
-    return Number.isFinite(weight) && weight > 0 ? `${Math.round(weight)} pts` : ''
-  }
-
   const handleAddExercises = () => {
     if (pickerContext === 'routine') {
       const toAdd = exerciseLibrary
@@ -3254,7 +3524,7 @@ export default function Workout({
     }
 
     setSessionId(data.id)
-    const unit = prof?.unit_preference || 'kg'
+    const unit = prof?.unit_preference || 'lbs'
     workoutStartRef.current = Date.now()
     setDefaultUnit(unit)
 
@@ -3324,7 +3594,7 @@ export default function Workout({
       return false
     }
 
-    const unit = prof?.unit_preference || defaultUnit || 'kg'
+    const unit = prof?.unit_preference || defaultUnit || 'lbs'
     const findExercise = (planned) => {
       if (planned.exerciseId) {
         const byId = exerciseLibrary.find(ex => String(ex.id) === String(planned.exerciseId))
@@ -4033,6 +4303,11 @@ export default function Workout({
     return () => removeBack(id)
   }, [isVisible, viewingTrainingPlanId])
   useEffect(() => {
+    if (!isVisible || !planReplacement) return
+    const id = pushBack(closePlanReplacement)
+    return () => removeBack(id)
+  }, [closePlanReplacement, isVisible, planReplacement])
+  useEffect(() => {
     if (!isVisible || !confirmAction) return
     const id = pushBack(() => setConfirmAction(null))
     return () => removeBack(id)
@@ -4049,6 +4324,38 @@ export default function Workout({
     return () => removeBack(id)
   }, [isVisible, plateCalc])
 
+  const planReplacementPlan = useMemo(
+    () => planReplacement?.context === 'generated'
+      ? generatedPlan
+      : userTrainingPlans.find(plan => plan.id === planReplacement?.planId) || null,
+    [generatedPlan, planReplacement?.context, planReplacement?.planId, userTrainingPlans]
+  )
+  const planReplacementDay = useMemo(
+    () => planReplacementPlan?.days?.find(day => String(day.id) === String(planReplacement?.dayId)) || null,
+    [planReplacement?.dayId, planReplacementPlan]
+  )
+  const planReplacementExercise = planReplacementDay?.exercises?.[planReplacement?.exerciseIndex] || null
+  const planReplacementSuggestions = useMemo(() => (
+    getPrioritizedReplacementExercises({
+      plan: planReplacementPlan,
+      day: planReplacementDay,
+      exercise: planReplacementExercise,
+      exerciseLibrary,
+      limit: 8,
+    }).map(item => ({ ...item, source: 'suggested' }))
+  ), [exerciseLibrary, planReplacementDay, planReplacementExercise, planReplacementPlan])
+  const planReplacementSearchResults = useMemo(() => (
+    getPrioritizedReplacementExercises({
+      plan: planReplacementPlan,
+      day: planReplacementDay,
+      exercise: planReplacementExercise,
+      exerciseLibrary,
+      query: planReplacementSearch,
+      includeOffPlan: true,
+      limit: planReplacementSearch.trim() ? 24 : 12,
+    }).map(item => ({ ...item, source: 'manual' }))
+  ), [exerciseLibrary, planReplacementDay, planReplacementExercise, planReplacementPlan, planReplacementSearch])
+
   const planInfoModalPortal = planInfoModal && typeof document !== 'undefined'
     ? createPortal(
         <div className="plan-info-overlay" onClick={() => setPlanInfoModal(null)}>
@@ -4060,6 +4367,42 @@ export default function Workout({
             <button className="confirm-submit plan-info-modal-ok" onClick={() => setPlanInfoModal(null)}>
               OK
             </button>
+          </div>
+        </div>,
+        document.querySelector('.app') || document.body
+      )
+    : null
+
+  const planReplacementWarningPortal = planReplacementWarning && typeof document !== 'undefined'
+    ? createPortal(
+        <div
+          className="confirm-overlay"
+          role="presentation"
+          onClick={() => setPlanReplacementWarning(null)}
+        >
+          <div
+            className="confirm-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plan-replacement-warning-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <div id="plan-replacement-warning-title" className="confirm-title">{planReplacementWarning.warning.title}</div>
+            <div className="confirm-body">{planReplacementWarning.warning.message}</div>
+            <div className={`plan-replacement-warning ${planReplacementWarning.warning.level}`}>
+              <AlertTriangle size={16} aria-hidden="true" />
+              <span>{planReplacementWarning.warning.level === 'strong' ? 'This is a bigger plan change.' : 'This may slightly change the day balance.'}</span>
+            </div>
+            <div className="confirm-actions">
+              <button className="confirm-keep" onClick={() => setPlanReplacementWarning(null)}>Choose Another</button>
+              <button
+                className="confirm-submit"
+                onClick={() => savePlanReplacement(planReplacementWarning.candidate, { force: true })}
+                disabled={savingPlanReplacement}
+              >
+                {savingPlanReplacement ? <LoadingSpinner size="xs" color="currentColor" /> : 'Replace Anyway'}
+              </button>
+            </div>
           </div>
         </div>,
         document.querySelector('.app') || document.body
@@ -4082,6 +4425,89 @@ export default function Workout({
       : []
   )
   const canStartTemplateWorkout = !loading && exerciseLibrary.length > 0
+
+  if (planReplacement && planReplacementPlan && planReplacementDay && planReplacementExercise) {
+    const selectedId = selectedPlanReplacement?.exercise?.id
+    const renderReplacementRow = (item, index) => {
+      const exercise = item.exercise
+      const selected = selectedId === exercise.id
+      const warning = item.warning || getPlanExerciseReplacementWarning(planReplacementExercise, exercise, planReplacementPlan, planReplacementDay)
+      return (
+        <button
+          key={`${item.source}-${exercise.id || exercise.name}`}
+          type="button"
+          className={`plan-replacement-row ${selected ? 'selected' : ''} ${warning ? `has-warning ${warning.level}` : ''}`}
+          style={{ '--exercise-enter-delay': `${Math.min(index, 10) * 32}ms` }}
+          onClick={() => setSelectedPlanReplacement({ ...item, warning })}
+        >
+          <div className="plan-replacement-row-main">
+            <div className="plan-replacement-check" aria-hidden="true">
+              {selected ? <Check size={15} /> : null}
+            </div>
+            <div>
+              <div className="plan-replacement-name">{exercise.name}</div>
+              <div className="plan-replacement-meta">{[exercise.category, exercise.equipment].filter(Boolean).join(' · ')}</div>
+              <div className="plan-replacement-reason">
+                {warning && <AlertTriangle size={12} aria-hidden="true" />}
+                <span>{item.reason}</span>
+              </div>
+            </div>
+          </div>
+          <span className="plan-replacement-source">{item.source === 'suggested' ? 'Suggested' : 'Manual'}</span>
+        </button>
+      )
+    }
+
+    return (
+      <div className="picker-page plan-replacement-page">
+        <div className="picker-sticky-top">
+          <div className="picker-header">
+            <button className="back-btn" onClick={closePlanReplacement} aria-label="Back to plan details">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 12H5M12 5l-7 7 7 7"/>
+              </svg>
+            </button>
+            <h2 className="picker-title">Replace {planReplacementExercise.name}</h2>
+            <button
+              className="add-selected-btn"
+              onClick={() => savePlanReplacement()}
+              disabled={!selectedPlanReplacement || savingPlanReplacement}
+              style={{ opacity: !selectedPlanReplacement ? 0.45 : 1 }}
+            >
+              {savingPlanReplacement ? <LoadingSpinner size="xs" color="currentColor" /> : 'Replace'}
+            </button>
+          </div>
+          <div className="plan-replacement-search-wrap">
+            <Search size={16} aria-hidden="true" />
+            <input
+              className="picker-search plan-replacement-search"
+              type="text"
+              placeholder="Search all exercises..."
+              value={planReplacementSearch}
+              onChange={event => setPlanReplacementSearch(event.target.value)}
+              maxLength={VALIDATION_LIMITS.searchMaxLength}
+            />
+          </div>
+          {planError && <div className="battle-panel-error">{planError}</div>}
+        </div>
+        <div className="picker-list plan-replacement-list">
+          <section className="plan-replacement-section" aria-labelledby="replacement-suggested-title">
+            <div id="replacement-suggested-title" className="template-section-label">Suggested Replacements</div>
+            {planReplacementSuggestions.length
+              ? planReplacementSuggestions.map(renderReplacementRow)
+              : <div className="plan-replacement-empty">No close replacements found for this plan setup.</div>}
+          </section>
+          <section className="plan-replacement-section" aria-labelledby="replacement-all-title">
+            <div id="replacement-all-title" className="template-section-label">All Exercises</div>
+            {planReplacementSearchResults.length
+              ? planReplacementSearchResults.map(renderReplacementRow)
+              : <div className="plan-replacement-empty">No exercises match that search.</div>}
+          </section>
+        </div>
+        {planReplacementWarningPortal}
+      </div>
+    )
+  }
 
   if (showCustomExerciseForm) {
     return (
@@ -4262,6 +4688,8 @@ export default function Workout({
     const splitLabel = schedule.splitLabel || 'Auto'
     const progressionLabel = periodization.styleLabel || 'Double Progression'
     const deloadLabel = periodization.deloadLabel || 'Adaptive'
+    const coachAutoApplyEnabled = adaptiveCoach.enabled === true && adaptiveCoach.autoApply !== false
+    const savingPlanPreference = savingPlanPreferenceId === viewingTrainingPlan.id
     const qualityScore = Number(viewingTrainingPlan.preferences?.qualityScore)
     const qualityFlags = viewingTrainingPlan.preferences?.qualityFlags || []
     const equipmentLabel = viewingTrainingPlan.equipment?.length
@@ -4326,6 +4754,17 @@ export default function Workout({
               ])}>
                 {adaptiveCoach.enabled ? 'Coach on' : 'Coach off'}
               </button>
+              <button
+                type="button"
+                className={coachAutoApplyEnabled ? 'active' : ''}
+                aria-pressed={coachAutoApplyEnabled}
+                disabled={!adaptiveCoach.enabled || savingPlanPreference}
+                onClick={() => setPlanAutoApply(viewingTrainingPlan, !coachAutoApplyEnabled)}
+              >
+                {savingPlanPreference
+                  ? <LoadingSpinner size="xs" color="currentColor" />
+                  : coachAutoApplyEnabled ? 'Auto apply on' : 'Auto apply off'}
+              </button>
               {Number.isFinite(qualityScore) && (
                 <button type="button" onClick={() => openPlanDetailInfo('Balance Score', getPlanDetailQualityInfo(qualityScore, qualityFlags, viewingTrainingPlan.preferences))}>
                   {Math.round(qualityScore)}/100 balance
@@ -4352,8 +4791,22 @@ export default function Workout({
                     <div className="plan-adaptation-body">{adaptation.body}</div>
                   </div>
                   <div className="plan-adaptation-actions">
-                    <button className="confirm-discard" onClick={() => dismissPlanAdaptation(adaptation)}>Dismiss</button>
-                    <button className="confirm-submit" onClick={() => applyPendingPlanAdaptation(adaptation)}>Apply</button>
+                    <button
+                      className="confirm-discard"
+                      disabled={applyingAdaptationId === (adaptation.id ?? adaptation.plan_id)}
+                      onClick={() => dismissPlanAdaptation(adaptation)}
+                    >
+                      Dismiss
+                    </button>
+                    <button
+                      className="confirm-submit plan-adaptation-apply"
+                      disabled={applyingAdaptationId === (adaptation.id ?? adaptation.plan_id)}
+                      onClick={() => applyPendingPlanAdaptation(adaptation)}
+                    >
+                      {applyingAdaptationId === (adaptation.id ?? adaptation.plan_id)
+                        ? <LoadingSpinner size="xs" color="currentColor" />
+                        : 'Apply'}
+                    </button>
                   </div>
                 </div>
               ))}
@@ -4363,8 +4816,9 @@ export default function Workout({
           <div className="plan-detail-days">
             {viewingTrainingPlan.days.map(day => {
               const isStartingPlanDay =
-                planAdGate?.plan?.id === viewingTrainingPlan.id &&
-                planAdGate?.day?.id === day.id
+                (planAdGate?.plan?.id === viewingTrainingPlan.id &&
+                  planAdGate?.day?.id === day.id) ||
+                startingPlanDayKey === getStartingPlanDayKey(viewingTrainingPlan, day)
               return (
                 <div key={day.id} className="plan-detail-day-card">
                   <div className="plan-detail-day-head">
@@ -4388,19 +4842,33 @@ export default function Workout({
                     </button>
                   </div>
                   <div className="plan-detail-exercise-list">
-                    {day.exercises.map(ex => {
+                    {day.exercises.map((ex, exerciseIndex) => {
                       const restLabel = formatPlannedRest(ex.restSeconds)
                       return (
-                        <div key={`${day.id}-${ex.name}`} className="plan-detail-exercise-row">
-                          <div>
+                        <div key={`${day.id}-${ex.exerciseId || ex.name}-${exerciseIndex}`} className="plan-detail-exercise-row">
+                          <div className="plan-detail-exercise-main">
                             <strong>{ex.name}</strong>
+                            {ex.substitutedFrom?.name && (
+                              <span className="plan-substitution-note">Substituted for {ex.substitutedFrom.name}</span>
+                            )}
                             <span>{[ex.role, ex.category, ex.equipment].filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' · ')}</span>
                           </div>
-                          <div className="plan-detail-exercise-target">
-                            <strong>{formatPlannedExerciseTarget(ex)}</strong>
-                            {restLabel && <span>{restLabel}</span>}
-                            {ex.progression?.style && <span>{formatPlanMetaLabel(ex.progression.style)}</span>}
-                            {ex.intensityTag && ex.intensityTag !== 'standard' && <span>{formatPlanMetaLabel(ex.intensityTag)}</span>}
+                          <div className="plan-detail-exercise-actions">
+                            <div className="plan-detail-exercise-target">
+                              <strong>{formatPlannedExerciseTarget(ex)}</strong>
+                              {restLabel && <span>{restLabel}</span>}
+                              {ex.progression?.style && <span>{formatPlanMetaLabel(ex.progression.style)}</span>}
+                              {ex.intensityTag && ex.intensityTag !== 'standard' && <span>{formatPlanMetaLabel(ex.intensityTag)}</span>}
+                            </div>
+                            <button
+                              type="button"
+                              className="plan-replace-btn"
+                              aria-label={`Replace exercise ${ex.name}`}
+                              title="Replace exercise"
+                              onClick={() => openPlanReplacement(viewingTrainingPlan, day, exerciseIndex)}
+                            >
+                              <RefreshCw size={15} aria-hidden="true" />
+                            </button>
                           </div>
                         </div>
                       )
@@ -4697,6 +5165,18 @@ export default function Workout({
                 <span>Adaptive Coach</span>
                 <strong>{planForm.adaptiveCoach ? 'On' : 'Off'}</strong>
               </button>
+              <button
+                type="button"
+                className={`plan-toggle-card plan-toggle-card--nested ${planForm.adaptiveCoach && planForm.adaptiveCoachAutoApply ? 'active' : ''}`}
+                disabled={!planForm.adaptiveCoach}
+                onClick={() => {
+                  if (!planForm.adaptiveCoach) return
+                  updatePlanForm({ adaptiveCoachAutoApply: !planForm.adaptiveCoachAutoApply })
+                }}
+              >
+                <span>Auto-apply adjustments</span>
+                <strong>{planForm.adaptiveCoach && planForm.adaptiveCoachAutoApply ? 'On' : 'Off'}</strong>
+              </button>
             </div>
           )}
 
@@ -4733,14 +5213,29 @@ export default function Workout({
                     <span>{day.exercises.length}</span>
                   </div>
                   <div className="plan-day-exercise-list">
-                    {day.exercises.map(ex => (
-                      <div key={`${day.id}-${ex.name}`} className="plan-day-exercise-row">
-                        <span>{ex.name}</span>
-                        <strong>
-                          {ex.category === 'Cardio'
-                            ? `${Math.round((ex.durationSeconds || 0) / 60)} min`
-                            : `${ex.sets} × ${ex.repRange || ex.reps}`}
-                        </strong>
+                    {day.exercises.map((ex, exerciseIndex) => (
+                      <div key={`${day.id}-${ex.exerciseId || ex.name}-${exerciseIndex}`} className="plan-day-exercise-row plan-day-exercise-row-replaceable">
+                        <div className="plan-day-exercise-main">
+                          <div className="plan-day-exercise-name">{ex.name}</div>
+                          {ex.substitutedFrom?.name && (
+                            <div className="plan-substitution-note">Substituted for {ex.substitutedFrom.name}</div>
+                          )}
+                          <div className="plan-day-exercise-meta">{[ex.role, ex.category, ex.equipment].filter(Boolean).map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(' · ')}</div>
+                        </div>
+                        <div className="plan-detail-exercise-actions">
+                          <div className="plan-detail-exercise-target">
+                            <strong>{formatPlannedExerciseTarget(ex)}</strong>
+                          </div>
+                          <button
+                            type="button"
+                            className="plan-replace-btn"
+                            aria-label={`Replace exercise ${ex.name}`}
+                            title="Replace exercise"
+                            onClick={() => openPlanReplacement(generatedPlan, day, exerciseIndex, { context: 'generated' })}
+                          >
+                            <RefreshCw size={15} aria-hidden="true" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -4892,26 +5387,48 @@ export default function Workout({
               <div className="battle-projection-card">
                 <div className="battle-projection-top">
                   <div>
-                    <div className="battle-panel-card-label">Projected Score</div>
+                    <div className="battle-projection-label-row">
+                      <div className="battle-panel-card-label">Projected Score</div>
+                      <button
+                        type="button"
+                        className="battle-score-info-btn"
+                        aria-label="Battle score info"
+                        onClick={() => setPlanInfoModal({
+                          title: 'Battle Score',
+                          items: getBattleScoreInfoItems(battleProjection),
+                        })}
+                      >
+                        i
+                      </button>
+                    </div>
                     <div className="battle-panel-card-body">
                       {battleProjection.status === 'waiting' ? `Live weighted score out of ${battleProjection.scoreTotal || 100}.` : battleProjection.verdict}
                     </div>
                   </div>
-                  <div className="battle-projection-score">
-                    <span>{battleProjection.points?.you ?? 0}</span>
-                    <small>:</small>
-                    <span>{battleProjection.points?.opponent ?? 0}</span>
+                  <div
+                    className="battle-projection-score"
+                    aria-label={`Projected score ${battleProjection.points?.you ?? 0} to ${battleProjection.points?.opponent ?? 0}`}
+                  >
+                    <div className="battle-projection-score-side">
+                      <small>You</small>
+                      <span>{battleProjection.points?.you ?? 0}</span>
+                    </div>
+                    <div className="battle-projection-score-divider">vs</div>
+                    <div className="battle-projection-score-side">
+                      <small>Them</small>
+                      <span>{battleProjection.points?.opponent ?? 0}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="battle-projection-metrics">
                   {battleProjection.metrics?.map(metric => (
                     <div key={metric.id} className="battle-projection-metric">
                       <span className={metric.winner === 'you' ? 'is-leading' : ''}>
-                        {metric.available ? fmtBattleMetric(metric, metric.yourValue) : '—'}
+                        {metric.available ? formatBattleMetricPoints(metric.yourScore) : '—'}
                       </span>
-                      <strong>{[metric.label, fmtBattleMetricWeight(metric)].filter(Boolean).join(' · ')}</strong>
+                      <strong>{metric.label}</strong>
                       <span className={metric.winner === 'opponent' ? 'is-leading' : ''}>
-                        {metric.available ? fmtBattleMetric(metric, metric.opponentValue) : '—'}
+                        {metric.available ? formatBattleMetricPoints(metric.opponentScore) : '—'}
                       </span>
                     </div>
                   ))}
@@ -4929,9 +5446,7 @@ export default function Workout({
                       {`${battleRoom.opponentProfile?.full_name || battleRoom.opponentProfile?.username || 'Your opponent'}'s logged exercises and completed sets.`}
                     </div>
                   </div>
-                  <div className="battle-readonly-badge">
-                    Their sets
-                  </div>
+                  <div className="battle-readonly-badge">Their Sets</div>
                 </div>
                 {remoteWorkouts.length === 0 ? (
                   <div className="battle-feed-empty">
@@ -4978,17 +5493,14 @@ export default function Workout({
                               </div>
                             </div>
                             {ex.category === 'Cardio' ? (
-                              <div className="set-row header-row">
+                              <div className="set-row header-row battle-readonly-cardio-row">
                                 <span className="col-set">Entry</span>
-                                <span className="col-prev">Previous</span>
                                 <span className="col-kg">Duration</span>
-                                <span className="col-reps"></span>
                                 <span className="col-done"></span>
                               </div>
                             ) : (
                               <div className="set-row header-row">
                                 <span className="col-set">Set</span>
-                                <span className="col-prev">Previous</span>
                                 <span className="col-kg">{ex.unit}</span>
                                 <span className="col-reps">Reps</span>
                                 <span className="col-done"></span>
@@ -5007,13 +5519,11 @@ export default function Workout({
                                     : String((workingSetIndex ?? 0) + 1)
                                 return (
                                   <div key={`${workout.userId}-${ex.key}-${index}`} className="set-row-wrapper">
-                                    <div className="set-row done battle-readonly-row">
+                                    <div className={`set-row done battle-readonly-row${ex.category === 'Cardio' ? ' battle-readonly-cardio-row' : ''}`}>
                                       <span className="col-set">{setLabel}</span>
-                                      <span className="col-prev">—</span>
                                       {ex.category === 'Cardio' ? (
                                         <>
                                           <div className="col-kg set-input battle-readonly-input">{fmtDur(Number(set.duration) || 0)}</div>
-                                          <div className="col-reps set-input battle-readonly-input">—</div>
                                         </>
                                       ) : (
                                         <>
@@ -5458,7 +5968,7 @@ export default function Workout({
                 ? (enteredWeight > maxWeight ? `Max ${maxWeight}` : `Min ${minWeight}`)
                 : null
               const repsWarning = !s.done && s.reps !== '' && !Number.isNaN(enteredReps) && !repsValid
-                ? (enteredReps > MAX_REPS ? `Max ${MAX_REPS} reps` : 'Min 1 rep')
+                ? (enteredReps > MAX_REPS ? `Max ${MAX_REPS} reps` : null)
                 : null
               const displaySetType = s.setType === 'superset' ? 'normal' : (s.setType ?? 'normal')
               return (
@@ -5503,6 +6013,7 @@ export default function Workout({
                       onClick={() => {
                         updateSet(ex.id, i, 'weight', String(w))
                         updateSet(ex.id, i, 'reps', String(p.reps))
+                        if (p.setType === 'warmup') updateSet(ex.id, i, 'setType', 'warmup')
                       }}
                     >
                       {w} × {p.reps}
@@ -5564,7 +6075,7 @@ export default function Workout({
                     min={String(minWeight)}
                     max={String(maxWeight)}
                     disabled={s.done}
-                    onChange={e => updateSet(ex.id, i, 'weight', minWeight < 0 ? e.target.value.replace(/[^0-9.\-]/g, '') : e.target.value)}
+                    onChange={e => updateSet(ex.id, i, 'weight', minWeight < 0 ? e.target.value.replace(/[^0-9.-]/g, '') : e.target.value)}
                   />
                   {hasPlateCalculator && !s.done && (
                     <button
@@ -5738,6 +6249,7 @@ export default function Workout({
       )}
       {confirmDialog}
       {bodyweightWarningDialog}
+      {planInfoModalPortal}
       {planAdGatePortal}
       {planPaywall}
       {planStartLoadingPortal}
@@ -5800,6 +6312,7 @@ export default function Workout({
   return (
     <>
     <div className="workout-screen">
+      {trainingLoadAdvisory}
       {savedWorkoutDraft && !battleModeActive && (
         <div className="section">
           <h2 className="section-title">Resume Workout</h2>
@@ -5880,6 +6393,11 @@ export default function Workout({
                   {(() => {
                     const progress = planProgressMap[plan.id]
                     const doneIds = progress?.thisWeekDoneIds ?? new Set()
+                    const nextDay = progress?.nextDay ?? plan.days[0]
+                    const isStartingNextSession =
+                      (planAdGate?.plan?.id === plan.id &&
+                        (!nextDay || planAdGate?.day?.id === nextDay.id)) ||
+                      (nextDay && startingPlanDayKey === getStartingPlanDayKey(plan, nextDay))
                     return (
                       <div className="saved-plan-next-row">
                         <div className="saved-plan-week-dots">
@@ -5894,9 +6412,9 @@ export default function Workout({
                         <button
                           className="saved-plan-next-btn"
                           onClick={() => handleStartNextSession(plan)}
-                          disabled={planAdGate?.plan?.id === plan.id || !canStartTemplateWorkout}
+                          disabled={isStartingNextSession || !canStartTemplateWorkout}
                         >
-                          {planAdGate?.plan?.id === plan.id
+                          {isStartingNextSession
                             ? <LoadingSpinner size="xs" color="currentColor" />
                             : 'Start Next Session'}
                         </button>

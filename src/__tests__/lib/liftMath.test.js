@@ -102,6 +102,17 @@ describe('set volume and input ranges', () => {
     expect(getWeightInputMin('Barbell', 'kg')).toBe(0)
   })
 
+  it('rounds converted bodyweight input limits for display and validation', () => {
+    const bodyweightKg = 180 * 0.453592
+
+    expect(getWeightInputMin('Bodyweight', 'lbs', bodyweightKg)).toBe(-180)
+    expect(isWeightWithinInputRange(-180, {
+      equipment: 'Bodyweight',
+      unit: 'lbs',
+      bodyweightKg,
+    })).toBe(true)
+  })
+
   it('validates regular and bodyweight input bounds', () => {
     expect(isWeightWithinInputRange(-1, { equipment: 'Barbell' })).toBe(false)
     expect(isWeightWithinInputRange(10000, { equipment: 'Barbell' })).toBe(false)

@@ -947,7 +947,7 @@
 
 .nut-preview-macros {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
   width: 100%;
 }
@@ -957,6 +957,7 @@
   flex-direction: column;
   align-items: center;
   gap: 3px;
+  min-width: 0;
 }
 
 .nut-preview-macro span:first-child {
@@ -1082,7 +1083,13 @@
   transform: translateY(-1px);
   box-shadow: 0 14px 24px color-mix(in srgb, var(--blue) 24%, transparent);
 }
-.nut-add-to-log-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.nut-add-to-log-btn:disabled {
+  background: var(--surface2);
+  color: var(--muted);
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
 
 /* ── Summary expand hint ─────────────────────────────────────── */
 .nut-expand-hint {
@@ -2376,3 +2383,155 @@
   opacity: 0;
   pointer-events: none;
 }
+
+/* ── Recipes: browse dropdowns, badges, recipe-log detail ─────── */
+.nut-picker-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.nut-picker-header-actions .nut-create-food-btn {
+  margin-left: 0;
+}
+
+.nut-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.nut-dropdown-toggle:hover { color: var(--blue); }
+
+.nut-dropdown-count {
+  min-width: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--blue-dim);
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.nut-dropdown-body {
+  max-height: 320px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.nut-recipe-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--blue-dim);
+  border: 1px solid rgba(59, 158, 255, 0.3);
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  vertical-align: middle;
+}
+
+.nut-recipe-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin: 4px 0 8px;
+}
+
+.cf-recipe-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.cf-edit-btn {
+  flex-shrink: 0;
+  background: var(--blue-dim);
+  border: 1px solid rgba(59, 158, 255, 0.24);
+  border-radius: 999px;
+  color: var(--blue);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 8px 11px;
+  cursor: pointer;
+  transition: transform 0.24s ease, background 0.24s ease, border-color 0.24s ease;
+}
+
+.cf-edit-btn:hover {
+  transform: translateY(-1px);
+  background: color-mix(in srgb, var(--blue) 20%, transparent);
+}
+
+/* Detail-view delete (recipe log view + owned-food detail) with inline confirm */
+.nut-detail-delete-btn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  background: none;
+  border: none;
+  color: #ef4444;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nut-detail-delete-btn:hover { text-decoration: underline; }
+
+.nut-detail-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.18);
+}
+
+.nut-detail-delete-text {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.nut-detail-delete-cancel {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.nut-detail-delete-confirm-btn {
+  background: #ef4444;
+  border: none;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.nut-detail-delete-confirm-btn:hover { background: #dc2626; }

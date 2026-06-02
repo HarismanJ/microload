@@ -20,6 +20,19 @@ import { VALIDATION_LIMITS, normalizeUsername, validateLength, validateNumber, v
 import { saveThemeForUser } from '../lib/theme'
 import { friendlyError } from '../lib/friendlyError'
 import { Capacitor } from '@capacitor/core'
+import { AppLauncher } from '@capacitor/app-launcher'
+import { showAdPrivacyOptions, hasAdPrivacyOptions } from '../lib/admob'
+
+const PRIVACY_POLICY_URL = 'https://picturesque-lunch-7de.notion.site/microload-Privacy-Policy-3710203c6238800eaec3ed35a9925bab'
+const TERMS_OF_SERVICE_URL = 'https://picturesque-lunch-7de.notion.site/microload-Terms-of-Service-3710203c6238800986d7c6c165ae2e95'
+
+async function openExternalUrl(url) {
+  try {
+    await AppLauncher.openUrl({ url })
+  } catch {
+    window.open(url, '_blank')
+  }
+}
 import { isPremiumSync, refreshPremiumStatus } from '../lib/purchases'
 import Paywall from './Paywall'
 import '../styles/Profile.css'
@@ -94,7 +107,16 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  const [adConsentButtonVisible, setAdConsentButtonVisible] = useState(false)
   useFocusTrap(bugReportRef, { active: showBugReport, onEscape: closeBugReport })
+
+  useEffect(() => {
+    let cancelled = false
+    hasAdPrivacyOptions().then(available => {
+      if (!cancelled) setAdConsentButtonVisible(available)
+    })
+    return () => { cancelled = true }
+  }, [])
 
   function closeBugReport() {
     if (bugReportClosing) return
@@ -175,7 +197,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
       full_name: profile?.full_name || '',
       age: profile?.age ?? '',
       gender: profile?.gender || '',
-      unit_preference: profile?.unit_preference || 'kg',
+      unit_preference: profile?.unit_preference || 'lbs',
       default_rest_seconds: profile?.default_rest_seconds ?? 90,
     })
     setEditing(true)
@@ -187,9 +209,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
     try {
       const fullNameError = validateLength(form.full_name, {
         label: 'Full name',
-        min: 1,
         max: VALIDATION_LIMITS.fullNameMaxLength,
-        required: true,
       })
       const usernameError = validateUsername(form.username)
       const ageError = validateNumber(form.age, {
@@ -215,7 +235,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
       const updates = {
         ...form,
         username: normalizeUsername(form.username) || null,
-        full_name: form.full_name.trim(),
+        full_name: form.full_name.trim() || null,
         age: form.age ? parseInt(form.age) : null,
         default_rest_seconds: Number(form.default_rest_seconds),
       }
@@ -311,6 +331,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
   const initials = profile?.full_name
     ? profile.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
     : email?.[0]?.toUpperCase() || '?'
+  const profileIdentityLoading = profile === null
 
   if (viewingAchievements) {
     return <Achievements onBack={() => window.history.back()} />
@@ -342,10 +363,20 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
   return (
     <div className="profile-screen">
       <div className="profile-header">
-        <div className="avatar">{initials}</div>
-        <div>
-          <div className="profile-name">{profile?.full_name || profile?.username || 'User'}</div>
-          <div className="profile-email">{email}</div>
+        <div className="avatar">
+          {profileIdentityLoading ? <LoadingSpinner size="xs" color="currentColor" /> : initials}
+        </div>
+        <div className="profile-identity">
+          {profileIdentityLoading ? (
+            <div className="profile-identity-loading">
+              <LoadingSpinner size="xs" color="var(--muted)" />
+            </div>
+          ) : (
+            <>
+              <div className="profile-name">{profile?.full_name || profile?.username || 'User'}</div>
+              <div className="profile-email">{email}</div>
+            </>
+          )}
         </div>
       </div>
 
@@ -523,6 +554,31 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
         </button>
       </div>
 
+      <div>
+        <button
+          className="ad-privacy-btn"
+          onClick={() => openExternalUrl(PRIVACY_POLICY_URL)}
+        >
+          Privacy Policy
+        </button>
+        <button
+          className="ad-privacy-btn"
+          onClick={() => openExternalUrl(TERMS_OF_SERVICE_URL)}
+        >
+          Terms of Service
+        </button>
+        {adConsentButtonVisible && (
+          <button
+            className="ad-privacy-btn"
+            onClick={async () => {
+              try { await showAdPrivacyOptions() } catch { /* noop — form unavailable */ }
+            }}
+          >
+            Manage Ad Consent
+          </button>
+        )}
+      </div>
+
       <div className="account-danger-zone">
         <div>
           <div className="account-danger-title">Delete Account</div>
@@ -654,7 +710,7 @@ export default function Profile({ onChallenge, onWorkoutDeleted, onBodyweightCha
                   cursor: deleteConfirmText === 'DELETE' && !deleting ? 'pointer' : 'not-allowed',
                 }}
               >
-                {deleting ? 'Deleting...' : 'Delete Forever'}
+                {deleting ? <LoadingSpinner size="xs" color="currentColor" /> : 'Delete Forever'}
               </button>
             </div>
           </div>

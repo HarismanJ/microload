@@ -1,10 +1,22 @@
-import { vi, describe, it, expect } from 'vitest'
+import { beforeEach, vi, describe, it, expect } from 'vitest'
 
 const STORAGE_KEY = 'liftlog:premium'
+const supabaseRpcMock = vi.hoisted(() => vi.fn(() => Promise.resolve({ data: false, error: null })))
+
+vi.mock('../../lib/supabase.js', () => ({
+  supabase: {
+    rpc: supabaseRpcMock,
+  },
+}))
 
 // Customer info shapes returned by RevenueCat
 const PREMIUM_CUSTOMER = { entitlements: { active: { 'microload Pro': {} } } }
 const FREE_CUSTOMER    = { entitlements: { active: {} } }
+
+beforeEach(() => {
+  supabaseRpcMock.mockReset()
+  supabaseRpcMock.mockResolvedValue({ data: false, error: null })
+})
 
 // ---------------------------------------------------------------------------
 // Helper: fresh module instance
@@ -122,6 +134,66 @@ describe('refreshPremiumStatus', () => {
 
     expect(result).toBe(true) // returns persisted value, no RC call
   })
+
+  it('returns true when RevenueCat is free but the Supabase override is enabled', async () => {
+    const { mod, Purchases } = await loadInitialised()
+    vi.mocked(Purchases.getCustomerInfo).mockResolvedValueOnce({ customerInfo: FREE_CUSTOMER })
+    supabaseRpcMock.mockResolvedValueOnce({ data: true, error: null })
+
+    const result = await mod.refreshPremiumStatus()
+
+    expect(result).toBe(true)
+    expect(mod.isPremiumSync()).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+    expect(supabaseRpcMock).toHaveBeenCalledWith('has_premium_override')
+  })
+
+  it('returns true when RevenueCat is premium even if the Supabase override is disabled', async () => {
+    const { mod, Purchases } = await loadInitialised()
+    vi.mocked(Purchases.getCustomerInfo).mockResolvedValueOnce({ customerInfo: PREMIUM_CUSTOMER })
+    supabaseRpcMock.mockResolvedValueOnce({ data: false, error: null })
+
+    const result = await mod.refreshPremiumStatus()
+
+    expect(result).toBe(true)
+    expect(mod.isPremiumSync()).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+  })
+
+  it('does NOT downgrade an existing premium cache when the override RPC fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { mod, Purchases } = await loadInitialised()
+      vi.mocked(Purchases.getCustomerInfo).mockResolvedValueOnce({ customerInfo: PREMIUM_CUSTOMER })
+      await mod.refreshPremiumStatus()
+      expect(mod.isPremiumSync()).toBe(true)
+
+      vi.mocked(Purchases.getCustomerInfo).mockResolvedValueOnce({ customerInfo: FREE_CUSTOMER })
+      supabaseRpcMock.mockResolvedValueOnce({ data: null, error: new Error('permission denied') })
+
+      const result = await mod.refreshPremiumStatus()
+
+      expect(result).toBe(true)
+      expect(mod.isPremiumSync()).toBe(true)
+      expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+      expect(warnSpy).toHaveBeenCalled()
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('can activate premium from the Supabase override on web', async () => {
+    const { mod, Capacitor, Purchases } = await loadFreshModule()
+    vi.mocked(Capacitor.isNativePlatform).mockReturnValue(false)
+    supabaseRpcMock.mockResolvedValueOnce({ data: true, error: null })
+
+    const result = await mod.refreshPremiumStatus()
+
+    expect(result).toBe(true)
+    expect(mod.isPremiumSync()).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+    expect(Purchases.getCustomerInfo).not.toHaveBeenCalled()
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -162,6 +234,18 @@ describe('loginUser', () => {
 
     expect(mod.isPremiumSync()).toBe(true)
     expect(localStorage.setItem.mock.calls.length).toBe(writesBefore)
+  })
+
+  it('checks the Supabase override even when RevenueCat is not initialized', async () => {
+    const { mod, Purchases } = await loadFreshModule()
+    supabaseRpcMock.mockResolvedValueOnce({ data: true, error: null })
+
+    await mod.loginUser('user-abc')
+
+    expect(mod.isPremiumSync()).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+    expect(supabaseRpcMock).toHaveBeenCalledWith('has_premium_override')
+    expect(Purchases.logIn).not.toHaveBeenCalled()
   })
 })
 
@@ -211,6 +295,18 @@ describe('purchasePackage', () => {
     expect(mod.isPremiumSync()).toBe(true)
     expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
   })
+
+  it('preserves premium when purchase returns free but the Supabase override is enabled', async () => {
+    const { mod, Purchases } = await loadInitialised()
+    vi.mocked(Purchases.purchasePackage).mockResolvedValueOnce({ customerInfo: FREE_CUSTOMER })
+    supabaseRpcMock.mockResolvedValueOnce({ data: true, error: null })
+
+    const result = await mod.purchasePackage({ identifier: 'annual' })
+
+    expect(result).toBe(true)
+    expect(mod.isPremiumSync()).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -238,6 +334,18 @@ describe('restorePurchases', () => {
     expect(result).toBe(false)
     expect(mod.isPremiumSync()).toBe(false)
     expect(localStorage.getItem(STORAGE_KEY)).toBe('false')
+  })
+
+  it('preserves premium when restore finds no active subscription but the Supabase override is enabled', async () => {
+    const { mod, Purchases } = await loadInitialised()
+    vi.mocked(Purchases.restorePurchases).mockResolvedValueOnce({ customerInfo: FREE_CUSTOMER })
+    supabaseRpcMock.mockResolvedValueOnce({ data: true, error: null })
+
+    const result = await mod.restorePurchases()
+
+    expect(result).toBe(true)
+    expect(mod.isPremiumSync()).toBe(true)
+    expect(localStorage.getItem(STORAGE_KEY)).toBe('true')
   })
 })
 

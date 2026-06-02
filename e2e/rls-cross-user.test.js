@@ -22,6 +22,7 @@ const missing = getMissingE2EEnv()
 
 let adminClient // service-role client — bypasses RLS for setup/teardown
 let userAClient // anon client authenticated as the fixture E2E user
+let userAId     // UUID of the existing fixture E2E user
 let userBId     // UUID of the ephemeral stranger created for this run
 
 describe.skipIf(missing.length > 0)(
@@ -88,6 +89,10 @@ describe.skipIf(missing.length > 0)(
         adminClient.from('foods')
           .insert({ user_id: userBId, name: 'RLS Secret Food' }),
 
+        // recipes — owner-only per recipes_owner_all RLS policy
+        adminClient.from('recipes')
+          .insert({ user_id: userBId, name: 'RLS Secret Recipe' }),
+
         // exercises (custom) — all text columns are NOT NULL; id is serial (omit on insert)
         adminClient.from('exercises')
           .insert({
@@ -115,6 +120,10 @@ describe.skipIf(missing.length > 0)(
         password: process.env.E2E_USER_PASSWORD,
       })
       if (signInErr) throw signInErr
+
+      const { data: userData, error: userErr } = await userAClient.auth.getUser()
+      if (userErr) throw userErr
+      userAId = userData.user.id
     })
 
     // ── Teardown ─────────────────────────────────────────────────────────────
@@ -122,14 +131,20 @@ describe.skipIf(missing.length > 0)(
     afterAll(async () => {
       if (!adminClient || !userBId) return
 
+      if (userAId) {
+        await adminClient.from('premium_overrides').delete().eq('user_id', userAId)
+      }
+
       // Delete in child-first (FK-safe) order
       for (const table of [
         'exercise_rank_states',
         'exercise_prs',
+        'premium_overrides',
         'workout_sets',
         'workout_sessions',
         'body_weight_logs',
         'nutrition_logs',
+        'recipes',
         'foods',
       ]) {
         await adminClient.from(table).delete().eq('user_id', userBId)
@@ -191,6 +206,22 @@ describe.skipIf(missing.length > 0)(
       expect(data).toHaveLength(0)
     })
 
+    test('User A cannot read User B recipes', async () => {
+      const { data, error } = await userAClient
+        .from('recipes')
+        .select('id')
+        .eq('user_id', userBId)
+      expect(error).toBeNull()
+      expect(data).toHaveLength(0)
+    })
+
+    test('User A cannot create a recipe owned by User B', async () => {
+      const { error } = await userAClient
+        .from('recipes')
+        .insert({ user_id: userBId, name: 'Forged Recipe' })
+      expect(error).toBeTruthy()
+    })
+
     test('User A cannot read User B custom exercises', async () => {
       const { data, error } = await userAClient
         .from('exercises')
@@ -207,6 +238,75 @@ describe.skipIf(missing.length > 0)(
         .eq('id', userBId)
       expect(error).toBeNull()
       expect(data).toHaveLength(0)
+    })
+
+    test('premium_overrides table denies direct authenticated client access', async () => {
+      const { error: selectError } = await userAClient
+        .from('premium_overrides')
+        .select('user_id, enabled')
+        .eq('user_id', userAId)
+      expect(selectError).toBeTruthy()
+
+      const { error: insertError } = await userAClient
+        .from('premium_overrides')
+        .insert({ user_id: userAId, enabled: true, reason: 'forbidden' })
+      expect(insertError).toBeTruthy()
+
+      const { error: updateError } = await userAClient
+        .from('premium_overrides')
+        .update({ enabled: true })
+        .eq('user_id', userAId)
+      expect(updateError).toBeTruthy()
+
+      const { error: deleteError } = await userAClient
+        .from('premium_overrides')
+        .delete()
+        .eq('user_id', userAId)
+      expect(deleteError).toBeTruthy()
+    })
+
+    test('has_premium_override only reveals the caller own enabled override', async () => {
+      await adminClient
+        .from('premium_overrides')
+        .delete()
+        .in('user_id', [userAId, userBId])
+
+      const { error: grantBError } = await adminClient
+        .from('premium_overrides')
+        .upsert(
+          { user_id: userBId, enabled: true, reason: 'rls stranger grant' },
+          { onConflict: 'user_id' },
+        )
+      expect(grantBError).toBeNull()
+
+      const { data: beforeOwnGrant, error: beforeOwnGrantError } = await userAClient
+        .rpc('has_premium_override')
+      expect(beforeOwnGrantError).toBeNull()
+      expect(beforeOwnGrant).toBe(false)
+
+      const { error: grantAError } = await adminClient
+        .from('premium_overrides')
+        .upsert(
+          { user_id: userAId, enabled: true, reason: 'rls own grant' },
+          { onConflict: 'user_id' },
+        )
+      expect(grantAError).toBeNull()
+
+      const { data: afterOwnGrant, error: afterOwnGrantError } = await userAClient
+        .rpc('has_premium_override')
+      expect(afterOwnGrantError).toBeNull()
+      expect(afterOwnGrant).toBe(true)
+
+      const { error: revokeAError } = await adminClient
+        .from('premium_overrides')
+        .update({ enabled: false })
+        .eq('user_id', userAId)
+      expect(revokeAError).toBeNull()
+
+      const { data: afterRevoke, error: afterRevokeError } = await userAClient
+        .rpc('has_premium_override')
+      expect(afterRevokeError).toBeNull()
+      expect(afterRevoke).toBe(false)
     })
 
     // ── Positive tests ────────────────────────────────────────────────────────
@@ -242,14 +342,11 @@ describe.skipIf(missing.length > 0)(
       await adminClient.from('foods').delete().eq('id', inserted.id)
     })
 
-    test('public_profiles view exposes User B social identity but NOT private fields', async () => {
-      // The public_profiles view is intentionally readable by all authenticated users —
-      // it is the designed social-discovery surface. Confirm the row IS visible but
-      // that the view does not project any private columns.
+    test('get_public_profiles exposes User B social identity but NOT private fields', async () => {
+      // Non-owner profile discovery goes through this explicit SECURITY DEFINER
+      // RPC instead of the dropped public_profiles view.
       const { data, error } = await userAClient
-        .from('public_profiles')
-        .select('*')
-        .eq('id', userBId)
+        .rpc('get_public_profiles', { p_profile_ids: [userBId] })
       expect(error).toBeNull()
       expect(data).toHaveLength(1) // row visible — by design
 

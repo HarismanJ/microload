@@ -131,9 +131,23 @@ describe('previous set values', () => {
     ])
 
     expect(previousSets).toEqual([
-      { weight: 90, reps: 8, unit: 'kg', duration_seconds: undefined, set_number: 1 },
-      { weight: 90, reps: 7, unit: 'kg', duration_seconds: undefined, set_number: 3 },
+      { weight: 90, reps: 8, unit: 'kg', duration_seconds: undefined, set_number: 1, setType: 'normal' },
+      { weight: 90, reps: 7, unit: 'kg', duration_seconds: undefined, set_number: 3, setType: 'normal' },
     ])
+  })
+
+  it('preserves previous warmup metadata by set position', () => {
+    const previousSets = buildPreviousSetValuesByWorkingIndex([
+      {
+        sets: [
+          { weight: 40, reps: 10, unit: 'kg', set_number: 1, is_warmup: true },
+          { weight: 100, reps: 8, unit: 'kg', set_number: 2, set_type: 'normal' },
+        ],
+      },
+    ])
+
+    expect(previousSets[0]).toMatchObject({ weight: 40, reps: 10, setType: 'warmup' })
+    expect(previousSets[1]).toMatchObject({ weight: 100, reps: 8, setType: 'normal' })
   })
 
   it('prefers the most recent session for each working-set position', () => {
@@ -155,9 +169,9 @@ describe('previous set values', () => {
     ])
 
     expect(previousSets).toEqual([
-      { weight: 100, reps: 8, unit: 'kg', duration_seconds: undefined, set_number: 1 },
-      { weight: 100, reps: 7, unit: 'kg', duration_seconds: undefined, set_number: 3 },
-      { weight: 80, reps: 8, unit: 'kg', duration_seconds: undefined, set_number: 3 },
+      { weight: 100, reps: 8, unit: 'kg', duration_seconds: undefined, set_number: 1, setType: 'normal' },
+      { weight: 100, reps: 7, unit: 'kg', duration_seconds: undefined, set_number: 3, setType: 'normal' },
+      { weight: 80, reps: 8, unit: 'kg', duration_seconds: undefined, set_number: 3, setType: 'normal' },
     ])
   })
 })

@@ -95,18 +95,17 @@ export default function WeightChart({ data, unit = 'kg', height = 130, tickCount
     return () => observer.disconnect()
   }, [])
 
-  useEffect(() => {
-    if (!data?.length) {
-      setLineDrawn(false)
-      return undefined
-    }
-
-    if (!animationReady) {
-      setLineDrawn(false)
-      return undefined
-    }
-
+  // Reset line-drawn state when any animation input changes (render-phase, per React docs).
+  const animTriggerKey = `${animationReady}|${animationKey}|${dataSignature}|${containerWidth}|${unit}|${height}|${tickCount}|${data?.length ?? 0}`
+  const [prevAnimTriggerKey, setPrevAnimTriggerKey] = useState(animTriggerKey)
+  if (prevAnimTriggerKey !== animTriggerKey) {
+    setPrevAnimTriggerKey(animTriggerKey)
     setLineDrawn(false)
+  }
+
+  useEffect(() => {
+    if (!data?.length || !animationReady) return undefined
+
     let secondFrame = null
     const firstFrame = requestAnimationFrame(() => {
       secondFrame = requestAnimationFrame(() => {

@@ -1,8 +1,12 @@
 import {
   generateTrainingPlan,
+  getPlanExerciseReplacementWarning,
+  getPrioritizedReplacementExercises,
+  TRAINING_PLAN_EQUIPMENT,
   getTrainingPlanGoalLabel,
   normalizeTrainingPlan,
   normalizeTrainingPlanForm,
+  replaceTrainingPlanExercise,
   validateTrainingPlanForm,
 } from '../../lib/trainingPlanGenerator.js'
 
@@ -31,6 +35,7 @@ const MOCK_EXERCISES = [
   makeExercise('Machine Row', 'Strength', 'Machine', ['Upper Back', 'Lats'], ['Biceps']),
   makeExercise('Face Pull', 'Strength', 'Cable', ['Rear Delts', 'Upper Back']),
   makeExercise('Barbell Curl', 'Strength', 'Barbell', ['Biceps']),
+  makeExercise('EZ Bar Curl', 'Strength', 'EZ Bar', ['Biceps'], ['Forearms']),
 
   makeExercise('Squat', 'Strength', 'Barbell', ['Quads', 'Glutes'], ['Hamstrings']),
   makeExercise('Romanian Deadlift', 'Strength', 'Barbell', ['Hamstrings', 'Glutes'], ['Lower Back']),
@@ -78,7 +83,7 @@ function validThreeDayForm(overrides = {}) {
     daysPerWeek: 3,
     sessionMinutes: 60,
     durationWeeks: 8,
-    equipment: ['Bodyweight', 'Dumbbell', 'Barbell', 'Cable', 'Machine', 'Cardio Machines'],
+    equipment: ['Bodyweight', 'Dumbbell', 'Barbell', 'EZ Bar', 'Cable', 'Machine', 'Cardio Machines'],
     ...overrides,
   }
 }
@@ -156,6 +161,8 @@ describe('normalizeTrainingPlanForm', () => {
   })
 
   it('normalizes exact schedule days and equipment', () => {
+    expect(TRAINING_PLAN_EQUIPMENT.map(item => item.id)).toContain('EZ Bar')
+
     expect(normalizeTrainingPlanForm({
       daysPerWeek: 3,
       scheduleMode: 'exact',
@@ -167,7 +174,62 @@ describe('normalizeTrainingPlanForm', () => {
       equipment: ['Bodyweight'],
     })
 
-    expect(normalizeTrainingPlanForm({ equipment: ['Cable', 'Spaceship'] }).equipment).toEqual(['Cable'])
+    expect(normalizeTrainingPlanForm({ equipment: ['Cable', 'EZ Bar', 'Spaceship'] }).equipment).toEqual(['Cable', 'EZ Bar'])
+  })
+
+  it('defaults adaptive coach auto-apply on and preserves an explicit off value', () => {
+    expect(normalizeTrainingPlanForm({}).adaptiveCoachAutoApply).toBe(true)
+    expect(normalizeTrainingPlanForm({ adaptiveCoachAutoApply: false }).adaptiveCoachAutoApply).toBe(false)
+  })
+
+  it('includes EZ Bar exercises only when EZ Bar is selected', () => {
+    const plan = normalizeTrainingPlan({
+      name: 'EZ Test',
+      goal: 'hypertrophy',
+      experience: 'intermediate',
+      days_per_week: 2,
+      session_minutes: 60,
+      duration_weeks: 8,
+      equipment: ['Bodyweight', 'Barbell', 'EZ Bar'],
+      days: [{
+        id: 'day-1',
+        name: 'Day 1',
+        focus: 'Pull',
+        focusKey: 'pull',
+        exercises: [{
+          exerciseId: 'barbell-curl',
+          name: 'Barbell Curl',
+          category: 'Strength',
+          equipment: 'Barbell',
+          role: 'accessory',
+          movementPattern: 'elbow_flexion',
+          sets: 3,
+          reps: 10,
+          repRange: '8-12',
+        }],
+      }],
+    })
+    const day = plan.days[0]
+    const exercise = day.exercises[0]
+    const withEzBar = getPrioritizedReplacementExercises({
+      plan,
+      day,
+      exercise,
+      exerciseLibrary: MOCK_EXERCISES,
+      query: 'curl',
+      limit: 10,
+    }).map(item => item.exercise.name)
+    const withoutEzBar = getPrioritizedReplacementExercises({
+      plan: { ...plan, equipment: ['Bodyweight', 'Barbell'] },
+      day,
+      exercise,
+      exerciseLibrary: MOCK_EXERCISES,
+      query: 'curl',
+      limit: 10,
+    }).map(item => item.exercise.name)
+
+    expect(withEzBar).toContain('EZ Bar Curl')
+    expect(withoutEzBar).not.toContain('EZ Bar Curl')
   })
 
   it('validates the normalized default form', () => {
@@ -178,6 +240,154 @@ describe('normalizeTrainingPlanForm', () => {
     const form = normalizeTrainingPlanForm({ focusAreas: ['Chest', 'FAKE_AREA', 'Back'] })
     expect(form.focusAreas).not.toContain('FAKE_AREA')
     expect(form.focusAreas.length).toBeGreaterThan(0)
+  })
+})
+
+describe('training plan exercise replacement', () => {
+  function replacementPlan() {
+    return normalizeTrainingPlan({
+      ...generateTrainingPlan(validThreeDayForm({
+        daysPerWeek: 3,
+        splitPreference: 'full_body',
+      }), MOCK_EXERCISES),
+      id: 'plan-1',
+    })
+  }
+
+  function findExerciseSlot(plan, name = 'Bench Press') {
+    const day = plan.days.find(item => item.exercises.some(ex => ex.name === name))
+    const index = day.exercises.findIndex(ex => ex.name === name)
+    return { day, exercise: day.exercises[index], index }
+  }
+
+  it('prioritizes same-pattern and same-muscle replacements above random matches', () => {
+    const plan = replacementPlan()
+    const { day, exercise } = findExerciseSlot(plan, 'Bench Press')
+    const replacements = getPrioritizedReplacementExercises({
+      plan,
+      day,
+      exercise,
+      exerciseLibrary: MOCK_EXERCISES,
+      limit: 8,
+    })
+    const names = replacements.map(item => item.exercise.name)
+
+    expect(['Dumbbell Bench Press', 'Incline Bench Press']).toContain(names[0])
+    expect(names.slice(0, 3)).toContain('Dumbbell Bench Press')
+    expect(names).not.toContain('Bench Press')
+  })
+
+  it('excludes same-day duplicates from suggested replacements', () => {
+    const plan = replacementPlan()
+    const { day, exercise } = findExerciseSlot(plan, 'Bench Press')
+    const duplicate = day.exercises.find(ex => ex.name !== exercise.name)
+    const replacements = getPrioritizedReplacementExercises({
+      plan,
+      day,
+      exercise,
+      exerciseLibrary: MOCK_EXERCISES,
+      limit: 20,
+    })
+
+    expect(replacements.map(item => item.exercise.name)).not.toContain(duplicate.name)
+  })
+
+  it('respects plan equipment and avoid terms for suggestions', () => {
+    const plan = normalizeTrainingPlan({
+      ...generateTrainingPlan(validThreeDayForm({
+        equipment: ['Bodyweight', 'Barbell'],
+        avoid: 'Dumbbell',
+      }), MOCK_EXERCISES),
+      id: 'plan-1',
+    })
+    const { day, exercise } = findExerciseSlot(plan, 'Bench Press')
+    const replacements = getPrioritizedReplacementExercises({
+      plan,
+      day,
+      exercise,
+      exerciseLibrary: MOCK_EXERCISES,
+      limit: 20,
+    })
+
+    expect(replacements.some(item => item.exercise.equipment === 'Dumbbell')).toBe(false)
+  })
+
+  it('filters replacement results with search and allows off-plan manual fallback', () => {
+    const plan = replacementPlan()
+    const { day, exercise } = findExerciseSlot(plan, 'Bench Press')
+    const searched = getPrioritizedReplacementExercises({
+      plan,
+      day,
+      exercise,
+      exerciseLibrary: MOCK_EXERCISES,
+      query: 'row',
+      includeOffPlan: true,
+      limit: 12,
+    })
+
+    expect(searched.map(item => item.exercise.name)).toContain('Dumbbell Row')
+    expect(searched.every(item => item.exercise.name.toLowerCase().includes('row') || item.reason)).toBe(true)
+  })
+
+  it('preserves prescription and marks substitution for same-category replacement', () => {
+    const plan = replacementPlan()
+    const { day, exercise, index } = findExerciseSlot(plan, 'Bench Press')
+    const replacement = MOCK_EXERCISES.find(ex => ex.name === 'Dumbbell Bench Press')
+    const nextPlan = replaceTrainingPlanExercise(plan, day.id, index, replacement, { replacementMode: 'suggested' })
+    const nextExercise = nextPlan.days.find(item => item.id === day.id).exercises.find(ex => ex.name === 'Dumbbell Bench Press')
+
+    expect(nextExercise.sets).toBe(exercise.sets)
+    expect(nextExercise.repRange).toBe(exercise.repRange)
+    expect(nextExercise.progression.style).toBe(exercise.progression.style)
+    expect(nextExercise.substitutedFrom).toMatchObject({ name: 'Bench Press' })
+    expect(nextExercise.replacementMode).toBe('suggested')
+  })
+
+  it('converts strength/cardio replacements into valid override prescriptions and warnings', () => {
+    const plan = replacementPlan()
+    const { day, exercise, index } = findExerciseSlot(plan, 'Bench Press')
+    const running = MOCK_EXERCISES.find(ex => ex.name === 'Running')
+    const warning = getPlanExerciseReplacementWarning(exercise, running, plan, day)
+    const nextPlan = replaceTrainingPlanExercise(plan, day.id, index, running, { replacementMode: 'manual' })
+    const nextExercise = nextPlan.days.find(item => item.id === day.id).exercises.find(ex => ex.name === 'Running')
+
+    expect(warning).toMatchObject({ level: 'strong' })
+    expect(nextExercise.category).toBe('Cardio')
+    expect(nextExercise.sets).toBe(1)
+    expect(nextExercise.durationSeconds).toBeGreaterThanOrEqual(600)
+    expect(nextExercise.durationSeconds).toBeLessThanOrEqual(1200)
+    expect(nextExercise.replacementMode).toBe('override')
+  })
+
+  it('preserves substitution metadata through normalization', () => {
+    const normalized = normalizeTrainingPlan({
+      name: 'Plan',
+      goal: 'hypertrophy',
+      experience: 'intermediate',
+      days_per_week: 2,
+      session_minutes: 60,
+      duration_weeks: 8,
+      equipment: ['Dumbbell'],
+      days: [{
+        id: 'day-1',
+        name: 'Day 1',
+        focus: 'Upper',
+        exercises: [{
+          exerciseId: 'dumbbell-bench-press',
+          name: 'Dumbbell Bench Press',
+          category: 'Strength',
+          equipment: 'Dumbbell',
+          sets: 3,
+          reps: 10,
+          repRange: '8-12',
+          substitutedFrom: { exerciseId: 'bench-press', name: 'Bench Press', category: 'Strength', equipment: 'Barbell' },
+          replacementMode: 'manual',
+        }],
+      }],
+    })
+
+    expect(normalized.days[0].exercises[0].substitutedFrom).toMatchObject({ name: 'Bench Press' })
+    expect(normalized.days[0].exercises[0].replacementMode).toBe('manual')
   })
 })
 
@@ -209,6 +419,22 @@ describe('generateTrainingPlan smoke output', () => {
     plan.days.forEach(expectPlanDayShape)
   })
 
+  it('threads the adaptive coach auto-apply preference into generated plans', () => {
+    const defaultPlan = generateTrainingPlan(validThreeDayForm(), MOCK_EXERCISES)
+    const manualReviewPlan = generateTrainingPlan(validThreeDayForm({
+      adaptiveCoachAutoApply: false,
+    }), MOCK_EXERCISES)
+
+    expect(defaultPlan.preferences.adaptiveCoach).toMatchObject({
+      enabled: true,
+      autoApply: true,
+    })
+    expect(manualReviewPlan.preferences.adaptiveCoach).toMatchObject({
+      enabled: true,
+      autoApply: false,
+    })
+  })
+
   it('preserves exact scheduled days and deload metadata', () => {
     const plan = generateTrainingPlan(validThreeDayForm({
       scheduleMode: 'exact',
@@ -236,7 +462,7 @@ describe('generateTrainingPlan smoke output', () => {
   it('generates cardio prescriptions for a cardio goal', () => {
     const plan = generateTrainingPlan(validThreeDayForm({
       goal: 'cardio',
-      equipment: ['Bodyweight', 'Dumbbell', 'Barbell', 'Cable', 'Machine', 'Cardio Machines'],
+      equipment: ['Bodyweight', 'Dumbbell', 'Barbell', 'EZ Bar', 'Cable', 'Machine', 'Cardio Machines'],
       splitPreference: 'auto',
     }), MOCK_EXERCISES)
     const cardioExercises = allPlanExercises(plan).filter(exercise => exercise.category === 'Cardio')

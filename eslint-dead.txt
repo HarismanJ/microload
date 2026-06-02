@@ -1,0 +1,11 @@
+  243:10  warning  'loading' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+   696:10  warning  'startingPlanId' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u                                                                                                                no-unused-vars
+   696:26  warning  'setStartingPlanId' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u                                                                                                             no-unused-vars
+  5553:27  warning  'nextDay' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u                                                                                                                       no-unused-vars
+  36:12  warning  'e' is defined but never used  no-unused-vars
+  57:12  warning  'e' is defined but never used  no-unused-vars
+  84:12  warning  'e' is defined but never used  no-unused-vars
+  683:9  warning  'startingWeightKg' is assigned a value but never used. Allowed unused vars must match /^[A-Z_]/u  no-unused-vars
+  40:12  warning  'e' is defined but never used  no-unused-vars
+  48:12  warning  'e' is defined but never used  no-unused-vars
+  57:12  warning  'e' is defined but never used  no-unused-vars

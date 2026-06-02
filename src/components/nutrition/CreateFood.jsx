@@ -8,6 +8,20 @@ import { searchOffFoods } from '../../lib/offFoods'
 import { buildFoodSearchKey, mergeFoodSearchResults, normalizeSearchValue } from '../../lib/foodSearch'
 import { NUTRITION_FIELD_LIMITS, VALIDATION_LIMITS, validateLength, validateNumber, validateNutritionForm } from '../../lib/inputValidation'
 import { buildFoodPayload } from '../../lib/foodEditor'
+import {
+  RECIPE_MICRO_ITEMS,
+  numberOrZero,
+  roundNumber,
+  supportsDirectAmount,
+  getDirectAmountUnit,
+  getIngredientDefaults,
+  getIngredientMultiplier,
+  buildScaledNutrients,
+  formatIngredientAmount,
+  sumRecipeTotals,
+  perServingTotals,
+} from '../../lib/recipeMath'
+import { buildRecipePayload, createRecipe, updateRecipe, hydrateRecipeIngredients } from '../../lib/recipes'
 
 const UNITS = ['g', 'ml', 'oz', 'cup', 'tbsp', 'tsp', 'piece', 'slice', 'scoop', 'bar', 'serving']
 const USDA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
@@ -47,48 +61,6 @@ const initialRecipeForm = {
   servings: '1',
 }
 
-const RECIPE_NUMERIC_FIELDS = [
-  'calories',
-  'protein',
-  'carbs',
-  'fat',
-  'fiber',
-  'sugar',
-  'saturated_fat',
-  'sodium',
-  'potassium',
-  'cholesterol',
-  'vitamin_a',
-  'vitamin_c',
-  'calcium',
-  'iron',
-  'vitamin_d',
-  'magnesium',
-  'zinc',
-  'folate',
-  'vitamin_b12',
-  'vitamin_b6',
-]
-
-const RECIPE_MICRO_ITEMS = [
-  { key: 'fiber', label: 'Fiber', unit: 'g' },
-  { key: 'sugar', label: 'Sugar', unit: 'g' },
-  { key: 'saturated_fat', label: 'Saturated Fat', unit: 'g' },
-  { key: 'sodium', label: 'Sodium', unit: 'mg' },
-  { key: 'potassium', label: 'Potassium', unit: 'mg' },
-  { key: 'cholesterol', label: 'Cholesterol', unit: 'mg' },
-  { key: 'vitamin_a', label: 'Vitamin A', unit: 'mcg' },
-  { key: 'vitamin_c', label: 'Vitamin C', unit: 'mg' },
-  { key: 'calcium', label: 'Calcium', unit: 'mg' },
-  { key: 'iron', label: 'Iron', unit: 'mg' },
-  { key: 'vitamin_d', label: 'Vitamin D', unit: 'mcg' },
-  { key: 'magnesium', label: 'Magnesium', unit: 'mg' },
-  { key: 'zinc', label: 'Zinc', unit: 'mg' },
-  { key: 'folate', label: 'Folate', unit: 'mcg' },
-  { key: 'vitamin_b12', label: 'Vitamin B12', unit: 'mcg' },
-  { key: 'vitamin_b6', label: 'Vitamin B6', unit: 'mg' },
-]
-
 function Field({ label, value, onChange, placeholder = '0', type = 'number', unit, required, maxLength, rules }) {
   return (
     <div className="cf-field">
@@ -115,127 +87,15 @@ function Field({ label, value, onChange, placeholder = '0', type = 'number', uni
   )
 }
 
-function numberOrZero(value) {
-  const numeric = Number(value)
-  return Number.isFinite(numeric) ? numeric : 0
-}
-
-function roundNumber(value, decimals = 1) {
-  const factor = 10 ** decimals
-  return Math.round((numberOrZero(value) + Number.EPSILON) * factor) / factor
-}
-
-function supportsDirectAmount(food) {
-  const unit = String(food?.serving_unit || '').trim().toLowerCase()
-  return unit === 'g' || unit === 'ml'
-}
-
-function getDirectAmountUnit(food) {
-  return String(food?.serving_unit || '').trim().toLowerCase() === 'ml' ? 'ml' : 'g'
-}
-
-function getIngredientDefaults(food) {
-  if (supportsDirectAmount(food)) {
-    const servingSize = numberOrZero(food?.serving_size) || 100
-    return {
-      amountMode: 'direct',
-      amount: String(roundNumber(servingSize, 1)),
-      servings: 1,
-    }
-  }
-
-  return {
-    amountMode: 'servings',
-    amount: '',
-    servings: 1,
-  }
-}
-
-function getIngredientMultiplier(food, amountMode, amount, servings) {
-  if (!food) return 0
-
-  if (amountMode === 'direct') {
-    const directAmount = Number.parseFloat(amount)
-    const servingSize = numberOrZero(food?.serving_size)
-    if (!Number.isFinite(directAmount) || directAmount <= 0 || servingSize <= 0) return 0
-    return directAmount / servingSize
-  }
-
-  const servingCount = Number.parseFloat(servings)
-  if (!Number.isFinite(servingCount) || servingCount <= 0) return 0
-  return servingCount
-}
-
-function buildScaledNutrients(food, multiplier) {
-  return {
-    calories: Math.round(numberOrZero(food?.calories) * multiplier),
-    protein: roundNumber(numberOrZero(food?.protein) * multiplier, 1),
-    carbs: roundNumber(numberOrZero(food?.carbs) * multiplier, 1),
-    fat: roundNumber(numberOrZero(food?.fat) * multiplier, 1),
-    fiber: roundNumber(numberOrZero(food?.fiber) * multiplier, 1),
-    sugar: roundNumber(numberOrZero(food?.sugar) * multiplier, 1),
-    saturated_fat: roundNumber(numberOrZero(food?.saturated_fat) * multiplier, 1),
-    sodium: Math.round(numberOrZero(food?.sodium) * multiplier),
-    potassium: Math.round(numberOrZero(food?.potassium) * multiplier),
-    cholesterol: Math.round(numberOrZero(food?.cholesterol) * multiplier),
-    vitamin_a: Math.round(numberOrZero(food?.vitamin_a) * multiplier),
-    vitamin_c: roundNumber(numberOrZero(food?.vitamin_c) * multiplier, 1),
-    calcium: Math.round(numberOrZero(food?.calcium) * multiplier),
-    iron: roundNumber(numberOrZero(food?.iron) * multiplier, 2),
-    vitamin_d: roundNumber(numberOrZero(food?.vitamin_d) * multiplier, 1),
-    magnesium: Math.round(numberOrZero(food?.magnesium) * multiplier),
-    zinc: roundNumber(numberOrZero(food?.zinc) * multiplier, 1),
-    folate: Math.round(numberOrZero(food?.folate) * multiplier),
-    vitamin_b12: roundNumber(numberOrZero(food?.vitamin_b12) * multiplier, 2),
-    vitamin_b6: roundNumber(numberOrZero(food?.vitamin_b6) * multiplier, 2),
-  }
-}
-
-function formatIngredientAmount(entry) {
-  if (entry.amountMode === 'direct') {
-    return `${roundNumber(entry.amount, 1)}${entry.amountUnit}`
-  }
-
-  const servings = roundNumber(entry.servings, 2)
-  return `${servings} serving${servings === 1 ? '' : 's'}`
-}
-
-function buildRecipePayload(userId, recipeForm, totalsPerServing) {
-  return {
-    user_id: userId,
-    name: recipeForm.name.trim(),
-    brand: null,
-    serving_size: 1,
-    serving_unit: 'serving',
-    calories: numberOrZero(totalsPerServing.calories),
-    protein: numberOrZero(totalsPerServing.protein),
-    carbs: numberOrZero(totalsPerServing.carbs),
-    fat: numberOrZero(totalsPerServing.fat),
-    fiber: numberOrZero(totalsPerServing.fiber),
-    sugar: numberOrZero(totalsPerServing.sugar),
-    saturated_fat: numberOrZero(totalsPerServing.saturated_fat),
-    sodium: numberOrZero(totalsPerServing.sodium),
-    potassium: numberOrZero(totalsPerServing.potassium),
-    cholesterol: numberOrZero(totalsPerServing.cholesterol),
-    vitamin_a: numberOrZero(totalsPerServing.vitamin_a),
-    vitamin_c: numberOrZero(totalsPerServing.vitamin_c),
-    calcium: numberOrZero(totalsPerServing.calcium),
-    iron: numberOrZero(totalsPerServing.iron),
-    vitamin_d: numberOrZero(totalsPerServing.vitamin_d),
-    magnesium: numberOrZero(totalsPerServing.magnesium),
-    zinc: numberOrZero(totalsPerServing.zinc),
-    folate: numberOrZero(totalsPerServing.folate),
-    vitamin_b12: numberOrZero(totalsPerServing.vitamin_b12),
-    vitamin_b6: numberOrZero(totalsPerServing.vitamin_b6),
-  }
-}
-
-export default function CreateFood({ onSave, onBack }) {
+export default function CreateFood({ onSave, onBack, recipe = null, initialMode = 'food' }) {
   const userId = useCurrentUserId()
-  const [mode, setMode] = useState('food')
+  const editingRecipe = Boolean(recipe?.id)
+  const [mode] = useState(recipe ? 'recipe' : (initialMode === 'recipe' ? 'recipe' : 'food'))
   const [form, setForm] = useState(initialForm)
-  const [recipeForm, setRecipeForm] = useState(initialRecipeForm)
-  const [recipeIngredients, setRecipeIngredients] = useState([])
+  const [recipeForm, setRecipeForm] = useState(() => (recipe
+    ? { name: recipe.name || '', servings: String(recipe.servings ?? '1') }
+    : initialRecipeForm))
+  const [recipeIngredients, setRecipeIngredients] = useState(() => (recipe ? hydrateRecipeIngredients(recipe) : []))
   const [ingredientSearch, setIngredientSearch] = useState('')
   const [ingredientResults, setIngredientResults] = useState([])
   const [ingredientRecent, setIngredientRecent] = useState([])
@@ -265,31 +125,13 @@ export default function CreateFood({ onSave, onBack }) {
     ? buildScaledNutrients(ingredientCandidate, ingredientPreviewMultiplier)
     : null
 
-  const recipeTotals = useMemo(() => {
-    return recipeIngredients.reduce((totals, ingredient) => {
-      for (const key of RECIPE_NUMERIC_FIELDS) {
-        totals[key] += numberOrZero(ingredient.nutrients[key])
-      }
-      return totals
-    }, Object.fromEntries(RECIPE_NUMERIC_FIELDS.map(key => [key, 0])))
-  }, [recipeIngredients])
-
-  const recipePerServing = useMemo(() => {
-    return RECIPE_NUMERIC_FIELDS.reduce((totals, key) => {
-      const value = recipeTotals[key] / recipeYield
-      if (['calories', 'sodium', 'potassium', 'cholesterol', 'vitamin_a', 'calcium', 'magnesium', 'folate'].includes(key)) {
-        totals[key] = Math.round(value)
-      } else if (key === 'iron' || key === 'vitamin_b12' || key === 'vitamin_b6') {
-        totals[key] = roundNumber(value, 2)
-      } else {
-        totals[key] = roundNumber(value, 1)
-      }
-      return totals
-    }, {})
-  }, [recipeTotals, recipeYield])
+  const recipeTotals = useMemo(() => sumRecipeTotals(recipeIngredients), [recipeIngredients])
+  const recipePerServing = useMemo(() => perServingTotals(recipeTotals, recipeYield), [recipeTotals, recipeYield])
 
   const manualValid = form.name.trim() && form.calories !== '' && form.serving_size !== ''
-  const recipeValid = recipeForm.name.trim() && recipeIngredients.length > 0 && recipeYield > 0
+  const recipeValid = recipeForm.name.trim() && recipeIngredients.length > 0 && !validateNumber(recipeForm.servings, {
+    label: 'Servings made', min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, required: true, decimals: 2,
+  })
   const valid = mode === 'recipe' ? recipeValid : manualValid
   const ingredientList = ingredientSearch.trim() ? ingredientResults : ingredientRecent
 
@@ -512,6 +354,17 @@ export default function CreateFood({ onSave, onBack }) {
     setRecipeIngredients(current => current.filter(ingredient => ingredient.id !== id))
   }
 
+  // Reopen an added ingredient in the builder pre-filled (replace-on-readd) so its
+  // amount/serving size can be changed.
+  function editIngredient(entry) {
+    setIngredientCandidate(entry.food)
+    setIngredientAmountMode(entry.amountMode)
+    setIngredientAmount(entry.amountMode === 'direct' ? String(entry.amount) : '')
+    setIngredientServings(entry.amountMode === 'direct' ? 1 : (entry.servings || 1))
+    setRecipeIngredients(current => current.filter(item => item.id !== entry.id))
+    setError('')
+  }
+
   async function save() {
     const validationError = mode === 'recipe'
       ? validateRecipe()
@@ -531,20 +384,23 @@ export default function CreateFood({ onSave, onBack }) {
     }
 
     try {
-      const payload = mode === 'recipe'
-        ? buildRecipePayload(userId, recipeForm, recipePerServing)
-        : buildFoodPayload(form, userId)
-
-      const { data, error: saveError } = await supabase
-        .from('foods')
-        .insert(payload)
-        .select()
-        .single()
-
-      if (saveError) throw saveError
-
-      invalidateCache(`recent_foods:${userId}`, `user_foods:${userId}`)
-      onSave(data)
+      if (mode === 'recipe') {
+        const payload = buildRecipePayload(userId, recipeForm, recipeIngredients)
+        const data = editingRecipe
+          ? await updateRecipe(recipe.id, userId, payload)
+          : await createRecipe(payload)
+        onSave(data)
+      } else {
+        const payload = buildFoodPayload(form, userId)
+        const { data, error: saveError } = await supabase
+          .from('foods')
+          .insert(payload)
+          .select()
+          .single()
+        if (saveError) throw saveError
+        invalidateCache(`recent_foods:${userId}`, `user_foods:${userId}`)
+        onSave(data)
+      }
     } catch (error) {
       setError(error?.message || 'Could not save this food. Check your connection and try again.')
     } finally {
@@ -578,24 +434,7 @@ export default function CreateFood({ onSave, onBack }) {
         <button className="back-btn" onClick={onBack}>
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
-        <h2 className="picker-title">Create Food</h2>
-      </div>
-
-      <div className="cf-mode-toggle" role="tablist" aria-label="Create mode">
-        <button
-          type="button"
-          className={`cf-mode-toggle-btn ${mode === 'food' ? 'active' : ''}`}
-          onClick={() => setMode('food')}
-        >
-          Single Food
-        </button>
-        <button
-          type="button"
-          className={`cf-mode-toggle-btn ${mode === 'recipe' ? 'active' : ''}`}
-          onClick={() => setMode('recipe')}
-        >
-          Recipe
-        </button>
+        <h2 className="picker-title">{editingRecipe ? 'Edit Recipe' : mode === 'recipe' ? 'Create Recipe' : 'Create Food'}</h2>
       </div>
 
       {mode === 'recipe' ? (
@@ -640,7 +479,7 @@ export default function CreateFood({ onSave, onBack }) {
             )}
 
             <div className="cf-search-results">
-              {searchingIngredients && <div className="nut-empty">Searching...</div>}
+              {searchingIngredients && <div className="nut-empty"><LoadingSpinner size="sm" /></div>}
               {!searchingIngredients && ingredientList.length === 0 && (
                 <div className="nut-empty">
                   {ingredientSearch.trim() ? 'No foods found' : 'Search to add ingredients'}
@@ -814,13 +653,22 @@ export default function CreateFood({ onSave, onBack }) {
                           {formatIngredientAmount(ingredient)} · {ingredient.nutrients.calories} kcal
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        className="cf-remove-btn"
-                        onClick={() => removeIngredient(ingredient.id)}
-                      >
-                        Remove
-                      </button>
+                      <div className="cf-recipe-item-actions">
+                        <button
+                          type="button"
+                          className="cf-edit-btn"
+                          onClick={() => editIngredient(ingredient)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="cf-remove-btn"
+                          onClick={() => removeIngredient(ingredient.id)}
+                        >
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -918,7 +766,7 @@ export default function CreateFood({ onSave, onBack }) {
       {error && <div className="cf-error">{error}</div>}
 
       <button className="nut-add-to-log-btn" onClick={save} disabled={saving || !valid}>
-        {saving ? <LoadingSpinner size="xs" color="currentColor" /> : mode === 'recipe' ? 'Save Recipe' : 'Save Food'}
+        {saving ? <LoadingSpinner size="xs" color="currentColor" /> : editingRecipe ? 'Save Changes' : mode === 'recipe' ? 'Save Recipe' : 'Save Food'}
       </button>
     </div>
   )

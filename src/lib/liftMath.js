@@ -5,6 +5,12 @@ export const MAX_WEIGHT = 9999
 const MAX_BODYWEIGHT_EXTERNAL_KG = 999
 export const DEFAULT_BODYWEIGHT_KG = 170 * LBS_TO_KG
 
+function roundInputLimit(value) {
+  if (!Number.isFinite(value)) return value
+  const rounded = Math.round(value * 1000) / 1000
+  return Object.is(rounded, -0) ? 0 : rounded
+}
+
 export function fmtCompact(n) {
   if (n < 10000) return String(n)
   if (n < 1000000) {
@@ -40,14 +46,14 @@ export function getProfileBodyweightKg(profile, fallback = null) {
 
 export function getWeightInputMax(equipment, unit = 'kg') {
   return equipment === 'Bodyweight'
-    ? fromKg(MAX_BODYWEIGHT_EXTERNAL_KG, unit)
+    ? roundInputLimit(fromKg(MAX_BODYWEIGHT_EXTERNAL_KG, unit))
     : MAX_WEIGHT
 }
 
 export function getWeightInputMin(equipment, unit = 'kg', bodyweightKg = null) {
   if (equipment !== 'Bodyweight') return 0
   const resolvedBodyweightKg = bodyweightKg ?? DEFAULT_BODYWEIGHT_KG
-  return -fromKg(resolvedBodyweightKg, unit)
+  return roundInputLimit(-fromKg(resolvedBodyweightKg, unit))
 }
 
 export function isRepsWithinInputRange(reps) {

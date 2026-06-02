@@ -1,5 +1,10 @@
 import { Capacitor } from '@capacitor/core'
-import { AdMob, InterstitialAdPluginEvents, RewardAdPluginEvents } from '@capacitor-community/admob'
+import {
+  AdMob,
+  AdmobConsentStatus,
+  InterstitialAdPluginEvents,
+  RewardAdPluginEvents,
+} from '@capacitor-community/admob'
 
 const AD_UNIT_IDS = {
   interstitial: {
@@ -23,10 +28,14 @@ const TEST_AD_UNIT_IDS = {
   },
 }
 
-// Switch to false only when submitting to the stores with a published app
-const IS_TESTING = true
+// Test ads in dev (vite dev, vitest), real ads in production builds (vite build → Capacitor).
+// Never hardcode true here — see Google's invalid-traffic policy on clicking your own ads.
+const IS_TESTING = import.meta.env.DEV
 
 let initialized = false
+// Defaults to true so we never block ad serving while the consent SDK is reachable.
+// The consent flow below overwrites this based on the user's GDPR/UMP decision.
+let canRequestAds = true
 
 async function removeListener(listenerPromise) {
   try {
@@ -37,18 +46,79 @@ async function removeListener(listenerPromise) {
   }
 }
 
+// iOS App Tracking Transparency: must run before AdMob accesses IDFA.
+// No-op on Android. Failure is non-fatal — we fall back to non-personalized ads.
+async function requestAttIfNeeded() {
+  if (Capacitor.getPlatform() !== 'ios') return
+  try {
+    const { status } = await AdMob.trackingAuthorizationStatus()
+    if (status === 'notDetermined') {
+      await AdMob.requestTrackingAuthorization()
+    }
+  } catch {
+    // Continue without ATT — AdMob will serve non-personalized ads.
+  }
+}
+
+// Google UMP (User Messaging Platform) consent flow — required to serve
+// personalized ads to EU/UK/EEA users. Outside those regions, status comes
+// back NOT_REQUIRED and we skip the form.
+async function runConsentFlow() {
+  try {
+    const info = await AdMob.requestConsentInfo({ tagForUnderAgeOfConsent: false })
+    if (info.status === AdmobConsentStatus.REQUIRED && info.isConsentFormAvailable) {
+      const after = await AdMob.showConsentForm()
+      canRequestAds = after.canRequestAds !== false
+    } else {
+      canRequestAds = info.canRequestAds !== false
+    }
+  } catch {
+    // Consent SDK failed — leave canRequestAds at its optimistic default.
+    // AdMob will fall back to non-personalized ads if it can't determine consent.
+  }
+}
+
 export async function initAdMob() {
   if (initialized || !Capacitor.isNativePlatform()) return
   try {
-    await AdMob.initialize()
+    await requestAttIfNeeded()
+    await runConsentFlow()
+    await AdMob.initialize({ tagForUnderAgeOfConsent: false })
     initialized = true
   } catch {
     // ignore init failure
   }
 }
 
+// Returns true when the user is in a region that requires a privacy-options
+// entry point (EU/EEA). Use this to conditionally render the "Manage Ad
+// Consent" button — Google explicitly recommends hiding it when not required.
+export async function hasAdPrivacyOptions() {
+  if (!Capacitor.isNativePlatform()) return false
+  try {
+    const info = await AdMob.requestConsentInfo({ tagForUnderAgeOfConsent: false })
+    return info.privacyOptionsRequirementStatus === 'REQUIRED'
+  } catch {
+    return false
+  }
+}
+
+// Show the GDPR privacy options form so EU users can change their consent
+// after the initial choice. Call this from a Profile-screen settings button.
+export async function showAdPrivacyOptions() {
+  if (!Capacitor.isNativePlatform()) return
+  try {
+    await AdMob.showPrivacyOptionsForm()
+    const info = await AdMob.requestConsentInfo({ tagForUnderAgeOfConsent: false })
+    canRequestAds = info.canRequestAds !== false
+  } catch {
+    // ignore
+  }
+}
+
 export async function showWorkoutCompleteAd() {
   if (!Capacitor.isNativePlatform()) return
+  if (!canRequestAds) return // GDPR consent denied or unavailable
 
   const platform = Capacitor.getPlatform()
   const adId = IS_TESTING ? TEST_AD_UNIT_IDS.interstitial[platform] : AD_UNIT_IDS.interstitial[platform]
@@ -103,6 +173,7 @@ export async function showWorkoutCompleteAd() {
 // Returns true if the user watched enough to earn the reward, false if they skipped or ad failed
 export async function showRewardedAd() {
   if (!Capacitor.isNativePlatform()) return false
+  if (!canRequestAds) return false // GDPR consent denied or unavailable
 
   const platform = Capacitor.getPlatform()
   const adId = IS_TESTING ? TEST_AD_UNIT_IDS.rewarded[platform] : AD_UNIT_IDS.rewarded[platform]

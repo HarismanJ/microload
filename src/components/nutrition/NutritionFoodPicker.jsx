@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense, useCallback, useMemo } from 'react'
 import { push as pushBack, remove as removeBack } from '../../lib/backStack'
 import { showRewardedAd } from '../../lib/admob'
 import { isPremiumSync, refreshPremiumStatus } from '../../lib/purchases'
@@ -23,6 +23,7 @@ import {
   mergeFoodSearchResults,
   normalizeSearchValue,
 } from '../../lib/foodSearch'
+import { listRecipes, recipeToLoggableFood, deleteRecipe } from '../../lib/recipes'
 import CreateFood from './CreateFood'
 import FoodEditorFields from './FoodEditorFields'
 import LoadingSpinner from '../LoadingSpinner'
@@ -62,6 +63,17 @@ export default function NutritionFoodPicker({
   const [showScanPaywall, setShowScanPaywall] = useState(false)
   const [pendingScanPaywall, setPendingScanPaywall] = useState(false)
   const [adding, setAdding] = useState(false)
+  // Browse dropdowns + recipes
+  const [savedFoods, setSavedFoods] = useState([])
+  const [recipes, setRecipes] = useState([])
+  const [showSavedFoods, setShowSavedFoods] = useState(false)
+  const [showRecipes, setShowRecipes] = useState(false)
+  const [selectedRecipe, setSelectedRecipe] = useState(null)
+  const [recipeServings, setRecipeServings] = useState('1')
+  const [recipeError, setRecipeError] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [recipeEditorOpen, setRecipeEditorOpen] = useState(false)
+  const [editingRecipe, setEditingRecipe] = useState(null)
   const searchTimer = useRef()
   const scanAdStateRef = useRef(null)
   const localFoodsRef = useRef([])
@@ -227,7 +239,7 @@ export default function NutritionFoodPicker({
   // Scroll to top whenever the active view changes
   useEffect(() => {
     document.querySelector('.content')?.scrollTo(0, 0)
-  }, [selected, editingSelectedFood, creating, scanning])
+  }, [selected, editingSelectedFood, creating, scanning, selectedRecipe, recipeEditorOpen])
 
   useEffect(() => {
     if (!scanning) return
@@ -241,11 +253,12 @@ export default function NutritionFoodPicker({
   // Load local foods once on mount (and when userId changes).
   // Cleared immediately on userId change so a new user never sees stale data.
   useEffect(() => {
-    if (!userId) { localFoodsRef.current = []; return }
+    if (!userId) { localFoodsRef.current = []; setSavedFoods([]); return }
     let cancelled = false
     localFoodsRef.current = []
+    setSavedFoods([])
     loadUserFoods(userId)
-      .then(foods => { if (!cancelled) localFoodsRef.current = foods })
+      .then(foods => { if (!cancelled) { localFoodsRef.current = foods; setSavedFoods(foods) } })
       .catch(() => {})
     return () => { cancelled = true }
   }, [userId])
@@ -254,9 +267,41 @@ export default function NutritionFoodPicker({
   const refreshLocalFoods = useCallback(() => {
     if (!userId) return
     loadUserFoods(userId)
-      .then(foods => { localFoodsRef.current = foods })
+      .then(foods => { localFoodsRef.current = foods; setSavedFoods(foods) })
       .catch(() => {})
   }, [userId])
+
+  // Load the user's recipes once (cached); cleared immediately on userId change so a
+  // new user never sees stale data.
+  useEffect(() => {
+    if (!userId) { setRecipes([]); return undefined }
+    let cancelled = false
+    setRecipes([])
+    listRecipes(userId)
+      .then(rows => { if (!cancelled) setRecipes(rows) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [userId])
+
+  const refreshRecipes = useCallback(() => {
+    if (!userId) return
+    listRecipes(userId)
+      .then(setRecipes)
+      .catch(() => {})
+  }, [userId])
+
+  // Delete one of the user's own custom foods. nutrition_logs.food_id is ON DELETE SET NULL,
+  // so past diary entries are preserved (they keep their snapshotted name + macros).
+  async function deleteFood(id, ownerId) {
+    const { error } = await supabase
+      .from('foods')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', ownerId)
+    if (error) throw error
+    invalidateCache(`user_foods:${ownerId}`, `recent_foods:${ownerId}`)
+    refreshLocalFoods()
+  }
 
   useEffect(() => {
     clearTimeout(searchTimer.current)
@@ -363,6 +408,7 @@ export default function NutritionFoodPicker({
   function selectFood(food) {
     setSelected(food)
     setEditingSelectedFood(false)
+    setConfirmDelete(false)
     setSelectedFoodForm(foodToFormValues(food))
     setSelectedFoodError('')
     setServings('1')
@@ -470,6 +516,86 @@ export default function NutritionFoodPicker({
     }
   }
 
+  function selectRecipe(recipe) {
+    setSelectedRecipe(recipe)
+    setRecipeServings('1')
+    setRecipeError('')
+    setConfirmDelete(false)
+  }
+
+  async function handleDeleteRecipe() {
+    if (!selectedRecipe?.id || !userId) return
+    try {
+      await deleteRecipe(selectedRecipe.id, userId)
+      refreshRecipes()
+      setConfirmDelete(false)
+      setSelectedRecipe(null)
+    } catch (error) {
+      setRecipeError(error?.message || 'Could not delete this recipe.')
+    }
+  }
+
+  async function handleDeleteFood() {
+    if (!selected?.id || !userId) return
+    try {
+      await deleteFood(selected.id, userId)
+      setConfirmDelete(false)
+      setSelected(null)
+    } catch (error) {
+      setSelectedFoodError(error?.message || 'Could not delete this food.')
+    }
+  }
+
+  function openRecipeEditor(recipe = null) {
+    setEditingRecipe(recipe)
+    setRecipeEditorOpen(true)
+  }
+
+  function closeRecipeEditor() {
+    setRecipeEditorOpen(false)
+    setEditingRecipe(null)
+  }
+
+  function handleRecipeSaved(savedRecipe) {
+    closeRecipeEditor()
+    refreshRecipes()
+    if (savedRecipe?.id) setSelectedRecipe(savedRecipe)
+  }
+
+  // Log a recipe = snapshot its per-serving nutrition × servings via the same onAdd path
+  // foods use. recipeToLoggableFood yields a food-shaped object with food_id null.
+  function handleAddRecipe() {
+    const amountError = validateNumber(recipeServings, { label: 'Servings', min: 0.01, max: VALIDATION_LIMITS.nutritionAmountMax, required: true, decimals: 2 })
+    if (amountError) {
+      setRecipeError(amountError)
+      return
+    }
+    const servingsNum = Number.parseFloat(recipeServings)
+    if (!selectedRecipe || !(servingsNum > 0) || adding) return
+    setAdding(true)
+    onAdd(recipeToLoggableFood(selectedRecipe), servingsNum)
+  }
+
+  // Client-side recipe name match (recipes are already in memory — no network).
+  const recipeMatches = useMemo(() => {
+    const q = normalizeSearchValue(search)
+    if (!q) return []
+    return recipes
+      .filter(recipe => normalizeSearchValue(recipe.name).includes(q))
+      .slice(0, 10)
+  }, [search, recipes])
+
+  if (recipeEditorOpen) {
+    return (
+      <CreateFood
+        recipe={editingRecipe}
+        initialMode="recipe"
+        onSave={handleRecipeSaved}
+        onBack={closeRecipeEditor}
+      />
+    )
+  }
+
   if (creating) {
     return (
       <CreateFood
@@ -517,6 +643,99 @@ export default function NutritionFoodPicker({
         <button className="nut-add-to-log-btn" onClick={saveSelectedFoodEdits}>
           Save Changes
         </button>
+      </div>
+    )
+  }
+
+  // Recipe log view — pick servings, then snapshot per-serving nutrition into the diary.
+  if (selectedRecipe) {
+    const r = selectedRecipe
+    const recipeMicros = [
+      { label: 'Fiber', val: +(r.fiber || 0).toFixed(1), unit: 'g', show: r.fiber > 0 },
+      { label: 'Sugar', val: +(r.sugar || 0).toFixed(1), unit: 'g', show: r.sugar > 0 },
+      { label: 'Saturated Fat', val: +(r.saturated_fat || 0).toFixed(1), unit: 'g', show: r.saturated_fat > 0 },
+      { label: 'Sodium', val: Math.round(r.sodium || 0), unit: 'mg', show: r.sodium > 0 },
+      { label: 'Potassium', val: Math.round(r.potassium || 0), unit: 'mg', show: r.potassium > 0 },
+      { label: 'Cholesterol', val: Math.round(r.cholesterol || 0), unit: 'mg', show: r.cholesterol > 0 },
+      { label: 'Calcium', val: Math.round(r.calcium || 0), unit: 'mg', show: r.calcium > 0 },
+      { label: 'Iron', val: +(r.iron || 0).toFixed(1), unit: 'mg', show: r.iron > 0 },
+      { label: 'Magnesium', val: Math.round(r.magnesium || 0), unit: 'mg', show: r.magnesium > 0 },
+      { label: 'Zinc', val: +(r.zinc || 0).toFixed(1), unit: 'mg', show: r.zinc > 0 },
+      { label: 'Vitamin A', val: +(r.vitamin_a || 0).toFixed(1), unit: 'mcg', show: r.vitamin_a > 0 },
+      { label: 'Vitamin C', val: +(r.vitamin_c || 0).toFixed(1), unit: 'mg', show: r.vitamin_c > 0 },
+      { label: 'Vitamin D', val: +(r.vitamin_d || 0).toFixed(1), unit: 'mcg', show: r.vitamin_d > 0 },
+      { label: 'Vitamin B6', val: +(r.vitamin_b6 || 0).toFixed(1), unit: 'mg', show: r.vitamin_b6 > 0 },
+      { label: 'Vitamin B12', val: +(r.vitamin_b12 || 0).toFixed(1), unit: 'mcg', show: r.vitamin_b12 > 0 },
+      { label: 'Folate', val: Math.round(r.folate || 0), unit: 'mcg', show: r.folate > 0 },
+    ].filter(x => x.show)
+
+    return (
+      <div className="nut-picker-screen">
+        <div className="nut-picker-header">
+          <button className="back-btn" onClick={() => setSelectedRecipe(null)}>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+          </button>
+          <h2 className="picker-title">{selectedRecipe.name}</h2>
+          <button className="nut-create-food-btn" onClick={() => openRecipeEditor(selectedRecipe)} title="Edit recipe">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          </button>
+        </div>
+
+        <div className="nut-recipe-detail-label">Per serving</div>
+        <div className="nut-preview-card">
+          <div className="nut-preview-cal">{Math.round(r.calories || 0)} <span>kcal</span></div>
+          <div className="nut-preview-macros">
+            <div className="nut-preview-macro" style={{ '--mc': '#a855f7' }}>
+              <span>{(r.protein || 0).toFixed(1)}g</span><span>Protein</span>
+            </div>
+            <div className="nut-preview-macro" style={{ '--mc': '#f97316' }}>
+              <span>{(r.carbs || 0).toFixed(1)}g</span><span>Carbs</span>
+            </div>
+            <div className="nut-preview-macro" style={{ '--mc': '#eab308' }}>
+              <span>{(r.fat || 0).toFixed(1)}g</span><span>Fat</span>
+            </div>
+          </div>
+        </div>
+
+        {recipeMicros.length > 0 && (
+          <div className="nut-micros-card">
+            <div className="nut-micros-title">More Nutrition</div>
+            {recipeMicros.map(mi => (
+              <div key={mi.label} className="nut-micro-row">
+                <span>{mi.label}</span>
+                <span>{mi.val}{mi.unit}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <label className="nut-list-label" htmlFor="recipe-servings-input">Servings</label>
+        <input
+          id="recipe-servings-input"
+          className="picker-search"
+          type="number"
+          inputMode="decimal"
+          value={recipeServings}
+          onChange={e => { setRecipeServings(e.target.value); setRecipeError('') }}
+          min={0.01}
+          step={0.01}
+        />
+
+        {recipeError && <div className="bs-not-found-note">{recipeError}</div>}
+
+        <button className="nut-add-to-log-btn" onClick={handleAddRecipe} disabled={adding}>
+          {adding ? <LoadingSpinner size="xs" color="currentColor" /> : 'Add to Log'}
+        </button>
+
+        {confirmDelete ? (
+          <div className="nut-detail-delete-confirm">
+            <span className="nut-detail-delete-text">Delete this recipe?</span>
+            <button className="nut-detail-delete-cancel" onClick={() => setConfirmDelete(false)}>Cancel</button>
+            <button className="nut-detail-delete-confirm-btn" onClick={handleDeleteRecipe}>Delete</button>
+          </div>
+        ) : (
+          <button className="nut-detail-delete-btn" onClick={() => setConfirmDelete(true)}>Delete recipe</button>
+        )}
       </div>
     )
   }
@@ -699,10 +918,22 @@ export default function NutritionFoodPicker({
           <button className="nut-detail-edit-btn" onClick={openSelectedFoodEditor}>
             Edit Nutrition
           </button>
-          <button className="nut-add-to-log-btn" onClick={handleAdd} disabled={adding} style={adding ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}>
-            {pickerSubmitLabel}
+          <button className="nut-add-to-log-btn" onClick={handleAdd} disabled={adding}>
+            {adding ? <LoadingSpinner size="xs" color="currentColor" /> : pickerSubmitLabel}
           </button>
         </div>
+
+        {selected.user_id === userId && selected.id && !selected.remoteKey && !selected.persistAsNew && (
+          confirmDelete ? (
+            <div className="nut-detail-delete-confirm">
+              <span className="nut-detail-delete-text">Delete this food?</span>
+              <button className="nut-detail-delete-cancel" onClick={() => setConfirmDelete(false)}>Cancel</button>
+              <button className="nut-detail-delete-confirm-btn" onClick={handleDeleteFood}>Delete</button>
+            </div>
+          ) : (
+            <button className="nut-detail-delete-btn" onClick={() => setConfirmDelete(true)}>Delete food</button>
+          )
+        )}
       </div>
     )
   }
@@ -718,9 +949,14 @@ export default function NutritionFoodPicker({
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
         </button>
         <h2 className="picker-title">{pickerTitle}</h2>
-        <button className="nut-create-food-btn" onClick={() => setCreating(true)} title="Create food">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        </button>
+        <div className="nut-picker-header-actions">
+          <button className="nut-create-food-btn" onClick={() => openRecipeEditor(null)} title="Create recipe">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </button>
+          <button className="nut-create-food-btn" onClick={() => setCreating(true)} title="Create food">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </button>
+        </div>
       </div>
 
       <input
@@ -755,13 +991,86 @@ export default function NutritionFoodPicker({
 
       {showRecent && <div className="nut-list-label">Recent</div>}
 
+      {showRecent && (
+        <>
+          <button
+            type="button"
+            className="nut-dropdown-toggle"
+            onClick={() => setShowSavedFoods(value => !value)}
+            aria-expanded={showSavedFoods}
+          >
+            <span>{showSavedFoods ? '▾' : '▸'} Saved Foods</span>
+            <span className="nut-dropdown-count">{savedFoods.length}</span>
+          </button>
+          {showSavedFoods && (
+            <div className="nut-dropdown-body">
+              {savedFoods.length === 0 ? (
+                <div className="nut-empty">No saved foods yet — tap the + icon above to create one</div>
+              ) : savedFoods.map(food => (
+                <div key={food.id ?? buildFoodSearchKey(food)} className="nut-search-item" onClick={() => selectFood(food)}>
+                  <div className="nut-search-info">
+                    <div className="nut-search-name">{food.name}</div>
+                    {food.brand && <div className="nut-search-brand">{food.brand}</div>}
+                    <div className="nut-search-macros">
+                      P {(food.protein || 0).toFixed(0)}g · C {(food.carbs || 0).toFixed(0)}g · F {(food.fat || 0).toFixed(0)}g
+                      <span className="nut-search-serving"> · per {food.serving_size}{food.serving_unit}</span>
+                    </div>
+                  </div>
+                  <div className="nut-search-cal">{food.calories}<span> kcal</span></div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="nut-dropdown-toggle"
+            onClick={() => setShowRecipes(value => !value)}
+            aria-expanded={showRecipes}
+          >
+            <span>{showRecipes ? '▾' : '▸'} My Recipes</span>
+            <span className="nut-dropdown-count">{recipes.length}</span>
+          </button>
+          {showRecipes && (
+            <div className="nut-dropdown-body">
+              {recipes.length === 0 ? (
+                <div className="nut-empty">No recipes yet — tap the list icon above to create one</div>
+              ) : recipes.map(recipe => (
+                <div key={recipe.id} className="nut-search-item" onClick={() => selectRecipe(recipe)}>
+                  <div className="nut-search-info">
+                    <div className="nut-search-name">{recipe.name} <span className="nut-recipe-badge">Recipe</span></div>
+                    <div className="nut-search-macros">
+                      P {(recipe.protein || 0).toFixed(0)}g · C {(recipe.carbs || 0).toFixed(0)}g · F {(recipe.fat || 0).toFixed(0)}g
+                      <span className="nut-search-serving"> · per serving</span>
+                    </div>
+                  </div>
+                  <div className="nut-search-cal">{Math.round(recipe.calories || 0)}<span> kcal</span></div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
       <div className="nut-search-list">
         {(searching || (showRecent && loadingRecent)) && <LoadingSpinner fullPage />}
-        {!searching && !loadingRecent && list.length === 0 && (
+        {!searching && !loadingRecent && list.length === 0 && recipeMatches.length === 0 && (
           <div className="nut-empty">
             {searchFailed ? 'Search failed — please try again' : search.trim() ? 'No foods found — try creating one' : 'No recent foods'}
           </div>
         )}
+        {search.trim() && recipeMatches.map(recipe => (
+          <div key={`recipe:${recipe.id}`} className="nut-search-item" onClick={() => selectRecipe(recipe)}>
+            <div className="nut-search-info">
+              <div className="nut-search-name">{recipe.name} <span className="nut-recipe-badge">Recipe</span></div>
+              <div className="nut-search-macros">
+                P {(recipe.protein || 0).toFixed(0)}g · C {(recipe.carbs || 0).toFixed(0)}g · F {(recipe.fat || 0).toFixed(0)}g
+                <span className="nut-search-serving"> · per serving</span>
+              </div>
+            </div>
+            <div className="nut-search-cal">{Math.round(recipe.calories || 0)}<span> kcal</span></div>
+          </div>
+        ))}
         {list.map(food => (
           <div key={food.id ?? food.remoteKey ?? buildFoodSearchKey(food)} className="nut-search-item" onClick={() => selectFood(food)}>
             <div className="nut-search-info">

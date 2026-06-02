@@ -5,6 +5,7 @@ import { fmtCompact } from '../lib/liftMath'
 import { TIERS, tierColor, tierGroup } from '../lib/strengthStandards'
 import RankBadge from './RankBadge'
 import TierProgressBar from './TierProgressBar'
+import LoadingSpinner from './LoadingSpinner'
 import '../styles/WorkoutSummary.css'
 
 function prefersReducedMotion() {
@@ -93,6 +94,7 @@ function getBattleOutcome(battle) {
 
 const STEP_MS = 450
 const RANKUP_WALK_START_MS = 2320
+const RANKUP_INITIAL_STEP_MS = 1800
 
 function computeWalkPath(from, to) {
   const toIdx = TIERS.indexOf(to)
@@ -123,6 +125,18 @@ const RankUpCard = forwardRef(function RankUpCard({ r, revealed, onSlam }, ref) 
     }, 810)
     return () => clearTimeout(t)
   }, [revealed, onSlam])
+
+  useEffect(() => {
+    if (!revealed || walkPath.length === 0) return undefined
+    if (prefersReducedMotion()) return undefined
+    const t = setTimeout(() => {
+      const initialGroup = tierGroup(walkPath[0])
+      const isMajor = fromGroup !== initialGroup
+      Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {})
+      onSlam?.(isMajor ? 'strong' : 'light')
+    }, RANKUP_INITIAL_STEP_MS)
+    return () => clearTimeout(t)
+  }, [revealed, walkPath, fromGroup, onSlam])
 
   useEffect(() => {
     if (!revealed || walkPath.length <= 1) return
@@ -243,8 +257,11 @@ const RankUpCard = forwardRef(function RankUpCard({ r, revealed, onSlam }, ref) 
 const PROGRESS_SLAM_MS = 810
 const PROGRESS_BAR_FILL_MS = 600
 const PROGRESS_TIER_SWAP_MS = 350
+const PROGRESS_DOWN_DRAIN_MS = 850
+const PROGRESS_DOWN_SETTLE_MS = STEP_MS
+const PROGRESS_DOWN_LANDING_MS = 700
 
-const ProgressCard = forwardRef(function ProgressCard({ p, revealed }, ref) {
+const ProgressCard = forwardRef(function ProgressCard({ p, revealed, onSlam }, ref) {
   const isMaintained = p.direction === 'same'
   const isDown = p.direction === 'down'
   const tierChanged = Boolean(p.tierChanged)
@@ -256,19 +273,63 @@ const ProgressCard = forwardRef(function ProgressCard({ p, revealed }, ref) {
   //  'final'          — bar at new progress, current tier badges
   const [stage, setStage] = useState('initial')
   const [barTarget, setBarTarget] = useState(p.previousProgress)
-  const [shaking, setShaking] = useState(false)
+  const [pulsing, setPulsing] = useState(false)
+  const cardRef = useRef(null)
+  const setCardRef = useCallback((node) => {
+    cardRef.current = node
+    if (typeof ref === 'function') ref(node)
+    else if (ref) ref.current = node
+  }, [ref])
+
+  // Snap maintained cards to final state when they reveal — done in render phase
+  // (per React docs on adjusting state to prop changes) to avoid effect-cascading renders.
+  const [prevRevealed, setPrevRevealed] = useState(revealed)
+  if (revealed !== prevRevealed) {
+    setPrevRevealed(revealed)
+    if (revealed && isMaintained) {
+      setStage('final')
+      setBarTarget(p.progress)
+    }
+  }
 
   useEffect(() => {
     if (!revealed) return undefined
+    if (prefersReducedMotion()) return undefined
+    const t = setTimeout(() => {
+      Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {})
+      onSlam?.('strong')
+    }, PROGRESS_SLAM_MS)
+    return () => clearTimeout(t)
+  }, [revealed, onSlam])
+
+  useEffect(() => {
+    if (!revealed) return undefined
+    if (isMaintained) return undefined
     const reduced = prefersReducedMotion()
-    if (isMaintained) {
-      // Just show the card silently; no bar movement, no haptic, no shake.
-      setStage('final')
-      setBarTarget(p.progress)
-      return undefined
-    }
 
     const timeouts = []
+    const tierBarMs = isDown ? PROGRESS_DOWN_DRAIN_MS : PROGRESS_BAR_FILL_MS
+    const tierSwapMs = isDown ? PROGRESS_DOWN_SETTLE_MS : PROGRESS_TIER_SWAP_MS
+    const triggerDownFeedback = ({ haptic = true } = {}) => {
+      if (reduced || !isDown) return
+      if (haptic) Haptics.impact({ style: ImpactStyle.Light }).catch(() => {})
+      cardRef.current?.animate?.([
+        { transform: 'translateX(0)' },
+        { transform: 'translateX(-7px)' },
+        { transform: 'translateX(6px)' },
+        { transform: 'translateX(-5px)' },
+        { transform: 'translateX(4px)' },
+        { transform: 'translateX(-3px)' },
+        { transform: 'translateX(2px)' },
+        { transform: 'translateX(0)' },
+      ], {
+        duration: 380,
+        easing: 'cubic-bezier(0.36, 0.07, 0.19, 0.97)',
+      })
+      setPulsing(true)
+      timeouts.push(setTimeout(() => setPulsing(false), 900))
+    }
+
     if (tierChanged) {
       timeouts.push(setTimeout(() => {
         setStage('transitioning')
@@ -276,11 +337,15 @@ const ProgressCard = forwardRef(function ProgressCard({ p, revealed }, ref) {
       }, PROGRESS_SLAM_MS))
       timeouts.push(setTimeout(() => {
         setStage('tierSwap')
-      }, PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS))
+        if (isDown) {
+          setBarTarget(100)
+          triggerDownFeedback()
+        }
+      }, PROGRESS_SLAM_MS + tierBarMs))
       timeouts.push(setTimeout(() => {
         setStage('final')
         setBarTarget(p.progress)
-      }, PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS + PROGRESS_TIER_SWAP_MS))
+      }, PROGRESS_SLAM_MS + tierBarMs + tierSwapMs))
     } else {
       timeouts.push(setTimeout(() => {
         setStage('final')
@@ -290,11 +355,8 @@ const ProgressCard = forwardRef(function ProgressCard({ p, revealed }, ref) {
 
     if (!reduced) {
       timeouts.push(setTimeout(() => {
-        Haptics.impact({ style: ImpactStyle.Light }).catch(() => {})
-        if (isDown) {
-          setShaking(true)
-          timeouts.push(setTimeout(() => setShaking(false), 380))
-        }
+        if (isDown && tierChanged) return
+        if (isDown) triggerDownFeedback({ haptic: false })
       }, PROGRESS_SLAM_MS))
     }
 
@@ -307,38 +369,53 @@ const ProgressCard = forwardRef(function ProgressCard({ p, revealed }, ref) {
   const displayIsMax = showFinalBadges ? p.isMax : false
   const displayColor = showFinalBadges ? p.color : (p.previousColor || p.color)
   const barPctClamped = Math.max(0, Math.min(100, Math.round(barTarget)))
+  const barTransitionMs = isDown && tierChanged
+    ? (stage === 'final' ? PROGRESS_DOWN_LANDING_MS : PROGRESS_DOWN_DRAIN_MS)
+    : PROGRESS_BAR_FILL_MS
+  const progressPct = Math.max(0, Math.min(100, Math.round(p.progress)))
+  const landingText = displayIsMax ? 'Max rank reached' : `${progressPct}% to ${displayNextTier}`
 
   return (
     <div
-      ref={ref}
+      ref={setCardRef}
       className={[
         'ws-progress-card',
         revealed ? 'ws-progress-card-revealed' : '',
         isDown ? 'ws-progress-card-down' : '',
         isMaintained ? 'ws-progress-card-maintained' : '',
-        shaking ? 'ws-progress-card-shaking' : '',
+        pulsing ? 'ws-progress-card-pulsing' : '',
       ].filter(Boolean).join(' ')}
       style={{ '--delay': '0.15s', '--tier-color': displayColor }}
     >
-      <div className="ws-progress-card-header">
-        <span className="ws-progress-card-exercise">{p.exercise}</span>
-      </div>
-      <div className="ws-progress-card-journey">
-        <div className="ws-progress-card-from-side">
-          <RankBadge tier={tierGroup(displayTier)} size={20} />
-          <span className="ws-progress-card-tier-name">{displayTier}</span>
+      <div className="ws-progress-card-shell">
+        <div className="ws-progress-card-header">
+          <span className="ws-progress-card-exercise">{p.exercise}</span>
         </div>
-        <div className="ws-progress-card-bar-wrap">
-          <div
-            className="ws-progress-card-bar-fill"
-            style={{ width: `${barPctClamped}%` }}
-          />
+        <div className="ws-progress-card-journey">
+          <div className="ws-progress-card-from-side">
+            <RankBadge tier={tierGroup(displayTier)} size={20} />
+            <span className="ws-progress-card-tier-name">{displayTier}</span>
+          </div>
+          <div className="ws-progress-card-bar-wrap">
+            <div
+              className={[
+                'ws-progress-card-bar-fill',
+                isDown && tierChanged && stage === 'tierSwap' ? 'ws-progress-card-bar-fill-snap' : '',
+              ].filter(Boolean).join(' ')}
+              style={{ width: `${barPctClamped}%`, '--progress-bar-ms': `${barTransitionMs}ms` }}
+            />
+          </div>
+          {displayIsMax ? (
+            <span className="ws-progress-card-max-pill">MAX</span>
+          ) : (
+            <div className="ws-progress-card-to-side">
+              {displayNextTier && <RankBadge tier={tierGroup(displayNextTier)} size={20} />}
+            </div>
+          )}
         </div>
-        {displayIsMax ? (
-          <span className="ws-progress-card-max-pill">MAX</span>
-        ) : (
-          <div className="ws-progress-card-to-side">
-            {displayNextTier && <RankBadge tier={tierGroup(displayNextTier)} size={20} />}
+        {stage === 'final' && (
+          <div className="ws-progress-card-landing-pct">
+            {landingText}
           </div>
         )}
       </div>
@@ -419,7 +496,10 @@ export default function WorkoutSummary({ summary, onDismiss }) {
     battle = null,
     battleOnly = false,
     planCoaching = null,
+    applyCoaching = null,
+    coachAutoApplied = false,
   } = summary
+  const [coachApplyState, setCoachApplyState] = useState(coachAutoApplied ? 'applied' : 'idle')
   const displayedWorkingSets = totalWorkingSets ?? totalSets ?? 0
   const hasDropSets = Number(totalDropSets) > 0
   const hasStrengthExercises = exercises.some(ex => !ex.isCardio)
@@ -478,7 +558,12 @@ export default function WorkoutSummary({ summary, onDismiss }) {
         // progress card
         const { direction, tierChanged } = item.data
         if (direction === 'same') cumulative += 800
-        else if (tierChanged) cumulative += PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS + PROGRESS_TIER_SWAP_MS + PROGRESS_BAR_FILL_MS + 200
+        else if (tierChanged) {
+          const tierBarMs = direction === 'down' ? PROGRESS_DOWN_DRAIN_MS : PROGRESS_BAR_FILL_MS
+          const tierSwapMs = direction === 'down' ? PROGRESS_DOWN_SETTLE_MS : PROGRESS_TIER_SWAP_MS
+          const landingMs = direction === 'down' ? PROGRESS_DOWN_LANDING_MS : PROGRESS_BAR_FILL_MS
+          cumulative += PROGRESS_SLAM_MS + tierBarMs + tierSwapMs + landingMs + 200
+        }
         else cumulative += PROGRESS_SLAM_MS + PROGRESS_BAR_FILL_MS + 200
       }
     }
@@ -672,8 +757,10 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.74V17h8v-2.26A7 7 0 0 0 12 2z"/></svg>
                 Plan Coach
               </div>
-              <div className="ws-coach-card">
-                <div className="ws-coach-pill">Pending Review</div>
+              <div className={`ws-coach-card${coachApplyState === 'applied' ? ' ws-coach-card--applied' : ''}`}>
+                <div className="ws-coach-pill">
+                  {coachApplyState === 'applied' ? 'Applied to Plan' : 'Pending Review'}
+                </div>
                 <div className="ws-coach-title">{planCoaching.summary}</div>
                 <div className="ws-coach-body">{planCoaching.body}</div>
                 {planCoaching.metrics && (
@@ -681,6 +768,33 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                     <span>{planCoaching.metrics.completedSets}/{planCoaching.metrics.plannedSets} sets</span>
                     <span>{planCoaching.metrics.actualMinutes}m actual</span>
                     <span>{Math.round((planCoaching.metrics.completionRate || 0) * 100)}% complete</span>
+                  </div>
+                )}
+                {applyCoaching && coachApplyState !== 'applied' && (
+                  <button
+                    type="button"
+                    className="ws-coach-apply"
+                    disabled={coachApplyState === 'applying'}
+                    onClick={async () => {
+                      if (coachApplyState === 'applying') return
+                      setCoachApplyState('applying')
+                      try {
+                        const ok = await applyCoaching()
+                        setCoachApplyState(ok ? 'applied' : 'idle')
+                      } catch {
+                        setCoachApplyState('idle')
+                      }
+                    }}
+                  >
+                    {coachApplyState === 'applying'
+                      ? <LoadingSpinner size="xs" color="currentColor" />
+                      : 'Apply to Plan'}
+                  </button>
+                )}
+                {coachApplyState === 'applied' && (
+                  <div className="ws-coach-applied-note">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                    Your plan has been updated
                   </div>
                 )}
               </div>
@@ -754,6 +868,7 @@ export default function WorkoutSummary({ summary, onDismiss }) {
                       ref={el => { itemRefs.current[absoluteIdx] = el }}
                       p={item.data}
                       revealed={isRevealed}
+                      onSlam={triggerScreenShake}
                     />
                   )
                 })}

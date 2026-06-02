@@ -122,6 +122,41 @@ $_$;
 ALTER FUNCTION "public"."app_enforce_write_rate_limit"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."app_enforce_saved_item_limit"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+declare
+  item_limit integer := tg_argv[0]::integer;
+  item_label text := tg_argv[1];
+  existing_count integer;
+begin
+  if new.user_id is null then
+    return new;
+  end if;
+
+  perform pg_advisory_xact_lock(
+    hashtext(tg_table_schema || '.' || tg_table_name),
+    hashtext(new.user_id::text)
+  );
+
+  execute format('select count(*) from %I.%I where user_id = $1', tg_table_schema, tg_table_name)
+    using new.user_id
+    into existing_count;
+
+  if existing_count >= item_limit then
+    raise exception '% limit reached', item_label
+      using errcode = 'P0001';
+  end if;
+
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."app_enforce_saved_item_limit"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."app_json_text_size_ok"("p_value" "jsonb", "p_max_bytes" integer) RETURNS boolean
     LANGUAGE "sql" IMMUTABLE
     AS $$
@@ -302,11 +337,24 @@ declare
     'durationSeconds',
     'duration_seconds',
     'met',
+    'setType',
+    'set_type',
+    'setGroupIndex',
+    'set_group_index',
+    'isWarmup',
+    'is_warmup',
+    'removeGroup',
     'totalSets',
+    'totalWorkingSets',
+    'totalDropSets',
+    'totalWarmupSets',
     'totalVolume',
     'totalVolumeKg',
+    'totalLoadVolume',
+    'totalLoadVolumeKg',
     'totalExercises',
-    'exerciseCount'
+    'exerciseCount',
+    'highlights'
   ];
   event_types text[] := array[
     'workout_started',
@@ -316,6 +364,12 @@ declare
     'workout_finished',
     'workout_cancelled',
     'workout_stale'
+  ];
+  set_types text[] := array[
+    'normal',
+    'warmup',
+    'dropset',
+    'superset'
   ];
   key_count integer := 0;
   numeric_value numeric;
@@ -343,6 +397,15 @@ begin
       if char_length(trim(both '"' from item.value::text)) > 120 then return false; end if;
     end if;
 
+    if item.key in ('setType', 'set_type') then
+      if jsonb_typeof(item.value) <> 'string' then return false; end if;
+      if not (trim(both '"' from item.value::text) = any(set_types)) then return false; end if;
+    end if;
+
+    if item.key in ('isWarmup', 'is_warmup', 'removeGroup') then
+      if jsonb_typeof(item.value) <> 'boolean' then return false; end if;
+    end if;
+
     if item.key in ('exerciseNames', 'exerciseCategories') then
       if jsonb_typeof(item.value) <> 'array' or jsonb_array_length(item.value) > 100 then return false; end if;
       for arr in select value from jsonb_array_elements(item.value) loop
@@ -359,11 +422,25 @@ begin
         if numeric_value < 1 or numeric_value > 1000000 or numeric_value <> floor(numeric_value) then return false; end if;
       end loop;
     end if;
+
+    if item.key = 'highlights' then
+      if jsonb_typeof(item.value) <> 'array' or jsonb_array_length(item.value) > 16 then return false; end if;
+    end if;
   end loop;
 
   if p_payload ? 'setNumber' then
     numeric_value := (p_payload->>'setNumber')::numeric;
     if numeric_value < 1 or numeric_value > 9999 or numeric_value <> floor(numeric_value) then return false; end if;
+  end if;
+
+  if p_payload ? 'setGroupIndex' and jsonb_typeof(p_payload->'setGroupIndex') <> 'null' then
+    numeric_value := (p_payload->>'setGroupIndex')::numeric;
+    if numeric_value < 0 or numeric_value > 9999 or numeric_value <> floor(numeric_value) then return false; end if;
+  end if;
+
+  if p_payload ? 'set_group_index' and jsonb_typeof(p_payload->'set_group_index') <> 'null' then
+    numeric_value := (p_payload->>'set_group_index')::numeric;
+    if numeric_value < 0 or numeric_value > 9999 or numeric_value <> floor(numeric_value) then return false; end if;
   end if;
 
   if p_payload ? 'reps' then
@@ -396,6 +473,21 @@ begin
     if numeric_value < 0 or numeric_value > 10000 or numeric_value <> floor(numeric_value) then return false; end if;
   end if;
 
+  if p_payload ? 'totalWorkingSets' then
+    numeric_value := (p_payload->>'totalWorkingSets')::numeric;
+    if numeric_value < 0 or numeric_value > 10000 or numeric_value <> floor(numeric_value) then return false; end if;
+  end if;
+
+  if p_payload ? 'totalDropSets' then
+    numeric_value := (p_payload->>'totalDropSets')::numeric;
+    if numeric_value < 0 or numeric_value > 10000 or numeric_value <> floor(numeric_value) then return false; end if;
+  end if;
+
+  if p_payload ? 'totalWarmupSets' then
+    numeric_value := (p_payload->>'totalWarmupSets')::numeric;
+    if numeric_value < 0 or numeric_value > 10000 or numeric_value <> floor(numeric_value) then return false; end if;
+  end if;
+
   if p_payload ? 'totalExercises' then
     numeric_value := (p_payload->>'totalExercises')::numeric;
     if numeric_value < 0 or numeric_value > 1000 or numeric_value <> floor(numeric_value) then return false; end if;
@@ -413,6 +505,16 @@ begin
 
   if p_payload ? 'totalVolumeKg' then
     numeric_value := (p_payload->>'totalVolumeKg')::numeric;
+    if numeric_value < 0 or numeric_value > 100000000 then return false; end if;
+  end if;
+
+  if p_payload ? 'totalLoadVolume' then
+    numeric_value := (p_payload->>'totalLoadVolume')::numeric;
+    if numeric_value < 0 or numeric_value > 100000000 then return false; end if;
+  end if;
+
+  if p_payload ? 'totalLoadVolumeKg' then
+    numeric_value := (p_payload->>'totalLoadVolumeKg')::numeric;
     if numeric_value < 0 or numeric_value > 100000000 then return false; end if;
   end if;
 
@@ -513,6 +615,9 @@ begin
   where user_id = p_user_id;
 
   delete from public.user_routines
+  where user_id = p_user_id;
+
+  delete from public.recipes
   where user_id = p_user_id;
 
   delete from public.foods
@@ -858,6 +963,27 @@ COMMENT ON FUNCTION "public"."get_friend_rank_profile"("p_profile_id" "uuid") IS
 
 
 
+CREATE OR REPLACE FUNCTION "public"."has_premium_override"() RETURNS boolean
+    LANGUAGE "sql" STABLE SECURITY DEFINER
+    SET "search_path" TO 'public', 'pg_temp'
+    AS $$
+  select auth.uid() is not null
+    and exists (
+      select 1
+      from public.premium_overrides po
+      where po.user_id = auth.uid()
+        and po.enabled is true
+    );
+$$;
+
+
+ALTER FUNCTION "public"."has_premium_override"() OWNER TO "postgres";
+
+
+COMMENT ON FUNCTION "public"."has_premium_override"() IS 'Returns true only when the authenticated caller has an enabled premium override.';
+
+
+
 CREATE OR REPLACE FUNCTION "public"."get_public_profiles"("p_profile_ids" "uuid"[]) RETURNS TABLE("id" "uuid", "username" "text", "full_name" "text", "avatar_url" "text", "created_at" timestamp with time zone)
     LANGUAGE "sql" STABLE SECURITY DEFINER
     SET "search_path" TO 'public', 'pg_temp'
@@ -1141,12 +1267,12 @@ begin
 
   v_finalized_at := coalesce(v_room.finalized_at, v_room.ended_at, now());
 
-  update public.workout_rooms
+  update public.workout_rooms as wr
   set
     status = v_status,
-    ended_at = coalesce(ended_at, v_finalized_at),
-    finalized_at = coalesce(finalized_at, v_finalized_at)
-  where id = v_room.id;
+    ended_at = coalesce(wr.ended_at, v_finalized_at),
+    finalized_at = coalesce(wr.finalized_at, v_finalized_at)
+  where wr.id = v_room.id;
 
   insert into public.battle_results (
     room_id,
@@ -1178,7 +1304,7 @@ begin
     v_finalized_at,
     v_recap
   )
-  on conflict (room_id) do nothing
+  on conflict on constraint battle_results_pkey do nothing
   returning true into v_inserted;
 
   v_inserted := coalesce(v_inserted, false);
@@ -1744,6 +1870,78 @@ CREATE TABLE IF NOT EXISTS "public"."nutrition_logs" (
 ALTER TABLE "public"."nutrition_logs" OWNER TO "postgres";
 
 
+CREATE TABLE IF NOT EXISTS "public"."recipes" (
+    "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
+    "user_id" "uuid" NOT NULL,
+    "name" "text" NOT NULL,
+    "servings" numeric DEFAULT 1 NOT NULL,
+    "ingredients" "jsonb" DEFAULT '[]'::"jsonb" NOT NULL,
+    "calories" numeric DEFAULT 0 NOT NULL,
+    "protein" numeric DEFAULT 0,
+    "carbs" numeric DEFAULT 0,
+    "fat" numeric DEFAULT 0,
+    "fiber" numeric DEFAULT 0,
+    "sugar" numeric DEFAULT 0,
+    "saturated_fat" numeric DEFAULT 0,
+    "sodium" numeric DEFAULT 0,
+    "potassium" numeric DEFAULT 0,
+    "cholesterol" numeric DEFAULT 0,
+    "vitamin_a" numeric DEFAULT 0,
+    "vitamin_c" numeric DEFAULT 0,
+    "calcium" numeric DEFAULT 0,
+    "iron" numeric DEFAULT 0,
+    "vitamin_d" numeric DEFAULT 0,
+    "magnesium" numeric DEFAULT 0,
+    "zinc" numeric DEFAULT 0,
+    "folate" numeric DEFAULT 0,
+    "vitamin_b12" numeric DEFAULT 0,
+    "vitamin_b6" numeric DEFAULT 0,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    CONSTRAINT "recipes_ingredients_is_array" CHECK (("jsonb_typeof"("ingredients") = 'array'::"text")),
+    CONSTRAINT "recipes_ingredients_size_check" CHECK (("octet_length"(("ingredients")::"text") <= 32768)),
+    CONSTRAINT "recipes_name_check" CHECK ((("char_length"("btrim"("name")) >= 1) AND ("char_length"("btrim"("name")) <= 120))),
+    CONSTRAINT "recipes_nutrition_input_check" CHECK ((("calories" >= (0)::numeric) AND ("calories" <= (1000000)::numeric) AND ("protein" >= (0)::numeric) AND ("protein" <= (250000)::numeric) AND ("carbs" >= (0)::numeric) AND ("carbs" <= (250000)::numeric) AND ("fat" >= (0)::numeric) AND ("fat" <= (250000)::numeric) AND ("fiber" >= (0)::numeric) AND ("fiber" <= (250000)::numeric) AND ("sugar" >= (0)::numeric) AND ("sugar" <= (250000)::numeric) AND ("saturated_fat" >= (0)::numeric) AND ("saturated_fat" <= (250000)::numeric) AND ("sodium" >= (0)::numeric) AND ("sodium" <= (10000000)::numeric) AND ("potassium" >= (0)::numeric) AND ("potassium" <= (10000000)::numeric) AND ("cholesterol" >= (0)::numeric) AND ("cholesterol" <= (1000000)::numeric) AND ("vitamin_a" >= (0)::numeric) AND ("vitamin_a" <= (10000000)::numeric) AND ("vitamin_c" >= (0)::numeric) AND ("vitamin_c" <= (1000000)::numeric) AND ("calcium" >= (0)::numeric) AND ("calcium" <= (10000000)::numeric) AND ("iron" >= (0)::numeric) AND ("iron" <= (1000000)::numeric) AND ("vitamin_d" >= (0)::numeric) AND ("magnesium" >= (0)::numeric) AND ("zinc" >= (0)::numeric) AND ("folate" >= (0)::numeric) AND ("vitamin_b12" >= (0)::numeric) AND ("vitamin_b6" >= (0)::numeric))),
+    CONSTRAINT "recipes_servings_check" CHECK ((("servings" > (0)::numeric) AND ("servings" <= (1000000)::numeric)))
+);
+
+
+ALTER TABLE "public"."recipes" OWNER TO "postgres";
+
+
+CREATE INDEX IF NOT EXISTS "recipes_user_id_updated_at_idx" ON "public"."recipes" USING "btree" ("user_id", "updated_at" DESC);
+
+
+CREATE OR REPLACE FUNCTION "public"."set_recipes_updated_at"() RETURNS "trigger"
+    LANGUAGE "plpgsql"
+    AS $$
+begin
+  new.updated_at = timezone('utc', now());
+  return new;
+end;
+$$;
+
+
+ALTER FUNCTION "public"."set_recipes_updated_at"() OWNER TO "postgres";
+
+
+CREATE OR REPLACE TRIGGER "recipes_set_updated_at" BEFORE UPDATE ON "public"."recipes" FOR EACH ROW EXECUTE FUNCTION "public"."set_recipes_updated_at"();
+
+
+CREATE OR REPLACE TRIGGER "recipes_rate_limit_user" BEFORE INSERT ON "public"."recipes" FOR EACH ROW EXECUTE FUNCTION "public"."app_enforce_write_rate_limit"('custom_recipe', '100', '86400');
+
+
+ALTER TABLE "public"."recipes" ENABLE ROW LEVEL SECURITY;
+
+
+CREATE POLICY "recipes_owner_all" ON "public"."recipes" TO "authenticated" USING (("user_id" = "auth"."uid"())) WITH CHECK (("user_id" = "auth"."uid"()));
+
+
+GRANT ALL ON TABLE "public"."recipes" TO "anon";
+GRANT ALL ON TABLE "public"."recipes" TO "authenticated";
+GRANT ALL ON TABLE "public"."recipes" TO "service_role";
+
+
 CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "id" "uuid" NOT NULL,
     "username" "text",
@@ -1751,7 +1949,7 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "age" integer,
     "gender" "text",
     "bodyweight" numeric,
-    "unit_preference" "text" DEFAULT 'kg'::"text",
+    "unit_preference" "text" DEFAULT 'lbs'::"text",
     "avatar_url" "text",
     "created_at" timestamp with time zone DEFAULT "now"(),
     "default_rest_seconds" integer DEFAULT 90,
@@ -1789,6 +1987,25 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
 
 
 ALTER TABLE "public"."profiles" OWNER TO "postgres";
+
+
+CREATE TABLE IF NOT EXISTS "public"."premium_overrides" (
+    "user_id" "uuid" NOT NULL,
+    "enabled" boolean DEFAULT true NOT NULL,
+    "granted_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "granted_by" "uuid",
+    "reason" "text",
+    CONSTRAINT "premium_overrides_granted_by_fkey" FOREIGN KEY ("granted_by") REFERENCES "auth"."users"("id") ON DELETE SET NULL,
+    CONSTRAINT "premium_overrides_pkey" PRIMARY KEY ("user_id"),
+    CONSTRAINT "premium_overrides_reason_length_check" CHECK ((("reason" IS NULL) OR ("char_length"("reason") <= 200))),
+    CONSTRAINT "premium_overrides_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."profiles"("id") ON DELETE CASCADE
+);
+
+
+ALTER TABLE "public"."premium_overrides" OWNER TO "postgres";
+
+
+COMMENT ON TABLE "public"."premium_overrides" IS 'Admin-controlled permanent premium overrides. No direct authenticated access; use service_role SQL to grant/revoke.';
 
 
 CREATE OR REPLACE VIEW "public"."public_profiles" AS
@@ -1891,7 +2108,7 @@ CREATE TABLE IF NOT EXISTS "public"."user_training_plans" (
     CONSTRAINT "user_training_plans_days_check" CHECK ("public"."app_validate_training_plan_days"("days")),
     CONSTRAINT "user_training_plans_days_per_week_check" CHECK ((("days_per_week" >= 2) AND ("days_per_week" <= 7))),
     CONSTRAINT "user_training_plans_duration_weeks_check" CHECK ((("duration_weeks" >= 1) AND ("duration_weeks" <= 52))),
-    CONSTRAINT "user_training_plans_equipment_check" CHECK ((("cardinality"("equipment") >= 1) AND ("equipment" <@ ARRAY['Bodyweight'::"text", 'Dumbbell'::"text", 'Barbell'::"text", 'Cable'::"text", 'Machine'::"text", 'Cardio Machines'::"text"]))),
+    CONSTRAINT "user_training_plans_equipment_check" CHECK ((("cardinality"("equipment") >= 1) AND ("equipment" <@ ARRAY['Bodyweight'::"text", 'Dumbbell'::"text", 'Barbell'::"text", 'EZ Bar'::"text", 'Cable'::"text", 'Machine'::"text", 'Cardio Machines'::"text"]))),
     CONSTRAINT "user_training_plans_experience_check" CHECK (("experience" = ANY (ARRAY['beginner'::"text", 'intermediate'::"text", 'advanced'::"text"]))),
     CONSTRAINT "user_training_plans_goal_check" CHECK (("goal" = ANY (ARRAY['strength'::"text", 'hypertrophy'::"text", 'cardio'::"text", 'hybrid'::"text", 'general_fitness'::"text"]))),
     CONSTRAINT "user_training_plans_name_check" CHECK ((("char_length"("btrim"("name")) >= 1) AND ("char_length"("btrim"("name")) <= 60))),
@@ -2265,7 +2482,7 @@ ALTER TABLE ONLY "public"."workout_sets"
 
 
 ALTER TABLE "public"."workout_sets"
-    ADD CONSTRAINT "workout_sets_reps_input_check" CHECK ((("reps" IS NULL) OR (("reps" >= 1) AND ("reps" <= 9999)))) NOT VALID;
+    ADD CONSTRAINT "workout_sets_reps_input_check" CHECK (((("reps" >= 1) AND ("reps" <= 9999)) OR (("reps" = 0) AND ("duration_seconds" IS NOT NULL)))) NOT VALID;
 
 
 
@@ -2458,6 +2675,14 @@ CREATE OR REPLACE TRIGGER "friendships_rate_limit_pair" BEFORE INSERT ON "public
 
 
 CREATE OR REPLACE TRIGGER "friendships_rate_limit_user" BEFORE INSERT ON "public"."friendships" FOR EACH ROW EXECUTE FUNCTION "public"."app_enforce_write_rate_limit"('friend_request', '30', '86400');
+
+
+
+CREATE OR REPLACE TRIGGER "user_routines_saved_item_limit" BEFORE INSERT ON "public"."user_routines" FOR EACH ROW EXECUTE FUNCTION "public"."app_enforce_saved_item_limit"('15', 'Saved routine');
+
+
+
+CREATE OR REPLACE TRIGGER "user_training_plans_saved_item_limit" BEFORE INSERT ON "public"."user_training_plans" FOR EACH ROW EXECUTE FUNCTION "public"."app_enforce_saved_item_limit"('5', 'Saved training plan');
 
 
 
@@ -3001,6 +3226,9 @@ CREATE POLICY "prefs_all" ON "public"."user_exercise_preferences" TO "authentica
 ALTER TABLE "public"."profiles" ENABLE ROW LEVEL SECURITY;
 
 
+ALTER TABLE "public"."premium_overrides" ENABLE ROW LEVEL SECURITY;
+
+
 CREATE POLICY "profiles_owner_insert" ON "public"."profiles" FOR INSERT TO "authenticated" WITH CHECK (("id" = "auth"."uid"()));
 
 
@@ -3191,6 +3419,10 @@ ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."battle_invites";
 
 
 
+ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."friendships";
+
+
+
 ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."workout_room_events";
 
 
@@ -3365,6 +3597,12 @@ GRANT ALL ON FUNCTION "public"."app_enforce_write_rate_limit"() TO "service_role
 
 
 
+GRANT ALL ON FUNCTION "public"."app_enforce_saved_item_limit"() TO "anon";
+GRANT ALL ON FUNCTION "public"."app_enforce_saved_item_limit"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."app_enforce_saved_item_limit"() TO "service_role";
+
+
+
 GRANT ALL ON FUNCTION "public"."app_json_text_size_ok"("p_value" "jsonb", "p_max_bytes" integer) TO "anon";
 GRANT ALL ON FUNCTION "public"."app_json_text_size_ok"("p_value" "jsonb", "p_max_bytes" integer) TO "authenticated";
 GRANT ALL ON FUNCTION "public"."app_json_text_size_ok"("p_value" "jsonb", "p_max_bytes" integer) TO "service_role";
@@ -3433,6 +3671,12 @@ GRANT ALL ON FUNCTION "public"."get_exercise_history_summary"("p_user_id" "uuid"
 REVOKE ALL ON FUNCTION "public"."get_friend_rank_profile"("p_profile_id" "uuid") FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."get_friend_rank_profile"("p_profile_id" "uuid") TO "authenticated";
 GRANT ALL ON FUNCTION "public"."get_friend_rank_profile"("p_profile_id" "uuid") TO "service_role";
+
+
+
+REVOKE ALL ON FUNCTION "public"."has_premium_override"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."has_premium_override"() TO "authenticated";
+GRANT ALL ON FUNCTION "public"."has_premium_override"() TO "service_role";
 
 
 
@@ -3593,6 +3837,13 @@ GRANT ALL ON TABLE "public"."profiles" TO "service_role";
 
 
 
+REVOKE ALL ON TABLE "public"."premium_overrides" FROM PUBLIC;
+REVOKE ALL ON TABLE "public"."premium_overrides" FROM "anon";
+REVOKE ALL ON TABLE "public"."premium_overrides" FROM "authenticated";
+GRANT ALL ON TABLE "public"."premium_overrides" TO "service_role";
+
+
+
 GRANT ALL ON TABLE "public"."public_profiles" TO "authenticated";
 GRANT ALL ON TABLE "public"."public_profiles" TO "service_role";
 
@@ -3688,20 +3939,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -17,7 +17,13 @@
     "test:e2e:ui": "playwright test --ui",
     "test:rls": "vitest run --config vitest.rls.config.js",
     "test:rls:watch": "vitest --config vitest.rls.config.js",
-    "test:delete-account": "vitest run --config vitest.rls.config.js e2e/delete-account.test.js"
+    "test:delete-account": "vitest run --config vitest.rls.config.js e2e/delete-account.test.js",
+    "load:seed": "node load/seed-users.mjs",
+    "load:smoke": "node load/run-load.mjs --profile=smoke",
+    "load:baseline": "node load/run-load.mjs --profile=baseline",
+    "load:comprehensive": "node load/run-load.mjs --profile=comprehensive",
+    "load:spike": "node load/run-load.mjs --profile=spike",
+    "load:cleanup": "node load/cleanup.mjs"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.0.0",

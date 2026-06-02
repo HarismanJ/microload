@@ -151,6 +151,19 @@
   overflow: hidden;
 }
 
+.profile-identity {
+  min-height: 42px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.profile-identity-loading {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+}
+
 .profile-email {
   font-size: 13px;
   color: var(--muted);
@@ -1125,9 +1138,11 @@
   margin-bottom: 10px;
 }
 
-.report-bug-btn:hover {
-  background: rgba(99, 102, 241, 0.08);
-  transform: translateY(-1px);
+@media (hover: hover) {
+  .report-bug-btn:hover {
+    background: rgba(99, 102, 241, 0.08);
+    transform: translateY(-1px);
+  }
 }
 .report-bug-btn:active { transform: scale(0.98); }
 
@@ -1144,11 +1159,36 @@
   transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease;
 }
 
-.signout-btn:hover {
-  background: rgba(239, 68, 68, 0.08);
-  transform: translateY(-1px);
+@media (hover: hover) {
+  .signout-btn:hover {
+    background: rgba(239, 68, 68, 0.08);
+    transform: translateY(-1px);
+  }
 }
 .signout-btn:active { transform: scale(0.98); }
+
+.ad-privacy-btn {
+  width: 100%;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  padding: 14px;
+  cursor: pointer;
+  transition: transform 0.26s ease, background 0.26s ease, border-color 0.26s ease;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+@media (hover: hover) {
+  .ad-privacy-btn:hover {
+    background: var(--surface2);
+    transform: translateY(-1px);
+  }
+}
+.ad-privacy-btn:active { transform: scale(0.98); }
 
 .account-danger-zone {
   background: rgba(239, 68, 68, 0.08);
@@ -1185,10 +1225,12 @@
   transition: transform 0.26s ease, background 0.26s ease, box-shadow 0.26s ease;
 }
 
-.delete-account-btn:hover {
-  background: #dc2626;
-  transform: translateY(-1px);
-  box-shadow: 0 14px 24px rgba(239, 68, 68, 0.18);
+@media (hover: hover) {
+  .delete-account-btn:hover {
+    background: #dc2626;
+    transform: translateY(-1px);
+    box-shadow: 0 14px 24px rgba(239, 68, 68, 0.18);
+  }
 }
 
 /* ── Calendar ─────────────────────────────────────────── */
@@ -2082,13 +2124,15 @@
 
 .day-sets-header {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr);
   font-size: 10px;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 0 4px;
+  padding: 0 8px 0 4px;
+  align-items: center;
+  gap: 8px;
 }
 
 .day-set-item {
@@ -2099,7 +2143,7 @@
 
 .day-set-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr);
   font-size: 13px;
   color: var(--text);
   background: var(--surface2);
@@ -2115,13 +2159,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.day-set-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-end;
+  text-align: center;
 }
 
 .day-set-num {
@@ -2129,7 +2167,8 @@
   font-weight: 600;
 }
 
-.day-set-orm {
+.day-set-duration {
+  grid-column: span 2;
   color: var(--muted);
   font-size: 12px;
 }
@@ -2372,22 +2411,20 @@
 .day-meal-food {
   color: var(--text);
   display: block;
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-right: 8px;
 }
 
 .day-meal-right {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
-  max-width: min(52%, 170px);
 }
 
 .day-meal-meta {
@@ -2397,6 +2434,7 @@
   flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
+  text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2830,20 +2868,42 @@
 .friends-battle-mode-overlay {
   position: fixed;
   inset: 0;
-  z-index: 80;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  background: rgba(0, 0, 0, 0.62);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  background: rgba(0, 0, 0, 0.6);
+  animation: paywall-overlay-in 0.38s ease both;
+  transition: opacity 0.2s ease 0.28s;
+}
+
+.friends-battle-mode-overlay--closing {
+  opacity: 0;
+}
+
+.friends-battle-mode-overlay--closing .friends-battle-mode-modal {
+  opacity: 1;
+  filter: none;
+  transform: translateY(108%);
 }
 
 .friends-battle-mode-modal {
-  width: min(420px, 100%);
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  max-height: 92dvh;
+  overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 18px;
-  background: var(--card);
+  border-radius: 20px 20px 0 0;
+  padding: 24px 24px calc(24px + env(safe-area-inset-bottom));
+  background: var(--surface);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+  outline: none;
+  touch-action: pan-y;
+  animation: paywall-sheet-in 0.46s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transition: transform 0.32s cubic-bezier(0.4, 0, 1, 1), opacity 0.32s ease, filter 0.32s ease;
+  will-change: transform, opacity;
 }
 
 .friends-battle-mode-kicker {
@@ -2872,12 +2932,15 @@
   gap: 4px;
   width: 100%;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 12px;
-  background: color-mix(in srgb, var(--panel) 78%, transparent);
+  background: color-mix(in srgb, var(--surface2) 78%, transparent);
   color: var(--text);
   text-align: left;
   cursor: pointer;
+  touch-action: manipulation;
+  transform-origin: center;
+  transition: transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
 }
 
 .friends-battle-mode-option span {
@@ -2891,7 +2954,30 @@
 }
 
 .friends-battle-mode-option:hover:not(:disabled) {
+  transform: translateY(-1px);
   border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-dim) 42%, var(--surface2));
+}
+
+.friends-battle-mode-option:active:not(:disabled) {
+  transform: scale(0.97);
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-dim) 58%, var(--surface2));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 42%, transparent);
+}
+
+.friends-battle-mode-option--selected,
+.friends-battle-mode-option--selected:disabled {
+  opacity: 1;
+  border-color: var(--blue);
+  background: color-mix(in srgb, var(--blue-dim) 62%, var(--surface2));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
+  transform: scale(0.98);
+}
+
+.friends-battle-mode-option:disabled:not(.friends-battle-mode-option--selected) {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .friends-battle-mode-cancel {
@@ -3205,12 +3291,14 @@
   .body-weight-detail .body-stats-chart-wrap,
   .body-weight-detail .body-stats-history-item,
   .friend-compare-model-card,
-  .friend-compare-card,
-  .cal-card-loading .cal-month-label,
-  .cal-dot-loading,
-  .cal-heat-indicator-loading {
-    animation: none;
-  }
+	  .friend-compare-card,
+	  .cal-card-loading .cal-month-label,
+	  .cal-dot-loading,
+	  .cal-heat-indicator-loading,
+	  .friends-battle-mode-overlay,
+	  .friends-battle-mode-modal {
+	    animation: none;
+	  }
 
   .cal-cell-loading::after,
   .cal-cell:not(.empty):not(.cal-cell-loading),
@@ -3252,6 +3340,7 @@
   .edit-profile-btn,
   .achievements-btn,
   .signout-btn,
+  .ad-privacy-btn,
   .delete-account-btn,
   .day-detail-back-btn,
   .bw-date-picker-cancel,
@@ -3262,12 +3351,15 @@
   .cal-arrow,
   .friends-card,
   .friends-search-input,
-  .friends-list-search-input,
-  .friends-action-btn,
-  .friends-primary-btn,
-  .friends-secondary-btn {
-    transition: none;
-  }
+	  .friends-list-search-input,
+	  .friends-action-btn,
+	  .friends-primary-btn,
+	  .friends-secondary-btn,
+	  .friends-battle-mode-overlay,
+	  .friends-battle-mode-modal,
+	  .friends-battle-mode-option {
+	    transition: none;
+	  }
 }
 
 @media (max-width: 560px) {

@@ -225,3 +225,41 @@ export function applyPlanAdaptation(plan, adaptation) {
     }),
   }
 }
+
+// Newest suggestion wins: when a freshly inserted adaptation lands, drop any older
+// entry for the same plan + plan day so the Coach Review list never stacks stale or
+// contradictory cards. The inserted row is placed first. DB rows and the inserted row
+// both use snake_case ids (plan_id, plan_day_id), so the comparison is consistent.
+export function supersedeSameDayPending(adaptations, inserted) {
+  const list = Array.isArray(adaptations) ? adaptations : []
+  if (!inserted) return list
+  return [
+    inserted,
+    ...list.filter(item => (
+      item.id !== inserted.id &&
+      !(item.plan_id === inserted.plan_id && item.plan_day_id === inserted.plan_day_id)
+    )),
+  ]
+}
+
+// Persistence half of "newest wins": mark every older still-pending adaptation for the
+// same plan + day as dismissed, excluding the row we just inserted. The supabase client
+// is injected so this module stays free of side-effecting imports (and unit-testable).
+export function dismissSupersededSameDayAdaptations(supabase, { userId, planId, planDayId, exceptId }) {
+  return supabase
+    .from('user_training_plan_adaptations')
+    .update({ status: 'dismissed', resolved_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .eq('plan_id', planId)
+    .eq('plan_day_id', planDayId)
+    .eq('status', 'pending')
+    .neq('id', exceptId)
+}
+
+// Resolves what the adaptive coach is allowed to do for a plan, from its stored preferences.
+// Coach off ⇒ no generation and no auto-apply. Coach on ⇒ generate, and auto-apply unless
+// the user explicitly turned it off (default on).
+export function resolveAdaptiveCoachMode(coachPrefs = {}) {
+  const generate = coachPrefs?.enabled === true
+  return { generate, autoApply: generate && coachPrefs?.autoApply !== false }
+}

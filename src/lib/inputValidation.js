@@ -13,6 +13,8 @@ export const VALIDATION_LIMITS = {
   bugReportMaxLength: 2000,
   bodyweightMinKg: 20,
   bodyweightMaxKg: 600,
+  // Max weekly weight-change pace for the bodyweight chart (≈11 lbs/week).
+  weightTrendRateMaxKgPerWeek: 5,
   caloriesBurnedGoalMin: 1,
   caloriesBurnedGoalMax: 10000,
   restSecondsMin: 0,
@@ -161,7 +163,10 @@ export function validateBodyweight(value, unit = 'kg', { label = 'Bodyweight', r
   if (!String(value ?? '').trim()) return ''
   const kg = convertWeight(Number(value), unit, 'kg')
   if (kg < VALIDATION_LIMITS.bodyweightMinKg || kg > VALIDATION_LIMITS.bodyweightMaxKg) {
-    return `${label} must be between ${VALIDATION_LIMITS.bodyweightMinKg} and ${VALIDATION_LIMITS.bodyweightMaxKg} kg.`
+    const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+    const minDisplay = fmt(convertWeight(VALIDATION_LIMITS.bodyweightMinKg, 'kg', unit))
+    const maxDisplay = fmt(convertWeight(VALIDATION_LIMITS.bodyweightMaxKg, 'kg', unit))
+    return `${label} must be between ${minDisplay} and ${maxDisplay} ${unit}.`
   }
   return ''
 }

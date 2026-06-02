@@ -362,6 +362,7 @@ export function buildPreviousSetValuesByWorkingIndex(exerciseSessions = []) {
         unit: set.unit,
         duration_seconds: set.duration_seconds,
         set_number: set.set_number,
+        setType: getSetType(set) === 'warmup' ? 'warmup' : 'normal',
       }
     }
   }

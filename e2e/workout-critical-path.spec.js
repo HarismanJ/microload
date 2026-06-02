@@ -2,14 +2,19 @@ import { expect, test } from '@playwright/test'
 import {
   addExercise,
   addExerciseAndLogSet,
+  createAndLogRecipe,
   createAndLogCustomFood,
   deleteFoodLog,
+  editProfile,
   exerciseBlock,
   finishWorkout,
   goToTab,
+  logDropSetForExercise,
   logSetForExercise,
   loginAsE2EUser,
+  openProfile,
   openTodayHistory,
+  signOut,
   startEmptyWorkout,
   startSuggestedRoutine,
 } from './helpers/appFlows.js'
@@ -18,6 +23,7 @@ import {
   getMissingE2EEnv,
   loadLatestSavedWorkout,
   loadNutritionLogs,
+  loadProfile,
   loadWorkoutSessionCounts,
   resetE2EData,
 } from './helpers/supabaseFixture.js'
@@ -26,6 +32,8 @@ const missingEnv = getMissingE2EEnv()
 const exerciseName = process.env.E2E_EXERCISE_NAME || 'Bench Press'
 const routineName = 'Push'
 const foodName = 'E2E Test Food'
+const ingredientName = 'E2E Recipe Ingredient'
+const recipeName = 'E2E Recipe Bowl'
 
 test.describe('E2E critical user journeys', () => {
   test.describe.configure({ mode: 'serial' })
@@ -193,6 +201,127 @@ test.describe('E2E critical user journeys', () => {
       .locator('.day-summary-value')
       .innerText()
     expect(Number.parseFloat(volumeText)).toBeGreaterThan(0)
+  })
+
+  test('persists drop-set metadata when finishing a workout', async ({ page }) => {
+    await loginAsE2EUser(page, credentials)
+    await startEmptyWorkout(page)
+    await addExercise(page, exerciseName)
+    await logDropSetForExercise(page, exerciseName, {
+      parentWeight: '80',
+      parentReps: '6',
+      dropWeight: '55',
+      dropReps: '8',
+    })
+    await finishWorkout(page, { exerciseName })
+
+    const savedWorkout = await loadLatestSavedWorkout(admin, user.id)
+    expect(savedWorkout.session?.finished_at).toBeTruthy()
+    expect(savedWorkout.sets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reps: 6,
+        weight: 80,
+        set_type: 'normal',
+      }),
+      expect.objectContaining({
+        reps: 8,
+        weight: 55,
+        set_type: 'dropset',
+      }),
+    ]))
+
+    const parent = savedWorkout.sets.find(set => set.set_type === 'normal')
+    const drop = savedWorkout.sets.find(set => set.set_type === 'dropset')
+    expect(parent?.set_group_index).not.toBeNull()
+    expect(drop?.set_group_index).toBe(parent.set_group_index)
+  })
+
+  test('persists profile edits after reload', async ({ page }) => {
+    const uniqueSuffix = `${user.id.slice(0, 8)}_${Date.now()}`
+    const fullName = `E2E Profile ${uniqueSuffix}`
+    const username = `e2e_${uniqueSuffix}`.slice(0, 24)
+
+    await loginAsE2EUser(page, credentials)
+    await editProfile(page, { fullName, username })
+
+    await page.reload()
+    await openProfile(page)
+    await expect(page.locator('.profile-name')).toHaveText(fullName, { timeout: 20_000 })
+
+    const profile = await loadProfile(admin, user.id)
+    expect(profile).toEqual(expect.objectContaining({
+      full_name: fullName,
+      username,
+    }))
+  })
+
+  test('creates, logs, and deletes a recipe', async ({ page }) => {
+    await loginAsE2EUser(page, credentials)
+    await createAndLogCustomFood(page, ingredientName, {
+      servingSize: '100',
+      calories: '180',
+      protein: '12',
+      carbs: '25',
+      fat: '4',
+    })
+    await deleteFoodLog(page, ingredientName)
+    await createAndLogRecipe(page, recipeName, ingredientName)
+
+    let logs = await loadNutritionLogs(admin, user.id)
+    expect(logs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        food_name: recipeName,
+        calories: 180,
+      }),
+    ]))
+
+    await deleteFoodLog(page, recipeName)
+    logs = await loadNutritionLogs(admin, user.id)
+    expect(logs.filter(log => log.food_name === recipeName)).toHaveLength(0)
+  })
+
+  test('finishes a workout from a mobile viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 })
+    await loginAsE2EUser(page, credentials)
+    await startEmptyWorkout(page)
+    await addExerciseAndLogSet(page, exerciseName, { weight: '65', reps: '5' })
+    await finishWorkout(page, { exerciseName })
+
+    const savedWorkout = await loadLatestSavedWorkout(admin, user.id)
+    expect(savedWorkout.session?.finished_at).toBeTruthy()
+    expect(savedWorkout.sets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reps: 5,
+        weight: 65,
+        unit: 'kg',
+      }),
+    ]))
+  })
+
+  test('keeps finished workout data after sign out and sign back in', async ({ page }) => {
+    await loginAsE2EUser(page, credentials)
+    await startEmptyWorkout(page)
+    await addExerciseAndLogSet(page, exerciseName, { weight: '67.5', reps: '4' })
+    await finishWorkout(page, { exerciseName })
+
+    const beforeSignOut = await loadWorkoutSessionCounts(admin, user.id)
+    const savedBefore = await loadLatestSavedWorkout(admin, user.id)
+    expect(beforeSignOut.finished).toBe(1)
+    expect(savedBefore.session?.id).toBeTruthy()
+
+    await signOut(page)
+    await loginAsE2EUser(page, credentials)
+
+    const afterSignIn = await loadWorkoutSessionCounts(admin, user.id)
+    const savedAfter = await loadLatestSavedWorkout(admin, user.id)
+    expect(afterSignIn.finished).toBe(beforeSignOut.finished)
+    expect(savedAfter.session?.id).toBe(savedBefore.session.id)
+    expect(savedAfter.sets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        reps: 4,
+        weight: 67.5,
+      }),
+    ]))
   })
 })
 

@@ -82,11 +82,23 @@ export async function loadLatestSavedWorkout(admin, userId) {
 
   const { data: sets, error: setsError } = await admin
     .from('workout_sets')
-    .select('reps, weight, unit')
+    .select('id, session_id, set_number, reps, weight, unit, set_type, set_group_index')
     .eq('session_id', session.id)
+    .order('set_number')
 
   if (setsError) throw setsError
   return { session, sets: sets || [] }
+}
+
+export async function loadProfile(admin, userId) {
+  const { data, error } = await admin
+    .from('profiles')
+    .select('id, username, full_name, gender, bodyweight, unit_preference, default_rest_seconds, lifetime_volume_kg')
+    .eq('id', userId)
+    .single()
+
+  if (error) throw error
+  return data
 }
 
 export async function loadWorkoutSessionCounts(admin, userId) {

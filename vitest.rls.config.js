@@ -16,6 +16,8 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     testTimeout: 30_000,
+    hookTimeout: 60_000,
+    fileParallelism: false,
     include: ['e2e/rls-cross-user.test.js', 'e2e/delete-account.test.js'],
     // No setupFiles — we want real Supabase network calls, no mocks
   },

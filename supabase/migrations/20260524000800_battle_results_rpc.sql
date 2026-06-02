@@ -357,12 +357,12 @@ begin
 
   v_finalized_at := coalesce(v_room.finalized_at, v_room.ended_at, now());
 
-  update public.workout_rooms
+  update public.workout_rooms as wr
   set
     status = v_status,
-    ended_at = coalesce(ended_at, v_finalized_at),
-    finalized_at = coalesce(finalized_at, v_finalized_at)
-  where id = v_room.id;
+    ended_at = coalesce(wr.ended_at, v_finalized_at),
+    finalized_at = coalesce(wr.finalized_at, v_finalized_at)
+  where wr.id = v_room.id;
 
   insert into public.battle_results (
     room_id,
@@ -394,7 +394,7 @@ begin
     v_finalized_at,
     v_recap
   )
-  on conflict (room_id) do nothing
+  on conflict on constraint battle_results_pkey do nothing
   returning true into v_inserted;
 
   v_inserted := coalesce(v_inserted, false);

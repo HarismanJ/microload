@@ -390,7 +390,7 @@ export default function Ranks({ refreshTick = 0, profileRefreshTick = 0, onBodyw
   const [ormCalcOpen, setOrmCalcOpen] = useState(false)
   const [ormWeight, setOrmWeight] = useState('')
   const [ormReps, setOrmReps] = useState('')
-  const [ormUnit, setOrmUnit] = useState('kg')
+  const [ormUnit, setOrmUnit] = useState('lbs')
   const ormCalcRef = useRef(null)
   useFocusTrap(ormCalcRef, { active: ormCalcOpen, onEscape: () => setOrmCalcOpen(false) })
 
@@ -421,7 +421,7 @@ export default function Ranks({ refreshTick = 0, profileRefreshTick = 0, onBodyw
 
   async function saveBW() {
     const val = parseFloat(bwInput)
-    const unit = profile?.unit_preference || 'kg'
+    const unit = profile?.unit_preference || 'lbs'
     if (!userId) return
     const weightError = validateBodyweight(bwInput, unit)
     if (weightError) {

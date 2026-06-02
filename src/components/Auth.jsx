@@ -33,6 +33,10 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
     setLoading(true)
     setError(null)
     try {
+      if (Capacitor.getPlatform() === 'android') {
+        setError('Apple sign-in failed. Cannot continue with Apple on Android device.')
+        return
+      }
       if (Capacitor.isNativePlatform()) {
         await SocialLogin.initialize({ apple: { redirectUrl: '' } })
         const { result } = await SocialLogin.login({ provider: 'apple', options: {} })
@@ -123,7 +127,10 @@ export default function Auth({ recoveryMode = false, onRecoveryDone }) {
           setError('Passwords do not match.')
           return
         }
-        const { error } = await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: `${window.location.origin}/confirm.html` } })
+        const emailRedirectTo = Capacitor.isNativePlatform()
+          ? 'microload://confirm'
+          : `${window.location.origin}/confirm.html`
+        const { error } = await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo } })
         if (error) setError(error.message)
         else setMessage('Check your email for a confirmation link. Be sure to check your spam folder.')
       } else if (mode === 'forgot') {

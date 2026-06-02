@@ -1,10 +1,12 @@
 import { Capacitor } from '@capacitor/core'
 import { Purchases, LOG_LEVEL } from '@revenuecat/purchases-capacitor'
+import { supabase } from './supabase'
 
-// Replace with your platform-specific keys from the RevenueCat dashboard once live
+// Production RevenueCat public app-specific API keys (one per platform per project).
+// Same key serves sandbox + production — RC routes to the right environment automatically.
 const API_KEYS = {
-  ios: 'test_oHxDkzsQVgEPLYwQCSgYgIoUybu',
-  android: 'test_oHxDkzsQVgEPLYwQCSgYgIoUybu',
+  ios: 'appl_ZcArEsEMxXUaLFzThfBRCSYPpvp',
+  android: 'goog_dLZSGBLaGJTszgCRtoUYCZkgZAJ',
 }
 
 const ENTITLEMENT_ID = 'microload Pro'
@@ -47,6 +49,33 @@ function isActive(customerInfo) {
   return typeof customerInfo.entitlements.active[ENTITLEMENT_ID] !== 'undefined'
 }
 
+function resolvePremiumStatus(revenueCatActive, overrideActive) {
+  if (revenueCatActive === true || overrideActive === true) {
+    cachedIsPremium = true
+    persistPremium(true)
+    return true
+  }
+
+  if (revenueCatActive === false && overrideActive === false) {
+    cachedIsPremium = false
+    persistPremium(false)
+    return false
+  }
+
+  return cachedIsPremium
+}
+
+async function fetchPremiumOverrideStatus() {
+  try {
+    const { data, error } = await supabase.rpc('has_premium_override')
+    if (error) throw error
+    return data === true
+  } catch (e) {
+    console.warn('[Premium] override check failed, keeping last known premium state', e)
+    return null
+  }
+}
+
 export async function initPurchases() {
   if (initialized || !Capacitor.isNativePlatform()) return
   const platform = Capacitor.getPlatform()
@@ -67,14 +96,21 @@ export async function initPurchases() {
 }
 
 export async function loginUser(userId) {
-  if (!initialized || !Capacitor.isNativePlatform() || !userId) return
+  if (!userId) return
+
+  const overrideActive = await fetchPremiumOverrideStatus()
+  if (!initialized || !Capacitor.isNativePlatform()) {
+    resolvePremiumStatus(null, overrideActive)
+    return
+  }
+
   try {
     const { customerInfo } = await Purchases.logIn({ appUserID: userId })
-    cachedIsPremium = isActive(customerInfo)
-    persistPremium(cachedIsPremium)
+    resolvePremiumStatus(isActive(customerInfo), overrideActive)
   } catch (e) {
     // RC login failed — keep last known value, never downgrade on a failure
     console.warn('[RC] loginUser failed, keeping last known premium state', e)
+    resolvePremiumStatus(null, overrideActive)
   }
 }
 
@@ -92,16 +128,18 @@ export async function logoutUser() {
 }
 
 export async function refreshPremiumStatus() {
-  if (!initialized || !Capacitor.isNativePlatform()) return cachedIsPremium
+  const overrideActive = await fetchPremiumOverrideStatus()
+  if (!initialized || !Capacitor.isNativePlatform()) {
+    return resolvePremiumStatus(null, overrideActive)
+  }
+
   try {
     const { customerInfo } = await Purchases.getCustomerInfo()
-    cachedIsPremium = isActive(customerInfo)
-    persistPremium(cachedIsPremium) // Only persist on a verified RC response
-    return cachedIsPremium
+    return resolvePremiumStatus(isActive(customerInfo), overrideActive)
   } catch (e) {
     // RC unreachable — return last known value without downgrading
     console.warn('[RC] getCustomerInfo failed, keeping last known premium state', e)
-    return cachedIsPremium
+    return resolvePremiumStatus(null, overrideActive)
   }
 }
 
@@ -123,15 +161,13 @@ export async function getOfferings() {
 }
 
 export async function purchasePackage(pkg) {
+  const overrideActive = await fetchPremiumOverrideStatus()
   const { customerInfo } = await Purchases.purchasePackage({ aPackage: pkg })
-  cachedIsPremium = isActive(customerInfo)
-  persistPremium(cachedIsPremium)
-  return cachedIsPremium
+  return resolvePremiumStatus(isActive(customerInfo), overrideActive)
 }
 
 export async function restorePurchases() {
+  const overrideActive = await fetchPremiumOverrideStatus()
   const { customerInfo } = await Purchases.restorePurchases()
-  cachedIsPremium = isActive(customerInfo)
-  persistPremium(cachedIsPremium)
-  return cachedIsPremium
+  return resolvePremiumStatus(isActive(customerInfo), overrideActive)
 }

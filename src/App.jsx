@@ -66,6 +66,7 @@ const INTRO_MIN_DURATION_MS = 3600
 const INTRO_EXIT_DURATION_MS = 2200
 const INTRO_BAR_SETTLE_MS = 760
 const INTRO_BLACK_HOLD_MS = 600
+const INTRO_START_SETTLE_FRAMES = 6
 const PULSE_PERIOD_MS = 1400
 const PULSE_START_DELAY_MS = 1500
 const INTRO_MIN_VISIBLE_PULSE_CYCLES = 2
@@ -238,11 +239,36 @@ function AppIntroSplash({ exiting = false, isPremium = false }) {
   const [introGolding, setIntroGolding] = useState(false)
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setAnimationStarted(true)
-    }, INTRO_BLACK_HOLD_MS)
+    let cancelled = false
+    let timer = null
+    const frameIds = []
 
-    return () => window.clearTimeout(timer)
+    const beginBlackHold = () => {
+      if (cancelled) return
+      timer = window.setTimeout(() => {
+        if (!cancelled) setAnimationStarted(true)
+      }, INTRO_BLACK_HOLD_MS)
+    }
+
+    const waitForPaints = framesRemaining => {
+      if (cancelled) return
+      if (framesRemaining <= 0 || typeof window.requestAnimationFrame !== 'function') {
+        beginBlackHold()
+        return
+      }
+      const frameId = window.requestAnimationFrame(() => {
+        waitForPaints(framesRemaining - 1)
+      })
+      frameIds.push(frameId)
+    }
+
+    waitForPaints(INTRO_START_SETTLE_FRAMES)
+
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+      frameIds.forEach(frameId => window.cancelAnimationFrame?.(frameId))
+    }
   }, [])
 
   useEffect(() => {
@@ -264,7 +290,6 @@ function AppIntroSplash({ exiting = false, isPremium = false }) {
     if (!animationStarted || !isPremium) return undefined
     const t = setTimeout(() => {
       setIntroGolding(true)
-      Haptics.impact({ style: ImpactStyle.Heavy }).catch(() => {})
     }, 1820)
     return () => clearTimeout(t)
   }, [animationStarted, isPremium])
@@ -273,11 +298,8 @@ function AppIntroSplash({ exiting = false, isPremium = false }) {
     <div className={`app-intro ${exiting ? 'app-intro-exit' : ''}`} role="status" aria-live="polite">
       {animationStarted && (
         <>
-          <div className={`app-intro-orb app-intro-orb-left${introGolding ? ' intro-golding' : ''}`} />
-          <div className={`app-intro-orb app-intro-orb-right${introGolding ? ' intro-golding' : ''}`} />
           <div className="app-intro-panel">
             <div className="app-intro-logo-shell">
-              <div className="app-intro-logo-aura" aria-hidden="true" />
               <div className={`app-intro-logo${introGolding ? ' intro-golding' : ''}`}>
                 <BrandLogo width={238} height={56} animated className="app-intro-wordmark" />
                 {introGolding && (
@@ -324,7 +346,7 @@ export default function App() {
   const [showQuickTimer, setShowQuickTimer] = useState(false)
   const [showQuickWeight, setShowQuickWeight] = useState(false)
   const [quickWeightInput, setQuickWeightInput] = useState('')
-  const [quickWeightUnit, setQuickWeightUnit] = useState('kg')
+  const [quickWeightUnit, setQuickWeightUnit] = useState('lbs')
   const [quickWeightSaving, setQuickWeightSaving] = useState(false)
   const [quickWeightError, setQuickWeightError] = useState('')
   const [weightRefreshTick, setWeightRefreshTick] = useState(0)
@@ -562,7 +584,7 @@ export default function App() {
 
   const handleQuickWeightSave = useCallback(async () => {
     const value = Number.parseFloat(quickWeightInput)
-    const unit = quickWeightUnit || 'kg'
+    const unit = quickWeightUnit || 'lbs'
     if (!session?.user?.id || quickWeightSaving) return
     const weightError = validateBodyweight(quickWeightInput, unit)
     if (weightError) {
@@ -581,7 +603,7 @@ export default function App() {
         .eq('id', session.user.id)
         .single()
 
-      const unit2 = profileData?.unit_preference || quickWeightUnit || 'kg'
+      const unit2 = profileData?.unit_preference || quickWeightUnit || 'lbs'
 
       const [{ error: insertError }, { error: profileUpdateError }] = await Promise.all([
         supabase
@@ -1080,10 +1102,15 @@ export default function App() {
       const accessToken = params.get('access_token')
       const refreshToken = params.get('refresh_token')
       const hashType = params.get('type')
-      if (hashType === 'recovery' && accessToken && refreshToken) {
-        localStorage.setItem('microload:pendingRecovery', '1')
+      if (accessToken && refreshToken) {
+        // Recovery links must open the reset screen; signup/confirm links just sign the user in.
+        if (hashType === 'recovery') {
+          localStorage.setItem('microload:pendingRecovery', '1')
+        }
         await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken })
-        setRecoveryMode(true)
+        if (hashType === 'recovery') {
+          setRecoveryMode(true)
+        }
       }
     }).then(handle => { deepLinkListener = handle })
 
@@ -1462,7 +1489,10 @@ export default function App() {
   const introSplash = showIntroSplash ? <AppIntroSplash exiting={introSplashExiting} isPremium={isPremium} /> : null
   const appFallback = showIntroSplash ? null : <LoadingSpinner fullPage />
 
-  const handleWorkoutDeleted = useCallback(() => setRanksRefreshTick(t => t + 1), [])
+  const handleWorkoutDeleted = useCallback(() => {
+    setWorkoutRefreshTick(t => t + 1)
+    setRanksRefreshTick(t => t + 1)
+  }, [])
   const handleBodyweightChanged = useCallback(() => {
     setWeightRefreshTick(t => t + 1)
     setRanksRefreshTick(t => t + 1)
@@ -1552,6 +1582,25 @@ export default function App() {
     }
     return null
   })()
+  const trainingLoadAdvisory = overtrainBannerVisible && overtrainBannerContent ? (
+    <div className={`home-overtrain-banner severity-${overtrain.severity}`}>
+      <div className="home-overtrain-banner-header">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        <span>Training Load Advisory</span>
+        <span className={`home-overtrain-banner-severity-chip severity-${overtrain.severity}`}>
+          {overtrain.severity === 'high' ? 'High Risk' : overtrain.severity === 'moderate' ? 'Moderate Risk' : 'Low Risk'}
+        </span>
+        <button
+          type="button"
+          className="home-overtrain-banner-dismiss"
+          onClick={() => { localStorage.setItem('liftlog:overtrainDismissedKey', overtrainKey); setOvertrainDismissedKey(overtrainKey) }}
+          aria-label="Dismiss training load advisory"
+        >×</button>
+      </div>
+      <p className="home-overtrain-banner-title">{overtrainBannerContent.title}</p>
+      <p className="home-overtrain-banner-body">{overtrainBannerContent.body}</p>
+    </div>
+  ) : null
 
   const profileButtonLabel = displayName(session?.user?.user_metadata) || session?.user?.email || 'Profile'
   const tabs = [
@@ -1647,25 +1696,6 @@ export default function App() {
         >
           <Suspense fallback={appFallback}>
             <div className={tab === 'workout' ? contentScreenClassName : 'content-screen-hidden'}>
-              {overtrainBannerVisible && overtrainBannerContent && (
-                <div className={`home-overtrain-banner severity-${overtrain.severity}`}>
-                  <div className="home-overtrain-banner-header">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-                    <span>Training Load Advisory</span>
-                    <span className={`home-overtrain-banner-severity-chip severity-${overtrain.severity}`}>
-                      {overtrain.severity === 'high' ? 'High Risk' : overtrain.severity === 'moderate' ? 'Moderate Risk' : 'Low Risk'}
-                    </span>
-                    <button
-                      type="button"
-                      className="home-overtrain-banner-dismiss"
-                      onClick={() => { localStorage.setItem('liftlog:overtrainDismissedKey', overtrainKey); setOvertrainDismissedKey(overtrainKey) }}
-                      aria-label="Dismiss training load advisory"
-                    >×</button>
-                  </div>
-                  <p className="home-overtrain-banner-title">{overtrainBannerContent.title}</p>
-                  <p className="home-overtrain-banner-body">{overtrainBannerContent.body}</p>
-                </div>
-              )}
               <Workout
                 onStatusChange={onWorkoutStatus}
                 onFinish={onWorkoutFinish}
@@ -1678,7 +1708,9 @@ export default function App() {
                 onRequestLogBodyweight={handleRequestLogBodyweight}
                 weightRefreshTick={weightRefreshTick}
                 profileRefreshTick={profileRefreshTick}
+                workoutHistoryRefreshTick={workoutRefreshTick}
                 isPremium={isPremium}
+                trainingLoadAdvisory={trainingLoadAdvisory}
                 onBattleRoomClosed={(status) => {
                   const closedRoomId = battleRoomIdRef.current
                   if ((status === 'waiting' || status === 'left') && closedRoomId) {

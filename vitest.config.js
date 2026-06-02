@@ -13,9 +13,9 @@ export default defineConfig({
     globals: true,
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'lcov'],
-      include: ['src/lib/**'],
-      exclude: ['src/lib/supabase.js', 'src/lib/battles.js'],
+      reporter: ['text', 'lcov', 'json-summary'],
+      include: ['src/**'],
+      exclude: ['src/__tests__/**', 'src/lib/supabase.js', 'src/lib/battles.js'],
     },
   },
 })

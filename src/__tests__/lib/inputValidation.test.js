@@ -76,7 +76,9 @@ describe('numeric form validation', () => {
 
   it('validates bodyweight after unit conversion', () => {
     expect(validateBodyweight(150, 'lbs')).toBe('')
-    expect(validateBodyweight(40, 'lbs')).toBe('Bodyweight must be between 20 and 600 kg.')
+    // Out-of-range message is shown in the user's chosen unit, not always kg.
+    expect(validateBodyweight(40, 'lbs')).toBe('Bodyweight must be between 44.1 and 1322.8 lbs.')
+    expect(validateBodyweight(10, 'kg')).toBe('Bodyweight must be between 20 and 600 kg.')
   })
 
   it('requires serving size for nutrition forms', () => {

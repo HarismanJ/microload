@@ -5,6 +5,19 @@ import { WEIGHT_TREND_PRESETS, buildWeightPaceCalorieCoach, formatRateForUnit } 
 import { convertWeight } from '../../lib/liftMath'
 import '../../styles/Profile.css'
 
+// Keep only an optional leading minus (for a cut), digits, and a single decimal point.
+// Strips letters, 'e', '+', spaces, extra minuses/dots — "negative and numbers, nothing else".
+function sanitizeSignedDecimal(raw) {
+  let v = String(raw ?? '').replace(/[^0-9.-]/g, '')
+  const negative = v[0] === '-'
+  v = v.replace(/-/g, '')
+  const firstDot = v.indexOf('.')
+  if (firstDot !== -1) {
+    v = v.slice(0, firstDot + 1) + v.slice(firstDot + 1).replace(/\./g, '')
+  }
+  return (negative ? '-' : '') + v
+}
+
 function linearRegressionMs(pts) {
   const n = pts.length
   if (n < 2) return null
@@ -239,14 +252,11 @@ export default function BodyWeightDetail({
           {trendModeInput === 'custom' && (
             <input
               className="body-stats-input body-stats-pace-rate-input"
-              type="number"
-              step="0.05"
-              inputMode="decimal"
-              placeholder={activeUnit === 'lbs' ? 'lbs/wk' : 'kg/wk'}
-              min={activeUnit === 'lbs' ? -11 : -5}
-              max={activeUnit === 'lbs' ? 11 : 5}
+              type="text"
+              inputMode="text"
+              placeholder={activeUnit === 'lbs' ? '-1 lbs/wk' : '-0.5 kg/wk'}
               value={trendRateInput}
-              onChange={(e) => onTrendRateInputChange(e.target.value)}
+              onChange={(e) => onTrendRateInputChange(sanitizeSignedDecimal(e.target.value))}
             />
           )}
           <button
