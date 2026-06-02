@@ -35,8 +35,7 @@ body {
 
 .app-intro-handoff-underlay {
   opacity: 0.74;
-  filter: blur(4px);
-  transform: scale(1.012);
+  transform: scale(1.006);
 }
 
 .app-intro-handoff-active {

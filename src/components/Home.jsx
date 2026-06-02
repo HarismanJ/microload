@@ -535,7 +535,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       setInitialShellReady(true)
 
       if (hasWarmData) {
-        if (!requireFreshInitialData) {
+        if (!requireFreshInitialData || !introMotionReady) {
           setLoading(false)
           return
         }
@@ -637,35 +637,38 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
   const loadLatest = useEffectEvent(() => { load() })
 
   useEffect(() => {
-    if (!hasWarmInitialHomeData) {
+    const hasRenderableStartupShell = hasRenderableHomeData && renderedHomeUserId === userId
+    if (!hasWarmInitialHomeData && !hasRenderableStartupShell) {
       setInitialShellReady(false)
       setLoading(true)
     }
+    if (!introMotionReady && hasRenderableStartupShell) return undefined
     const timer = setTimeout(() => { loadLatest() }, 0)
     return () => clearTimeout(timer)
-  }, [hasWarmInitialHomeData, userId])
+  }, [hasWarmInitialHomeData, hasRenderableHomeData, introMotionReady, renderedHomeUserId, userId])
 
   useEffect(() => {
-    if (weightRefreshTick === 0) return
+    if (weightRefreshTick === 0 || !introMotionReady) return
     loadLatest()
-  }, [weightRefreshTick])
+  }, [introMotionReady, weightRefreshTick])
 
   useEffect(() => {
-    if (workoutRefreshTick === 0) return
+    if (workoutRefreshTick === 0 || !introMotionReady) return
     loadLatest()
-  }, [workoutRefreshTick])
+  }, [introMotionReady, workoutRefreshTick])
 
   useEffect(() => {
-    if (profileRefreshTick === 0) return
+    if (profileRefreshTick === 0 || !introMotionReady) return
     loadLatest()
-  }, [profileRefreshTick])
+  }, [introMotionReady, profileRefreshTick])
 
   useEffect(() => {
-    if (nutritionRefreshTick === 0) return
+    if (nutritionRefreshTick === 0 || !introMotionReady) return
     loadLatest()
-  }, [nutritionRefreshTick])
+  }, [introMotionReady, nutritionRefreshTick])
 
   useEffect(() => {
+    if (!introMotionReady) return undefined
     if (weightPeriod !== 'all' && weightPeriod !== '1y') return
     let cancelled = false
     setWeightAllLoading(true)
@@ -700,7 +703,7 @@ export default function Home({ userId, splashDone, introMotionReady, useStartupS
       })
       .finally(() => { if (!cancelled) setWeightAllLoading(false) })
     return () => { cancelled = true; setWeightAllLoading(false) }
-  }, [weightPeriod, userId])
+  }, [introMotionReady, weightPeriod, userId])
 
   useEffect(() => {
     onWorkoutStreakChange?.(workoutStreak)

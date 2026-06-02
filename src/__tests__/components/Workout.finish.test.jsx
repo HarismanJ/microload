@@ -49,6 +49,11 @@ const supabaseMock = vi.hoisted(() => {
     _responses,
     from: vi.fn(table => makeChain(table)),
     rpc:  vi.fn().mockResolvedValue({ data: null, error: null }),
+    channel: vi.fn(() => ({
+      on: vi.fn(function on() { return this }),
+      subscribe: vi.fn(function subscribe() { return this }),
+    })),
+    removeChannel: vi.fn(),
   }
 })
 
@@ -432,6 +437,25 @@ describe('Workout finish flow', () => {
     })
     expect(supabaseMock.from.mock.calls.filter(([table]) => table === 'user_training_plan_adaptations').length)
       .toBeGreaterThan(adaptationCallsBefore)
+  })
+
+  it('anchors an auto-started battle workout timer to the battle room start after app restart', async () => {
+    const roomStartedAt = new Date(Date.now() - 125_000).toISOString()
+
+    renderWorkout({
+      battleRoom: {
+        id: 'battle-room-1',
+        created_at: roomStartedAt,
+        battle_mode: 'hybrid',
+        opponentId: 'user-2',
+        opponentProfile: { username: 'Rival' },
+      },
+    })
+
+    await screen.findByText('Workout in progress')
+    await waitFor(() => {
+      expect(screen.getByText(/^02:/)).toBeTruthy()
+    })
   })
 
   // ── Test 2 ─────────────────────────────────────────────────────────────────

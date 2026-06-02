@@ -1128,13 +1128,13 @@ export default function App() {
   }, [dismissIntroSplash, forceUpdate, forceUpdateChecked, initialScreenReady, session, themeReady])
 
   useEffect(() => {
-    if (showIntroSplash || !session?.user?.id) return
+    if (!homeIntroMotionReady || !session?.user?.id) return
     import('./components/Workout')
     import('./components/Ranks')
     import('./components/Nutrition')
     import('./components/Profile')
     import('./components/WorkoutSummary')
-  }, [showIntroSplash, session?.user?.id])
+  }, [homeIntroMotionReady, session?.user?.id])
 
   useEffect(() => () => {
     clearTimeout(themeReadyTimerRef.current)

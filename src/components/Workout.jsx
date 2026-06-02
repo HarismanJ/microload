@@ -761,6 +761,10 @@ export default function Workout({
   const latestBattleWorkoutDraftRef = useRef(null)
   const [dragHintKey, setDragHintKey] = useState(null)
   const battleModeActive = Boolean(battleRoom?.id) && completedBattleRoomRef.current !== battleRoom.id
+  const getBattleWorkoutStartedAt = useCallback((fallback = Date.now()) => {
+    const startedAt = Date.parse(battleRoom?.created_at || '')
+    return Number.isFinite(startedAt) ? startedAt : fallback
+  }, [battleRoom?.created_at])
   const surfacedRemoteFinishEventIdsRef = useRef(new Set())
   const prefetchedHistoryRef = useRef({}) // { [exerciseId]: { sid, sessions, status } }
   const prefetchInFlightRef = useRef({})  // { [exerciseId]: Promise }
@@ -1078,7 +1082,9 @@ export default function Workout({
       return undefined
     }
 
-    const startedAt = workoutStartRef.current || Date.now()
+    const startedAt = isBattle
+      ? getBattleWorkoutStartedAt(workoutStartRef.current || Date.now())
+      : workoutStartRef.current || Date.now()
     workoutStartRef.current = startedAt
 
     const draft = {
@@ -1114,6 +1120,7 @@ export default function Workout({
     exerciseNotes,
     flushBattleWorkoutDraft,
     flushWorkoutDraft,
+    getBattleWorkoutStartedAt,
     notesOpen,
     restTimer,
     sessionId,
@@ -1226,7 +1233,10 @@ export default function Workout({
       if (!sess) throw new Error('Could not create your workout session.')
 
       if (!optimistic) {
-        workoutStartRef.current = Date.now()
+        workoutStartRef.current = battleModeActive
+          ? getBattleWorkoutStartedAt()
+          : Date.now()
+        setSeconds(Math.max(0, Math.floor((Date.now() - workoutStartRef.current) / 1000)))
         setActiveWorkout(true)
       }
 
@@ -1259,6 +1269,7 @@ export default function Workout({
       if (optimistic) {
         setActiveWorkout(false)
         workoutStartRef.current = null
+        setSeconds(0)
       }
       setBattleSyncError(friendlyError(err, 'Could not start your workout.'))
       return false
@@ -1694,12 +1705,14 @@ export default function Workout({
 
   useEffect(() => {
     if (!activeWorkout) { setSeconds(0); workoutStartRef.current = null; return }
-    if (!workoutStartRef.current) workoutStartRef.current = Date.now()
+    if (!workoutStartRef.current) {
+      workoutStartRef.current = battleModeActive ? getBattleWorkoutStartedAt() : Date.now()
+    }
     const interval = setInterval(() => {
       setSeconds(Math.floor((Date.now() - workoutStartRef.current) / 1000))
     }, 1000)
     return () => clearInterval(interval)
-  }, [activeWorkout])
+  }, [activeWorkout, battleModeActive, getBattleWorkoutStartedAt])
 
   useEffect(() => {
     if (!activeWorkout || !userId || !sessionId) return
@@ -1854,7 +1867,7 @@ export default function Workout({
         return
       }
 
-      const restoredStartedAt = savedBattleWorkoutDraft.startedAt || Date.now()
+      const restoredStartedAt = getBattleWorkoutStartedAt(savedBattleWorkoutDraft.startedAt || Date.now())
       const restoredExercises = Array.isArray(savedBattleWorkoutDraft.workoutExercises)
         ? normalizeWorkoutExercises(savedBattleWorkoutDraft.workoutExercises)
         : []
@@ -1894,6 +1907,7 @@ export default function Workout({
     clearProgressionHistoryForExercises,
     defaultRest,
     defaultUnit,
+    getBattleWorkoutStartedAt,
     loading,
     savedBattleWorkoutDraft,
     setRestTimer,
@@ -3584,7 +3598,8 @@ export default function Workout({
 
     setSessionId(data.id)
     const unit = prof?.unit_preference || 'lbs'
-    workoutStartRef.current = Date.now()
+    workoutStartRef.current = battleModeActive ? getBattleWorkoutStartedAt() : Date.now()
+    setSeconds(Math.max(0, Math.floor((Date.now() - workoutStartRef.current) / 1000)))
     setDefaultUnit(unit)
 
     const exercises = matchedExercises
@@ -3722,7 +3737,8 @@ export default function Workout({
       return false
     }
 
-    workoutStartRef.current = Date.now()
+    workoutStartRef.current = battleModeActive ? getBattleWorkoutStartedAt() : Date.now()
+    setSeconds(Math.max(0, Math.floor((Date.now() - workoutStartRef.current) / 1000)))
     setDefaultUnit(unit)
     setSessionId(data.id)
     clearAppliedSuggestion()
